@@ -10,6 +10,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 from backend.auth.invitations import InvitationService, normalize_username
 from backend.auth.passwords import hash_password, verify_password
 from backend.auth.rate_limit import RateLimitBucket
+from backend.auth.sessions import SessionCredentialChangedError
 from backend.db import connect_database
 
 
@@ -227,11 +228,15 @@ def login():
     if user is None or not password_matches:
         return _error("invalid_credentials", 401)
 
-    session_id, csrf_token = current_app.extensions["session_service"].rotate(
-        request.cookies.get(current_app.config["SESSION_COOKIE_NAME"]),
-        user["user_id"],
-        now_utc_ms,
-    )
+    try:
+        session_id, csrf_token = current_app.extensions["session_service"].rotate(
+            request.cookies.get(current_app.config["SESSION_COOKIE_NAME"]),
+            user["user_id"],
+            now_utc_ms,
+            expected_password_hash=user["password_hash"],
+        )
+    except SessionCredentialChangedError:
+        return _error("invalid_credentials", 401)
     response = jsonify(
         {
             "authenticated": True,
@@ -285,7 +290,7 @@ def change_password():
     if row is None or row["status"] != "active" or not verify_password(
         current_password, row["password_hash"]
     ):
-        return _error("invalid_credentials", 401)
+        return _error("current_password_invalid", 400)
 
     try:
         new_hash = hash_password(new_password)

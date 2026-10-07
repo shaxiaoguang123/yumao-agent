@@ -6,11 +6,15 @@ import hashlib
 import importlib
 import importlib.util
 import io
+import logging
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from unittest.mock import patch
 
 
@@ -273,6 +277,43 @@ class AuthApiTests(unittest.TestCase):
             self.assertIn("Retry-After", second.headers)
             self.assertEqual(verify.call_count, 1)
 
+    def test_login_rechecks_password_hash_before_issuing_session(self) -> None:
+        self._insert_user("user-1", "Alice", "alice correct test password")
+        replacement_hash = self.passwords.hash_password("alice newer correct password")
+        real_verify = self.passwords.verify_password
+        changed = False
+
+        def verify_then_change_password(password: str, stored_hash: str) -> bool:
+            nonlocal changed
+            verified = real_verify(password, stored_hash)
+            if verified and not changed:
+                changed = True
+                conn = self.db.connect_database(self.database_path, BUSY_TIMEOUT_MS)
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute(
+                        "UPDATE users SET password_hash=?, updated_at_utc_ms=2 WHERE user_id=?",
+                        (replacement_hash, "user-1"),
+                    )
+                    conn.execute(
+                        "UPDATE sessions SET revoked_at_utc_ms=2 "
+                        "WHERE user_id=? AND revoked_at_utc_ms IS NULL",
+                        ("user-1",),
+                    )
+                    conn.execute("COMMIT")
+                finally:
+                    conn.close()
+            return verified
+
+        with patch("backend.api.auth.verify_password", side_effect=verify_then_change_password):
+            response = self._login("Alice", "alice correct test password")
+
+        self.assertTrue(changed)
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json(), {"error": "invalid_credentials"})
+        self.assertIsNone(self.client.get_cookie("yumao_session"))
+        self.assertEqual(self._session_count("user-1"), 0)
+
     def test_login_is_rate_limited_by_source_ip_across_usernames(self) -> None:
         app = _module("backend.app").create_app({
             **self.config,
@@ -289,6 +330,15 @@ class AuthApiTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 429)
         self.assertGreaterEqual(int(response.headers["Retry-After"]), 1)
+
+    def test_optional_pair_limit_can_be_disabled_without_disabling_username_or_ip_limits(self) -> None:
+        app = _module("backend.app").create_app({
+            **self.config,
+            "LOGIN_PAIR_ATTEMPT_LIMIT": 0,
+            "LOGIN_USERNAME_ATTEMPT_LIMIT": 20,
+            "LOGIN_IP_ATTEMPT_LIMIT": 20,
+        })
+        self.assertEqual(app.extensions["app_settings"].login_pair_attempt_limit, 0)
 
     def test_registration_is_rate_limited_by_source_ip_before_invitation_validation(self) -> None:
         self._invitation()
@@ -330,6 +380,85 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(no_origin.status_code, 403)
         self.assertEqual(bad_origin.status_code, 403)
         self.assertIn(referer.status_code, (200, 401))
+
+    def test_registration_and_protected_mutations_reject_untrusted_origins(self) -> None:
+        invite = self._invitation()
+        invalid_registration = self.client.post(
+            "/api/auth/register",
+            json={"invitation_code": invite, "username": "New User", "password": "new user strong password"},
+            headers={"Origin": "https://attacker.invalid"},
+        )
+        self.assertEqual(invalid_registration.status_code, 403)
+        allowed_registration = self.client.post(
+            "/api/auth/register",
+            json={"invitation_code": invite, "username": "New User", "password": "new user strong password"},
+            headers=self._origin_headers(),
+        )
+        self.assertEqual(allowed_registration.status_code, 201)
+
+        admin_login = self._login("Admin", "admin password for tests")
+        conflicting_headers = {
+            "Origin": ORIGIN,
+            "Referer": "https://attacker.invalid/login",
+            "X-CSRF-Token": admin_login.get_json()["csrf_token"],
+        }
+        protected = self.client.post(
+            "/api/admin/invitations", json={}, headers=conflicting_headers
+        )
+        self.assertEqual(protected.status_code, 403)
+
+    def test_allowed_referer_with_query_is_accepted(self) -> None:
+        response = self.client.post(
+            "/api/auth/login",
+            json={"username": "Missing User", "password": "some strong test password"},
+            headers={"Referer": f"{ORIGIN}/login?next=%2Faccount"},
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_werkzeug_access_logs_do_not_expose_source_ip_or_request_target(self) -> None:
+        logger = logging.getLogger("werkzeug")
+        previous_level = logger.level
+        logger.setLevel(logging.INFO)
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        logger.addHandler(handler)
+        try:
+            logger.info(
+                '"%s" %s',
+                "192.0.2.99 - GET /api/auth/register?invite=synthetic-secret HTTP/1.1",
+                400,
+            )
+        finally:
+            logger.removeHandler(handler)
+            handler.close()
+            logger.setLevel(previous_level)
+        message = stream.getvalue()
+        self.assertNotIn("192.0.2.99", message)
+        self.assertNotIn("synthetic-secret", message)
+        self.assertNotIn("/api/auth/register", message)
+
+    def test_protected_mutations_reject_missing_and_invalid_csrf_without_side_effect(self) -> None:
+        self._login_user("admin-1", "Admin", "admin password for tests", role="admin")
+        missing = self.client.post(
+            "/api/admin/invitations", json={}, headers={"Origin": ORIGIN}
+        )
+        invalid = self.client.post(
+            "/api/admin/invitations",
+            json={},
+            headers=self._origin_headers({"X-CSRF-Token": "invalid-csrf"}),
+        )
+        self.assertEqual(missing.status_code, 403)
+        self.assertEqual(invalid.status_code, 403)
+        self.assertEqual(missing.get_json()["error"], "csrf_invalid")
+        self.assertEqual(invalid.get_json()["error"], "csrf_invalid")
+        self.assertEqual(self.invitations_count(), 0)
+
+    def invitations_count(self) -> int:
+        conn = self.db.connect_database(self.database_path, BUSY_TIMEOUT_MS)
+        try:
+            return conn.execute("SELECT COUNT(*) FROM invitations").fetchone()[0]
+        finally:
+            conn.close()
 
     def test_allowed_origin_cors_preflight_allows_credentials_and_csrf_header(self) -> None:
         response = self.client.options(
@@ -443,6 +572,43 @@ class AuthApiTests(unittest.TestCase):
         self.assertIsNone(self.sessions.resolve(other_session, self._now_ms()))
         self.assertIsNone(self.client.get_cookie("yumao_session"))
 
+    def test_wrong_current_password_does_not_invalidate_the_session(self) -> None:
+        csrf = self._login_user("user-1", "Alice", "alice correct test password")
+        response = self._post_with_csrf(
+            self.client,
+            "/api/auth/change-password",
+            csrf,
+            json={
+                "current_password": "wrong current password",
+                "new_password": "alice newer strong test password",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "current_password_invalid")
+        self.assertTrue(self.client.get("/api/auth/session").get_json()["authenticated"])
+
+    def test_old_session_and_csrf_pair_cannot_reach_protected_mutation_after_rotation(self) -> None:
+        self._insert_user("user-1", "Alice", "alice correct test password")
+        first = self._login("Alice", "alice correct test password")
+        old_session = self.client.get_cookie("yumao_session").value
+        old_csrf = first.get_json()["csrf_token"]
+        self._login("Alice", "alice correct test password")
+
+        old_client = self.app.test_client()
+        old_client.set_cookie("yumao_session", old_session)
+        old_pair = old_client.post(
+            "/api/auth/logout",
+            headers=self._origin_headers({"X-CSRF-Token": old_csrf}),
+        )
+        new_session_old_csrf = self.client.post(
+            "/api/auth/logout",
+            headers=self._origin_headers({"X-CSRF-Token": old_csrf}),
+        )
+
+        self.assertEqual(old_pair.status_code, 401)
+        self.assertEqual(new_session_old_csrf.status_code, 403)
+        self.assertTrue(self.client.get("/api/auth/session").get_json()["authenticated"])
+
     def test_admin_can_create_single_use_invitation_but_user_cannot(self) -> None:
         admin_csrf = self._login_user(
             "admin-1", "Admin", "admin password for tests", role="admin"
@@ -523,8 +689,11 @@ class AuthApiTests(unittest.TestCase):
             self.assertEqual(login.status_code, 200)
             tokens.append(login.get_json()["csrf_token"])
 
+        barrier = Barrier(2)
+
         def disable(index: int):
             actor, target = (("admin-a", "admin-b"), ("admin-b", "admin-a"))[index]
+            barrier.wait()
             return clients[index].post(
                 f"/api/admin/users/{target}/disable",
                 json={},
@@ -557,7 +726,10 @@ class FirstAdminBootstrapTests(unittest.TestCase):
             "first administrator synthetic password"
         )
 
+        barrier = Barrier(2)
+
         def create(username: str):
+            barrier.wait()
             try:
                 return create_first_admin(
                     self.database_path,
@@ -587,6 +759,18 @@ class FirstAdminBootstrapTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as raised:
                 main(["create-admin", "--username", "Admin One", "--password", "not-on-command-line"])
         self.assertEqual(raised.exception.code, 2)
+
+    def test_python_module_entrypoint_dispatches_to_the_cli(self) -> None:
+        repository_root = Path(__file__).resolve().parents[2]
+        completed = subprocess.run(
+            [sys.executable, "-B", "-m", "backend.cli", "--help"],
+            cwd=repository_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("create-admin", completed.stdout)
 
 
 if __name__ == "__main__":

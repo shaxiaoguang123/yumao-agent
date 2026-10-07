@@ -43,6 +43,17 @@ def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
     return value
 
 
+def _nonnegative_int(env: Mapping[str, str], name: str, default: int) -> int:
+    raw = env.get(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a non-negative integer") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return value
+
+
 def _decode_csrf_secret(env: Mapping[str, str]) -> bytes:
     encoded = env.get("CSRF_HMAC_SECRET")
     if not isinstance(encoded, str) or not encoded or encoded != encoded.strip():
@@ -61,6 +72,12 @@ def _decode_csrf_secret(env: Mapping[str, str]) -> bytes:
         raise ValueError("CSRF_HMAC_SECRET must decode to at least 32 bytes")
     if len(set(secret)) < 8 or len(set(encoded)) < 8:
         raise ValueError("CSRF_HMAC_SECRET is a trivial repeated-value placeholder")
+    try:
+        decoded_text = secret.decode("utf-8")
+    except UnicodeDecodeError:
+        decoded_text = None
+    if decoded_text is not None and decoded_text.isprintable():
+        raise ValueError("CSRF_HMAC_SECRET must encode random bytes, not a human-readable string")
     return secret
 
 
@@ -89,7 +106,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         login_username_window_seconds=_positive_int(source, "LOGIN_USERNAME_WINDOW_SECONDS", 900),
         login_ip_attempt_limit=_positive_int(source, "LOGIN_IP_ATTEMPT_LIMIT", 60),
         login_ip_window_seconds=_positive_int(source, "LOGIN_IP_WINDOW_SECONDS", 900),
-        login_pair_attempt_limit=_positive_int(source, "LOGIN_PAIR_ATTEMPT_LIMIT", 10),
+        login_pair_attempt_limit=_nonnegative_int(source, "LOGIN_PAIR_ATTEMPT_LIMIT", 10),
         login_pair_window_seconds=_positive_int(source, "LOGIN_PAIR_WINDOW_SECONDS", 900),
         register_ip_attempt_limit=_positive_int(source, "REGISTER_IP_ATTEMPT_LIMIT", 10),
         register_ip_window_seconds=_positive_int(source, "REGISTER_IP_WINDOW_SECONDS", 3600),

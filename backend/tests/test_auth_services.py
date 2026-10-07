@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 
 BUSY_TIMEOUT_MS = 5000
@@ -212,23 +213,27 @@ class InvitationServiceTests(unittest.TestCase):
         connect_database = _module("backend.db").connect_database
         code = self.service.create("admin-a", self._future_expiry())
 
-        def redeem():
+        barrier = Barrier(2)
+
+        def redeem(username: str):
+            barrier.wait()
             try:
                 return self.service.redeem(
-                    code, "Concurrent User", "synthetic-hash", now_utc_ms=3_000
+                    code, username, "synthetic-hash", now_utc_ms=3_000
                 )
             except ValueError:
                 return None
 
         with ThreadPoolExecutor(max_workers=2) as executor:
-            results = list(executor.map(lambda _index: redeem(), range(2)))
+            results = list(executor.map(redeem, ("Concurrent User A", "Concurrent User B")))
         self.assertEqual(sum(result is not None for result in results), 1)
 
         conn = connect_database(self.database_path, BUSY_TIMEOUT_MS)
         try:
             self.assertEqual(
                 conn.execute(
-                    "SELECT COUNT(*) FROM users WHERE normalized_username='concurrent user'"
+                    "SELECT COUNT(*) FROM users "
+                    "WHERE normalized_username IN ('concurrent user a', 'concurrent user b')"
                 ).fetchone()[0],
                 1,
             )

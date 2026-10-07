@@ -66,4 +66,26 @@ describe('account view logout feedback', () => {
 
     expect(router.currentRoute.value.name).toBe('login');
   });
+
+  it('shows a retryable unavailable state without password or logout controls', async () => {
+    const AccountView = await loadView();
+    const sessionStore = reactive({
+      user: null,
+      status: 'unavailable',
+      errorMessage: '暂时无法确认登录状态，请重试',
+      refresh: vi.fn(),
+      logoutUnconfirmed: false,
+      logoutMessage: '',
+    });
+    const router = makeRouter();
+    await router.push('/account');
+    const wrapper = mount(AccountView, {
+      global: { plugins: [router], provide: { sessionStore } },
+    });
+
+    expect(wrapper.get('[role="alert"]').text()).toContain('暂时无法确认登录状态');
+    expect(wrapper.find('[data-testid="logout"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="retry-session"]').trigger('click');
+    expect(sessionStore.refresh).toHaveBeenCalledOnce();
+  });
 });

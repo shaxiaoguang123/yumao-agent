@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from urllib.parse import urlsplit
 
 from flask import Flask, current_app, jsonify, request
@@ -18,7 +19,9 @@ def _origin_from(value: str, *, allow_path: bool) -> str | None:
             return None
         if not allow_path and (parsed.path or parsed.query or parsed.fragment):
             return None
-        if parsed.query or parsed.fragment:
+        if parsed.fragment:
+            return None
+        if not allow_path and parsed.query:
             return None
         return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
     except (TypeError, ValueError):
@@ -68,6 +71,10 @@ def _origin_for_cors() -> str | None:
 
 
 def init_security(app: Flask) -> None:
+    werkzeug_logger = logging.getLogger("werkzeug")
+    if not any(isinstance(item, _RedactWerkzeugRequestLog) for item in werkzeug_logger.filters):
+        werkzeug_logger.addFilter(_RedactWerkzeugRequestLog())
+
     @app.before_request
     def validate_mutation_origin():
         if request.method == "OPTIONS" and request.headers.get("Access-Control-Request-Method"):
@@ -93,3 +100,12 @@ def init_security(app: Flask) -> None:
             response.headers["Access-Control-Allow-Methods"] = _ALLOWED_METHODS
             response.headers["Access-Control-Allow-Headers"] = _ALLOWED_HEADERS
         return response
+
+
+class _RedactWerkzeugRequestLog(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = "HTTP server event"
+        record.args = ()
+        record.exc_info = None
+        record.exc_text = None
+        return True

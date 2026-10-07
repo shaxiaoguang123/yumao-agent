@@ -31,6 +31,19 @@ async function logout() {
 
 <template>
   <section class="panel" aria-labelledby="account-title">
+    <template v-if="sessionStore.status === 'unavailable'">
+      <h1 id="account-title">暂时无法确认登录状态</h1>
+      <p class="muted" role="alert">{{ sessionStore.errorMessage || '请检查连接后重试。' }}</p>
+      <button
+        data-testid="retry-session"
+        class="secondary-button"
+        type="button"
+        @click="sessionStore.refresh()"
+      >
+        重试
+      </button>
+    </template>
+    <template v-else>
     <h1 id="account-title">账户设置</h1>
     <p class="muted">当前账户：{{ sessionStore.user?.username }}</p>
 
@@ -55,5 +68,6 @@ async function logout() {
       <p v-if="sessionStore.logoutUnconfirmed" role="alert">{{ sessionStore.logoutMessage }}</p>
       <button data-testid="logout" class="primary-button" type="button" @click="logout">退出登录</button>
     </div>
+    </template>
   </section>
 </template>

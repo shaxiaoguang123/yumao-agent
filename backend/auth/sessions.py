@@ -10,6 +10,10 @@ from backend.auth.types import SessionContext, UserSummary
 from backend.db import connect_database
 
 
+class SessionCredentialChangedError(RuntimeError):
+    """The password changed after authentication but before Session creation."""
+
+
 def _hash_session_id(session_id: str) -> str:
     return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
 
@@ -78,10 +82,24 @@ class SessionService:
         old_session_id: str | None,
         target_user_id: str,
         now_utc_ms: int,
+        expected_password_hash: str | None = None,
     ) -> tuple[str, str]:
         connection = connect_database(self.database_path, self.busy_timeout_ms)
         try:
             connection.execute("BEGIN IMMEDIATE")
+            if expected_password_hash is not None:
+                current_user = connection.execute(
+                    "SELECT password_hash, status FROM users WHERE user_id=?",
+                    (target_user_id,),
+                ).fetchone()
+                if (
+                    current_user is None
+                    or current_user["status"] != "active"
+                    or current_user["password_hash"] != expected_password_hash
+                ):
+                    raise SessionCredentialChangedError(
+                        "user credentials changed during authentication"
+                    )
             if isinstance(old_session_id, str) and old_session_id:
                 old_hash = _hash_session_id(old_session_id)
                 old_session = connection.execute(

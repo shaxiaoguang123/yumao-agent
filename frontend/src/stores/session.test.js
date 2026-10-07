@@ -88,6 +88,38 @@ describe('Session store', () => {
     expect(store.csrfToken).toBe('csrf-memory-only');
   });
 
+  it('preserves the Session when the current password is wrong', async () => {
+    const createSessionStore = await loadSessionStore();
+    const { createHttpClient } = await import('../api/http.js');
+    const csrf = { value: '' };
+    const response = (status, body) => ({
+      status,
+      ok: status >= 200 && status < 300,
+      json: async () => body,
+    });
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(response(200, authenticatedResponse))
+      .mockResolvedValueOnce(response(400, { error: 'current_password_invalid' }));
+    const client = createHttpClient({
+      fetchImpl,
+      getCsrfToken: () => csrf.value,
+    });
+    const store = createSessionStore({ client });
+    await store.refresh();
+    csrf.value = store.csrfToken;
+
+    await expect(store.changePassword('wrong current password', 'new synthetic password'))
+      .resolves.toBe(false);
+
+    expect(store.status).toBe('authenticated');
+    expect(store.user).toEqual(authenticatedResponse.user);
+    expect(store.csrfToken).toBe('csrf-memory-only');
+    expect(store.errorMessage).toBe('当前密码不正确');
+    expect(fetchImpl.mock.calls[1][1].headers).toMatchObject({
+      'X-CSRF-Token': 'csrf-memory-only',
+    });
+  });
+
   it('clears state after confirmed logout success', async () => {
     const createSessionStore = await loadSessionStore();
     const client = makeClient();

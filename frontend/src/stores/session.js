@@ -122,7 +122,7 @@ export function createSessionStore({ client: providedClient } = {}) {
         clearAuth();
         store.initialRefreshComplete = true;
       }
-      store.errorMessage = error?.code === 'invalid_credentials'
+      store.errorMessage = error?.code === 'current_password_invalid'
         ? '当前密码不正确'
         : '密码修改失败，请检查输入后重试';
       return false;
