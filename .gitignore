@@ -22,3 +22,12 @@ booking_plan.json
 *.db-shm
 *.sqlite-wal
 *.sqlite-shm
+
+# Extracted Windows application bundles and generated frontend assets
+/_internal/
+/_internal.zip
+/app_exe(1)/
+/*.exe
+/frontend/dist/
+/frontend/node_modules/
+/frontend/.vite/
