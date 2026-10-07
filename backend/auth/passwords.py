@@ -57,6 +57,11 @@ def hash_password(password: str) -> str:
     return _PREFIX + "$" + _b64url_encode(salt) + "$" + _b64url_encode(derived)
 
 
+def create_dummy_password_hash() -> str:
+    """Build an in-memory scrypt hash for unknown-username login attempts."""
+    return hash_password(secrets.token_urlsafe(32))
+
+
 def verify_password(password: str, stored_hash: str) -> bool:
     if not isinstance(password, str) or not isinstance(stored_hash, str):
         return False

@@ -6,7 +6,14 @@ from typing import Any
 
 from flask import Flask
 
+from backend.api.admin import admin_bp
+from backend.api.auth import auth_bp
 from backend.api.health import health_bp
+from backend.api.security import init_security
+from backend.auth.invitations import InvitationService
+from backend.auth.passwords import create_dummy_password_hash
+from backend.auth.rate_limit import RateLimitService
+from backend.auth.sessions import SessionService
 from backend.db import CURRENT_SCHEMA_VERSION, check_schema_ready
 from backend.settings import load_settings
 
@@ -43,5 +50,23 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         SQLITE_BUSY_TIMEOUT_MS=settings.sqlite_busy_timeout_ms,
     )
     app.extensions["app_settings"] = settings
+    app.extensions["session_service"] = SessionService(
+        settings.database_path,
+        settings.sqlite_busy_timeout_ms,
+        settings.csrf_hmac_secret,
+        settings.session_ttl_seconds,
+    )
+    app.extensions["invitation_service"] = InvitationService(
+        settings.database_path,
+        settings.sqlite_busy_timeout_ms,
+    )
+    app.extensions["rate_limit_service"] = RateLimitService(
+        settings.database_path,
+        settings.sqlite_busy_timeout_ms,
+    )
+    app.extensions["dummy_password_hash"] = create_dummy_password_hash()
+    init_security(app)
     app.register_blueprint(health_bp)
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(admin_bp)
     return app
