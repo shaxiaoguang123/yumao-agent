@@ -1,0 +1,24 @@
+# Local secrets and user-specific configuration
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Captured upstream traffic and bundled frontend assets may contain secrets/PII
+req/
+**/req/
+
+# Runtime logs and user booking plans
+backend/logs/
+**/backend/logs/
+booking_plan.json
+**/booking_plan.json
+
+# Local SQLite databases and write-ahead logs
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
