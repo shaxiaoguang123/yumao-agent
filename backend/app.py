@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from flask import Flask
 
 from backend.api.health import health_bp
+from backend.db import CURRENT_SCHEMA_VERSION, check_schema_ready
 from backend.settings import load_settings
 
 
@@ -21,6 +23,14 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
             for key, value in config.items()
             if key not in {"CSRF_HMAC_SECRET"}
         }
+
+    migrations_dir = Path(__file__).resolve().parent / "migrations"
+    check_schema_ready(
+        settings.database_path,
+        settings.sqlite_busy_timeout_ms,
+        CURRENT_SCHEMA_VERSION,
+        migrations_dir,
+    )
 
     app = Flask(__name__)
     app.config.update(flask_overrides)
