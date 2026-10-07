@@ -87,6 +87,8 @@ The encrypted Token envelope consists of ciphertext, nonce/tag, and `encryption_
 
 `account_fingerprint_key_version` on a revision records which key version was used during that revision's initial validation; it is historical metadata only. The live account fingerprint and its key-version dependency reside on Credential and may be lazily rebound after successful continuity verification.
 
+The Token-fingerprint key version on a non-current revision is also inert audit metadata. Only the current revision's Token fingerprint requires its key for `token_already_current` comparison; non-current fingerprints are never compared for a historical-reuse policy.
+
 Subsequent `/validate` operations never update a Token revision. Current validation state belongs to Credential; a `CredentialValidationObservation` records append-only attempt outcomes and whether a result was applied or stale.
 
 ### CredentialValidationObservation
