@@ -1,332 +1,300 @@
 # 羽毛球预约系统：多用户与 Agent 计划设计
 
 - 日期：2026-10-07
-- 状态：加入长期提前预约与上游协议契约后的规格修订版，等待用户审阅
+- 状态：加入 Preparation Agent、动态开放时间与 Token 生命周期后的规格修订版，等待用户审阅
 - 目标：在现有预约流程上构建本地开发的前后端分离多用户应用，后续仅向授权的 Tailscale 网络成员开放。
 
 ## 1. 已确认的目标与约束
 
-- 保留人工选择场地、编辑预约计划和定时执行的使用方式。
-- 增加邀请制注册、应用登录和多用户数据隔离。
-- 每位用户可以维护多个上游 Token；不同 Credential 的任务可并行，同一 Credential 同时最多执行一个任务。
-- LLM 使用 OpenAI 兼容接口。环境变量提供一套服务级默认 Provider 配置；用户也可在应用内填写自己完整的一套 Provider 配置。
-- 人工界面与 Agent 都能创建和修改同一份预约计划；同一计划可以由任一入口继续调整。
-- BookingPlan 只描述预约内容。所有立即执行和定时执行都由 BookingJob 管理。
-- 每个 BookingJob 创建时固定引用一个 PlanRevision，并保存不可变执行快照。之后修改计划不会改变已创建任务。
-- 所有开放时间和预约时间均按服务端配置的业务时区计算。每天业务时区 00:00 起可查询当天、明天、后天的场地；默认目标日是后天，真实预约操作最早在目标日对应的 T-2 日 07:30 开放。
-- 用户可以在目标日进入查询窗口前任意天创建 BookingJob；任务冻结的是语义预约意图，不冻结尚不可查询的实时 availability 或数组坐标。T-2 日 00:00 自动查询并准备，T-2 日正式开放时再实时查询、重新解析并尝试。
-- 上游接口契约优先根据本地 `req/` 抓包解密后的脱敏结构及同目录官方前端代码确定；已有 Python 实现、README、注释和旧规格仅作次级参考，不能覆盖抓包证据。
-- `req/` 含 Token 与个人数据，只允许本机内存分析；不得把原始抓包、解密后的真实请求/响应或真实个人字段写入 Git、日志、Agent 上下文或普通 API 响应。契约测试使用人工生成的脱敏 fixture。
-- 00:00 至 07:30 只查询和准备计划，不调用真实预约副作用接口。场地状态查询开放不代表真实预约已经开放。
-- Agent 只生成、预览和保存预约计划修改；不能创建 BookingJob、启动真实预约、开启自动支付或控制其他敏感执行设置。
-- 后端采用 Flask API、SQLite 和轻量后台 Worker；不引入 Redis、Celery、PostgreSQL、微服务或多节点集群。
-- 先在本地开发和验证，之后通过私有 Tailscale 网络访问；不开放公共互联网注册入口。
-- Agent 不执行验证码或频控绕过。若上游要求人工验证，任务暂停并交给用户处理。
-- 自动支付默认关闭；实际金额、支付上限或上游状态不满足安全条件时，任务暂停等待用户处理。
+- 保留人工选择场地、编辑预约计划和定时执行的使用方式，并增加邀请制注册、应用登录、多用户数据隔离和多个 Credential。
+- 保留 Flask API + Vue 前端 + SQLite + 轻量 Worker；不引入 Redis、Celery、PostgreSQL、多节点调度或微服务。
+- 人工界面与 Planning Agent 共用 BookingPlan 和 PlanRevision。计划只保存用户表达的预约意图，不保存按某一天查询得出的 availability、历史场地 nodeid、数组坐标或历史价格。
+- 长期提前预约以不可变 ReservationIntent 为核心。用户可在目标日 T-2 查询窗口前任意天创建意图；Job 固定该意图和 PlanRevision。后续计划修改不得改变已创建任务。
+- T-2 日 00:00 起进入 Preparation Window。Worker 在统一 UpstreamRequestGate 约束下，可按低频调度多次获取该目标日的真实 bookingByTime；每次查询可产生新的 PreparedQueueRevision。准备数据只用于当天排序建议和展示，不能作为开放时下单证据。
+- `official_open` 表示跟随上游该目标日当前响应中的 `bookingstarttime` 自动执行。创建任务时显示的 07:30 只是已知规则下的预计时间；T-2 真实查询后以结构合法的当前上游时间更新调度。合法时间值变化不等于 contract drift。
+- 正式开放时必须绕过缓存重新查询 bookingByTime，基于该次响应生成 FinalExecutionQueue，再按确定性的 CandidateResolver、QueuePolicyValidator、getPayPrice、createBookingBytime 路径执行。准备阶段的场地坐标、数组下标、价格和可用性不得进入最终请求。
+- 上游协议以本地 `req/` 真实抓包及同目录官方前端代码为最高事实来源。不同目标日的 `nodeList`、`timeList`、`conflictList`、`priceList`、价格和开放时刻均视为动态数据；历史结果只能辅助展示，不能作为未来目标日的执行事实。旧 Python 实现仅作次级参考。
+- `req/` 和 `.env` 可能包含 Token、密钥和个人数据。只允许在本机内存中做必要的协议核对；不把原始内容、完整 JWT payload、解密结果或真实请求/响应写入 Git、日志、Agent 上下文或普通 API。
+- 保留 Planning Agent，并新增受限 Preparation Agent。后者只处理经 AvailabilityService 和 UpstreamContractAdapter 归一化的当天数据，输出队列提案；所有提案须通过 QueuePolicyValidator。LLM 不可用时，确定性基线队列仍可运行。
+- Agent 不能创建 BookingJob、调用真实预约或支付副作用、改变 Credential 或支付安全设置。正式开放关键路径不依赖 LLM 实时推理。
+- Credential 的 Token 以加密形式保存，任务固定 Credential 身份与用户授权，但执行时使用该 Credential 当前最新且已验证的 Token。JWT `exp` 只提供本地过期提醒；真实有效性由安全的只读上游验证确认。
+- Credential Token 替换必须确认仍属于同一上游账户。不同账户必须新建 Credential；任务在执行前检查账户指纹、Token 有效性、预约资料和 Credential 启用状态。
+- 私有 Tailscale 只作为网络访问边界；应用独立登录、服务端可撤销 Session、邀请码注册和 SQL 层 `user_id` 隔离仍然生效。
+- 自动支付默认关闭；支付金额必须同时满足 ReservationIntent 价格上限、Job 创建时冻结的用户授权、当前 Credential 支付上限和订单状态校验。金额变化或状态不确定时暂停。
+- 不执行验证码绕过、频率规避或通过多个用户/Token 绕过上游限流。需要人工验证时暂停并交由用户处理。
+- 先在本地开发和验证，完成认证、CSRF、CORS、日志和密钥保护后再接入授权 Tailscale 网络。
 
 ## 2. 系统边界
 
 应用由三个逻辑部分组成：
 
-1. **Vue 前端**：登录、邀请码注册、Credential 管理、场地查询、人工计划编辑、Agent 计划修改预览、任务调度、支付确认和任务状态。
-2. **Flask API**：服务端会话认证、用户与 Credential 授权、计划和版本服务、LLM Provider Adapter、上游接口适配、BookingJob 创建与状态查询。
-3. **SQLite 与 Worker**：SQLite 保存用户数据、计划版本、任务队列、执行租约、步骤状态和外部订单记录；轻量 Worker 原子领取到期任务并调用预约服务。
+1. **Vue 前端**：登录、邀请码注册、Credential 与 Token 状态、预约意图编辑、Agent 提案预览、任务阶段、准备队列历史、订单摘要和人工作用确认。
+2. **Flask API 与领域服务**：服务端 Session、用户与 Credential 授权、ReservationIntent/PlanRevision、BookingWindowPolicy、AvailabilityService、UpstreamContractAdapter、CandidateResolver、QueuePolicyValidator、CredentialTokenService、LLM Provider Adapter 和 BookingJob 服务。
+3. **SQLite 与 Worker**：保存用户数据、不可变意图、任务、租约、步骤和订单；Worker 领取到期任务，执行 T-2 准备刷新及正式开放时的确定性预约流程。
 
-Flask 后端提供唯一的 BookingWindowPolicy、AvailabilityService、PlanService、UpstreamContractAdapter、CandidateResolver 和 BookingExecutionService。BookingWindowPolicy 集中计算查询/预约窗口；AvailabilityService 统一调用 bookingByTime、归一化状态、缓存和节流；CandidateResolver 只用本次最新响应把语义候选解析成临时坐标；BookingExecutionService 是唯一可调用真实预约副作用接口的服务。Vue、Agent、API 路由和 Worker 不得复制时间、冲突码或坐标规则，也不得绕过领域服务。
+Planning Agent 负责理解自然语言并修改语义预约意图；Preparation Agent 是同一应用内部的受限规划能力，不是独立微服务。Worker 可调用它生成 PreparedQueueProposal，但只能由确定性 QueuePolicyValidator 接收或拒绝结果。Agent 不持有上游 Token、任意 HTTP 客户端、JobService、支付服务或 Credential 设置能力。
 
-API 和 Worker 可以在同一台本地机器运行，逻辑上分离即可。Worker 可作为独立命令或受控后台线程运行；同一时刻只允许一个进程初始化数据库迁移。SQLite 是唯一持久化队列和状态来源，不另建内存任务队列作为事实来源。
+Flask API 和 Worker 可以同机运行，逻辑上分离即可。SQLite 是任务与恢复状态的唯一持久化来源。任务等待时间通过 `next_action_at_utc` 调度，不建立第二套预约任务系统或以内存队列作为事实来源。只有一个进程负责数据库迁移。
 
-当前目录只有前端构建产物，没有 Vue 源码或构建清单。实施前需要恢复前端源码或建立新的 Vue/Vite 源目录，并明确唯一维护版本。后端的可读源码位于打包目录内，另有一份重复副本；实施前需要选定唯一源文件位置。
+所有上游读写均通过 UpstreamContractAdapter 和 UpstreamRequestGate。AvailabilityService 为用户页面和两个 Agent 提供语义化信息；CandidateResolver 仅对当前某一次 bookingByTime 响应生成运行时坐标；BookingExecutionService 是唯一可以调用真实预约/支付副作用的服务。
 
-Flask 开发服务和前端开发服务可以分别运行。前端开发服务通过代理访问 Flask API；生产访问时由同源服务路由或 Tailscale 私有代理提供页面和 API。公网入口、反向代理与应用的信任边界必须显式配置。
+当前目录的前端源码和后端可维护源码位置仍需在实施前确认；本规格不改变该基线梳理事项。前后端本地开发可分进程运行，生产访问使用受控同源 HTTPS/Tailscale 入口。
 
 ## 3. 人工与 Agent 共用的预约计划
 
-### 3.1 单一事实来源与版本
+### 3.1 ReservationIntent 与 PlanRevision
 
-系统不保存“人工队列”和“AI 队列”两份互不关联的数据。每份 BookingPlan 属于一个用户，只描述预约业务内容，例如目标日期、场馆、预约类型、时间段、场地优先级和有序候选队列。队列继续表达一小时/两小时场次及各自候选顺序，以保留现有优先级语义。目标日期可以远于当前三日查询窗口；此时计划只保存语义意图并标记为 unresolved_future。
-
-计划中的每个场地候选使用结构化 BookingCandidate，而不是把“7号场19:00-21:00”或 `5-6` 一类展示文本/数组坐标作为业务主键。Schema 至少包含：
+BookingPlan 只描述用户想预约什么。每个 PlanRevision 保存一个不可变的 ReservationIntent；不保存某次查询时的可用性或执行坐标。ReservationIntent 的最小结构包括：
 
 ```json
 {
-  "slot_key": "内部语义键",
   "target_date": "YYYY-MM-DD",
-  "upstream_venue_nodeid": "场馆 nodeid",
-  "upstream_court_nodeid": "nodeList 中场地 nodeid",
-  "venue_name_snapshot": "仅展示",
-  "court_name_snapshot": "仅展示",
-  "start_time_local": "HH:MM",
+  "venue_scope": {
+    "venue_key": "用户选择的场馆语义键",
+    "venue_query_nodeid": "bookingByTime 请求所需的场馆标识",
+    "venue_label_snapshot": "仅用于展示"
+  },
+  "preferred_start_times": ["18:00"],
   "duration_minutes": 120,
-  "session_type": "two_hour",
-  "priority": 1
+  "booking_type": "契约支持的语义预约类型",
+  "court_preferences": [
+    {"semantic_key": "court-label:6", "label": "6号场", "priority": 1},
+    {"semantic_key": "court-label:5", "label": "5号场", "priority": 2}
+  ],
+  "fallback_policy": {
+    "allow_any_court_in_venue": false,
+    "allow_time_shift": false,
+    "allowed_start_time_range": null
+  },
+  "price_ceiling_minor": 5000
 }
 ```
 
-`slot_key` 是由目标日期、上游场馆/场地 nodeid、开始时间、时长和语义预约类型规范化后生成的内部 SlotKey；它不是上游 `slot_id`。PlanRevision 和 BookingJob 绝不保存 `courtIndex`、`timeIndex`、`coordinatesList` 或旧数组下标。端点没有稳定 slot_id 时不得虚构。结束时间由开始时间与时长推导；展示名称快照不能作为身份匹配依据。候选在同一 PlanRevision 内使用同一目标日期；`priority` 在该计划候选队列内唯一。
+以上仅表达结构，不要求存在上游 `slot_id`。`venue_query_nodeid` 是调用 `bookingByTime` 所需的查询范围标识；它不能被解释成某场地的身份。`court_preferences` 使用用户选择的语义偏好和优先级，不保存历史 `nodeList[].nodeid`、`courtIndex`、`timeIndex`、`coordinatesList` 或历史价格。稳定场地目录只帮助用户识别和选择标签，不代表未来目标日该场地仍存在或可预约。
 
-计划还必须保存用户明确选择的 fallback_policy：默认 `ordered_explicit_candidates_only`，只尝试用户列出的候选；可选 `any_available_court_same_venue_time_duration`，仅当用户主动授权时，才允许在同一场馆、同一目标日期/开始时间/时长内扩展到最新 `nodeList` 中其他正常场地。不得按场地名称或旧坐标猜测，也不得越出该授权范围。若用户授权同场馆任意可用场地，运行时只在当前 nodeList 中按上游返回顺序枚举同一时间/时长下的正常候选，并在任务摘要中说明实际尝试的场地；该临时顺序不写回 PlanRevision。实时 occupancy/window 状态和坐标不写入 PlanRevision。
+目标日、场馆范围、开始时间偏好、时长、预约类型、场地排序、可换场范围、可浮动时间范围、价格上限和用户明确授予的其他 fallback 范围共同构成 ReservationIntent。目标日期不可由 Agent 或执行器在任务中改变。时间浮动必须明确界定可接受的开始时间范围或有序时间偏好；时长不得自动变化。场地优先偏好可以按当前响应中明确匹配的语义名称解析；无法唯一匹配时跳过该偏好并记录原因，不使用模糊名称或历史 ID 猜测。
 
-Plan 不包含 Credential 选择、自动支付开关、支付上限、Worker 状态或执行时间。用户在创建 BookingJob 时选择自己的执行 Credential；任务调度也由 BookingJob 管理。因此一个用户可以将同一份计划用于不同 Credential，也可以修改计划而不隐式提交任务。保存计划前如需验证可用性，用户在 UI 选择一个仅供查询的 validation Credential；PlanService 校验它属于当前用户，但不把它写入 BookingPlan/PlanRevision，也不将它自动用作后续 Job 的执行 Credential。
+`price_ceiling_minor` 以最小货币单位整数表达当前 ReservationIntent 的最高可接受报价；币种由已验证的部署配置给出，不伪称为上游字段，也不作为用户自由输入的币种。缺少价格上限时仍可准备与报价，但不得因缺少上限而扩大自动支付授权；支付仍须通过 Credential、Job 和 ExternalOrder 的独立安全门禁。
 
-人工界面和 Agent 使用同一个 PlanService：
+计划使用 optimistic locking：用户或 Planning Agent 写入时携带期望版本；SQLite 事务检查版本后追加新 PlanRevision。版本冲突返回 409 并要求重新读取。PlanRevision 只追加，BookingPlan 仅推进当前版本指针。BookingPlan/PlanRevision 不包含 Credential、自动支付设置、Worker 状态或运行时 availability。
 
-- 人工保存场地和队列选择时，PlanService 创建新的 PlanRevision。
-- Agent 读取当前计划和经筛选的场地可用信息后，生成结构化修改；只有用户明确要求保存时才提交给 PlanService。
-- 修改支持追加、删除和替换；Agent 必须展示会移除或替换的候选项。意图含糊且会造成破坏性修改时，先请求用户确认。
-- 每个版本记录来源（manual 或 agent）、操作者、时间、变更摘要和不可变计划内容。
-- 更新必须携带期望的当前版本号。服务在一个 SQLite 写事务中检查并推进版本；版本不匹配返回 409，要求重新读取后再编辑。
-- PlanRevision 只追加，不允许更新或删除。BookingPlan 的当前版本指针通过比较并交换方式更新；不能覆盖历史版本。
-- PlanService 始终校验语义字段、时长与队列结构。目标日尚未到 T-2 查询窗口时，不调用上游、不要求 validation Credential；正常保存 revision，并将候选标记为 unresolved_future。查询窗口内若已有当前有效响应，已确认的活动、社团、已预订及其他硬性不可预约候选不能新增或保存在 revision；没有可用实时响应时可以保存语义意图，但不得把未知状态伪装成可用，BookingJob 仍须等 Worker 解析。
+人工界面与 Planning Agent 通过同一个 PlanService：Agent 输出 Schema 化差异，用户确认后才能保存。Agent 必须展示新增、删除、改序和时间/场地 fallback 变化；破坏性或含糊修改需要用户确认。目标日尚未进入 T-2 查询窗口时，PlanService 仅校验语义结构并允许保存 `unresolved_future`；不调用上游、不将 UI 目录当作真实可用性。进入查询窗口后，页面可以显示当前观察结果，但保存的意图仍不固化该观察结果。已知硬排除项不能进入当次 PreparedQueueRevision 或 FinalExecutionQueue。
 
-### 3.2 计划与 BookingJob 执行快照
+### 3.2 BookingJob 快照与执行授权
 
-执行时间不属于 BookingPlan。立即执行与未来定时执行统一创建 BookingJob，使用同一张持久化任务表和同一个 Worker 队列：
+BookingPlan 与任务执行彻底分离。用户通过明确的人工作用创建 BookingJob；Planning Agent 和 Preparation Agent 都没有创建 Job 的工具。
 
-- 创建任务必须由已登录用户通过明确的人工作用触发，例如点击“立即执行”或“保存定时任务”。Agent 工具没有创建 BookingJob 的能力。
-- 创建请求必须明确指定当前用户的 plan、PlanRevision、Credential 和执行策略。若客户端省略 revision，只能由服务端在同一个事务内读取并固定当时的当前 revision，不能留待 Worker 开始时再读取。用户可以在查询窗口前任意天创建任务，不要求此时有 availability。
-- BookingJob 创建成功时，固定 plan_revision_id，并把 revision 中的完整语义预约意图复制到不可变 `execution_snapshot_json`，同时保存规范化快照哈希。快照固定 BOOKING_TIMEZONE、BookingWindowPolicy 版本、UpstreamContractAdapter 版本、目标预约日期、候选顺序、用户授权的 fallback_policy 及预约开放基准；不含实时 nodeList/timeList、availability、价格或上游坐标。
-- `scheduled_for_utc` 是用户授权的正式预约执行时刻；official_open 模式由 Policy 求“now 之后、目标日 T-2 已开放且落在某个当前每日 bookingstarttime/bookingendtime 写窗口内、且早于场次开始”的最早时刻。默认后天任务通常等于 T-2 日 bookingstarttime（当前观察值 07:30）；目标开放已过去而用户选择今天/明天剩余场地时，若当前每日窗口已开则可立即执行，否则等待下一个每日开放时刻。初始 `next_action_at_utc=max(now_utc, query_open_at_utc)`。二者分开存储，前者在任务创建后不可改，后者随 phase 推进而更新。
-- 任务初始 `status=queued`、`phase=waiting_query_window`、`resolution_status=unresolved_future`。到查询窗口由同一 Worker 队列领取，执行只读准备后追加 ResolutionSnapshot；准备完成后转为 `phase=waiting_booking_open` 并释放 Credential 执行锁。开放时重新领取并使用新的实时响应解析，不能复用准备阶段坐标。
-- 快照至少包含预约计划内容、revision 编号、credential_id、创建时的 Credential 执行策略版本、支付上限、创建方式和预约执行时间。不得包含解密后的 Token、支付密码、LLM Key 或其他明文秘密。
-- 快照还要固定创建任务时是否允许自动支付、支付上限数值和币种；这些值只记录授权边界，不替代执行时对 Credential 当前状态和策略的重新校验。
-- 上游请求还需要 Credential 账户的 reservationPerson、childrennum、accompanyPerson/followList 等执行资料。BookingJob 必须同时固定同一 user_id/Credential 下由用户确认的 CredentialBookingProfileRevision ID/hash；只在该 profile revision 中加密保存个人字段，不把明文复制进计划、Agent 上下文或普通 API。没有有效 profile 时拒绝创建可执行 Job，不能在开放时静默改用最新用户资料。
-- Credential 的启用、删除状态及当前安全策略在 Worker 执行前仍需重新校验。安全策略变得更严格时立即生效；策略变得更宽松时，不自动扩大已有任务快照中的授权范围。
-- 用户修改计划只产生新 PlanRevision，不修改任何已创建任务。用户要用新计划执行，必须显式创建一个新的 BookingJob。
-- 任务创建后的执行时间和快照不可原地改写。需要改变时间、计划版本或 Credential 时，取消原任务并创建新任务。
-- 立即任务、普通定时任务和长期提前预约任务均使用同一 BookingJob 表；Worker 按可变 `next_action_at_utc` 领取到期阶段，不建立第二套调度表或内存事实队列。`scheduled_for_utc` 与 `next_action_at_utc` 含义不同。
+创建 Job 时服务端固定 `plan_revision_id`、完整 ReservationIntent 的 `intent_snapshot_json` 和规范化哈希、`credential_id`、用户确认的 CredentialBookingProfileRevision、已建立的账户指纹、执行模式、支付授权边界及当时的 Policy/Adapter 版本。尚未通过只读验证或未建立账户指纹的 Credential 不能用于创建 Job，用户需先完成 Credential 验证。快照不含 Token 密文、JWT payload、实时 availability、价格、场地 nodeid、数组下标或上游坐标。修改计划只产生新 PlanRevision，不改变已创建 Job；要改变日期、时长、价格上限或授权范围，必须创建新 Job。
+
+执行模式定义如下：
+
+- `official_open`：用户授权在上游目标日期当前正式开放时执行。创建时可显示预计时间（当前已知常见值为 T-2 日 07:30），该预计值不是固定授权时间。`scheduled_for_utc` 为空；T-2 第一次合法查询返回开放时间后，Job 保存 `resolved_official_open_at_utc` 并据此更新 `next_action_at_utc`。后续有效查询若显示开放时刻变化，可以继续更新该字段和下一动作。
+- `at`：用户明确指定精确的 `scheduled_for_utc`。创建时按当前 BookingWindowPolicy 校验；查询窗口已开时使用当前响应，否则使用已验证的预计开放基准作初步校验。该值不可自动修改。运行时若当前上游开放时刻晚于用户指定时间，Job 不得静默改到新时刻；转入 `awaiting_human`，要求用户取消并按新意图创建任务，或由用户明确采取新的任务创建动作。
+- `now`：仅当服务端当前 BookingWindowPolicy 和最新 availability 都允许真实预约时接受；否则返回明确拒绝，不将请求排队成另一个执行模式。
+
+所有模式的初始 `next_action_at_utc` 在目标日 T-2 之前指向 `query_open_at_utc`。若目标日 T-2 已过去，Job 立即进入只读准备/窗口复核，不重复等待 T-2。`official_open` 只用于尚未到达的正式开放时刻；开放已发生时，用户应选择当前允许的 `now` 或明确 `at`，不能把过去的开放时刻伪装成未来计划。`at` 保留精确时间但须在正式执行前复核窗口。API 不得将远期意图解释成“立刻执行”。
+
+任务固定 Credential 身份和预约资料 revision，但不固定旧 Token 密文。Worker 每次上游操作前读取该 Credential 当前最新 Token，并确认该 Token 最近通过安全只读验证、尚未过期、账户指纹与 Job 创建时一致、Credential 未软删除/停用。用户轮换同一账户的 Token 不改变 Job 授权；账户指纹变化或无法证明连续性时暂停，不得用新账户代替原账户。
+
+BookingJob 创建使用请求级 `Idempotency-Key`。相同用户、操作、key 和规范化请求体只创建一个 Job；相同 key 携带不同请求体返回 409。记录至少保留到任务与客户端重试窗口结束。
+
+### 3.3 状态与用户授权快照
+
+Job 创建时固定用户意图和支付授权。当前 Credential 策略收紧时立即生效；后续放宽不能扩大旧 Job 的授权。预约价格上限、支付上限和币种均使用最小货币单位整数和显式币种；有效门槛取用户 Intent、Job 快照和当前 Credential 策略中最严格的值。
 
 ## 4. Agent 的职责与工具边界
 
-Agent 负责把用户表达转为预约计划修改，不直接创建或执行预约：
+### 4.1 Planning Agent
 
-1. 在当前登录用户范围内读取计划及必要的版本信息。
-2. 查询窗口未开放时只读取 BookingPlan 和 BookingWindowPolicy，不能调用 bookingByTime，也不能自行估算未来 availability。查询窗口开放后才可通过用户选定的 Credential 查询；服务端只返回场馆、时间、硬排除原因和必要价格等语义字段。
-3. 生成符合固定 Schema 的计划差异，说明新增、删除、替换的候选项。
-4. 用户明确要求保存时，通过 PlanService 写入新 PlanRevision；遇到版本冲突必须重新读取并重新生成差异，不能静默覆盖。
-5. 返回保存后的计划版本。Agent 不能创建、调度、取消或恢复 BookingJob。
+Planning Agent 将用户自然语言转换为 ReservationIntent 的结构化差异，例如“星期日 18:00–20:00，6 号场优先、5 号场第二”。它只读取当前用户的计划、版本、BookingWindowPolicy 和必要的 AvailabilityService 语义结果；查询窗口外不得探测未来 availability。Agent 生成的修改必须由用户确认并经 PlanService 保存为新的 PlanRevision。它不能创建或修改 BookingJob。
 
-Agent 可以理解任意未来目标日期并创建/修改语义候选；目标日未到 T-2 时，界面和 Agent 必须显示 unresolved_future，而不是伪造场地状态。T-2 查询窗口开启后，Agent 可查看当天、明天、后天的归一化状态并调整计划。Agent 不读取原始 conflictList、nodeList/timeList 下标、坐标字符串或原始 HTTP JSON，也不解释上游冲突代码。即使用户提前确认 BookingJob，Agent 也不能创建任务；必须由用户通过人工作用明确确认后创建。00:00 至正式预约开放期间只有查询、解析和 PlanService 写入能力，没有真实预约副作用能力。
+### 4.2 Preparation Agent
 
-Agent 的工具面只允许计划读取、可用信息查询和计划修改。它不能：
+T-2 查询窗口开启后，Worker 可以把当前 Job 的不可变 ReservationIntent，以及 AvailabilityService/UpstreamContractAdapter 已归一化的当日候选状态，交给受限 Preparation Agent。它可生成 `PreparedQueueProposal`：在合法范围内重新排序候选、按用户预先授权的场地范围扩展备用场地，或比较和排列用户允许的时间浮动方案。`priceList` 只能提供准备阶段的参考价格；最终可否预约和金额上限必须在正式开放时重新检查，并以当前 getPayPrice/订单结果为准。
 
-- 调用真实的 createBooking、支付或其他副作用上游接口。
-- 创建立即任务或定时任务，或直接调用 Worker。
-- 开启或修改自动支付、支付上限、Credential 启用/删除状态、并发策略、Provider 配置、会话、邀请码或其他敏感设置。
-- 读取原始 Token、支付凭证、用户资料全量响应、原始 HTTP 响应或完整订单支付详情。
-- 提供任意 URL、任意 HTTP 工具、SQL、shell 或数据库访问能力。
-- 通过模型返回的 user_id、credential_id 或 plan_id 越权访问资源；所有工具调用从当前服务端会话取得 user_id，并在数据库查询中绑定该 user_id。
+Preparation Agent 只看到语义化目标、候选显示标签/稳定内部偏好键、占用类别、时间段、当前窗口状态和必要的价格区间；不读取原始 req、Token/JWT payload、个人资料、原始 HTTP JSON、原始 `conflictList`、node/time 数组下标或 `coordinatesList`。它没有任意 HTTP 客户端、Credential 写入、JobService、支付服务或数据库能力，也不能调用 createBooking、getPayPrice、支付或其他上游接口。
 
-Agent 通过后端 LLM Provider Adapter 调用模型。首版协议采用 OpenAI Chat Completions 兼容格式和受限工具调用；工具参数经过 Schema 校验和业务权限校验。非兼容协议需增加独立适配器，不能把协议差异散落在 PlanService 或执行器中。来自上游、用户文档或模型的文本一律作为不可信数据，不得覆盖系统工具权限。
+所有提案必须由确定性的 QueuePolicyValidator 对照不可变 ReservationIntent、当前目标日响应和服务端规则校验。校验至少覆盖日期、场馆、时间浮动范围、时长、场地 fallback 授权、价格上限、重复项、上游冲突/硬排除、`mintimeselect`、`maxtimeselect` 和 `maxAppointmentNodeNum`。越界提案不落入可执行队列，标记为 `awaiting_user_confirmation` 并解释边界；改变已冻结 Intent 的建议需用户另建 PlanRevision 和 BookingJob。
 
-Agent Runtime 只注入 PlanService 与只读 AvailabilityService 等必要接口，不注入 JobService、支付服务、Credential 设置服务或任意 HTTP 客户端。Agent 工具表中不存在创建/取消/恢复任务和支付授权工具；即使模型输出相应字段，也会因工具 Schema 不接受而拒绝。
+Preparation Agent 不在正式开放关键链路内同步运行。准备阶段 Agent 超时或不可用时，QueuePolicyValidator 仍从 ReservationIntent 构建确定性基线队列；只要至少一个用户明确授权候选合法，Job 就可以在正式开放时继续。开放时不等待 LLM，也不使用 LLM 解释原始冲突代码或决定是否发送副作用。
+
+### 4.3 共享权限隔离
+
+Planning Agent 和 Preparation Agent 均由后端以当前 Session 的 `user_id` 限定数据范围；模型不能提交或覆盖 `user_id`、`credential_id` 或 `job_id` 所有权。用户 A 的意图、PreparedQueueRevision、Agent 上下文、Credential、Job、订单与 Token 状态不得进入用户 B 的上下文。Agent 输出是非可信提案，必须过 Schema、权限和 QueuePolicyValidator 校验。
+
+Agent 工具面不包含创建、调度、取消或恢复 BookingJob，修改 Credential、自动支付、支付上限、Token、Provider、邀请或会话设置，以及真实预约/支付副作用。上游文本也按不可信输入处理，不能改变工具权限。
 
 ## 5. 预约执行与任务调度
 
-### 5.1 BookingWindowPolicy：查询窗口与真实预约窗口
+### 5.1 BookingWindowPolicy：查询窗口与动态正式开放
 
-服务端统一配置业务时区 BOOKING_TIMEZONE，默认 Asia/Shanghai；必须是有效 IANA 时区。前端从服务端读取该配置，API、PlanService、AvailabilityService、BookingJob 创建服务和 Worker 使用同一 BookingWindowPolicy 与可注入时钟，禁止用浏览器时区、操作系统本地时区或分别散落的常量计算开放时间。
+服务端使用唯一的 `BookingWindowPolicy` 和配置的 IANA 业务时区 `BOOKING_TIMEZONE`（默认 `Asia/Shanghai`）。所有日期先按业务时区本地日历计算，再转换为 UTC；浏览器和操作系统时区不参与开放判定。
 
-对当前业务日期 D 和语义目标预约日期 T，先按本地日历做日期运算，再在 BOOKING_TIMEZONE 中构造本地时刻并转换为 UTC：
+对目标预约日期 T：
 
-- 默认推荐目标日为 D+2，即“后天/第三天”；00:00 起的常规查询窗口为 D、D+1、D+2。用户可以在更早时刻选择任意未来 T 并保存预约意图，但在 T-2 日 00:00 前不得调用上游查询。
-- 已知查询开放策略是 T-2 日 00:00；上游 `bookingByTime` 响应的 `bookingstartdate`/`bookingenddate` 是当前实际可查询日期范围，Worker 必须确认 T 位于该范围内。实测返回三日范围与默认策略一致；范围长度、日期格式或边界与已验证契约不一致时暂停为 contract_drift。
-- 已知预约开放基准是 T-2 日的 `bookingstarttime`，本地抓包观察值为 07:30；`bookingendtime` 是响应给出的预约时段截止时间。创建远期任务时用已验证的 07:30 计算暂定 scheduled_for_utc；到查询窗口后以当前 `bookingstarttime`/`bookingendtime` 复核。响应值不符合当前 Adapter 契约时不得自动挪动任务时间或发送副作用，必须暂停并报告 contract_drift。
-- 例：星期一 00:00 后可查询星期一、星期二、星期三；预约星期日的 query_open_at 为星期五 00:00，当前抓包中的 bookingstarttime 为星期五 07:30。目标日是 T-2 天计算的结果，不从“第三天”字样推算偏移。
-- `can_query(T)` 要求现在不早于 T-2 日 00:00、目标日期未过期，且上游响应实际覆盖 T。未到查询窗口时返回 query_not_open，不调用 `bookingByTime`。不能查询未来任意日期来提前探测上游场地。
-- `can_book(T, slot)` 要求目标日当前受上游窗口支持、当前时刻不早于 T-2 的已验证 `bookingstarttime`，并且当前业务日期本地时刻落在当日 bookingstarttime 与 bookingendtime 之间。因此即使今天/明天的目标日期早已在 T-2 开放，当前每天 bookingstarttime 前仍不能创建预约。所选场次尚未开始，且实时 AvailabilityService 与 CandidateResolver 确认候选满足上游限制。已确认的 current response 是最终执行依据；`isNew` 原样保留，只能按有契约 fixture 覆盖的规则解释，不能单独放宽预约门禁。
-- 今天或明天的剩余场地不被无依据地禁止：若上游当前响应覆盖目标日、场次未过时且实时状态允许，用户可明确选择并创建任务。D+2 只是默认目标日。
-- BookingWindowPolicy 返回值至少包括 business_timezone、business_date、default_target_date、可查询日期、target_date、query_open_at_utc、target_booking_open_at_utc、current_daily_booking_open_at_utc、current_daily_booking_close_at_utc、window_status、can_query、can_book_by_time、按 action 计算的 can_mutate_upstream、contract_status 和 reason_code。状态至少区分 query_not_open、query_open_booking_not_open、booking_open、daily_write_window_closed、target_expired、outside_supported_window 和 contract_drift。Job 固定 policy/contract 版本；策略升级不得静默重解释已有任务。
+- 目标日首次查询时间基准为 T-2 日 00:00。每天 00:00 的通常可查范围为当天、明天、后天；“后天”是 D+2。用户可在任意更早日期保存未来 ReservationIntent，但 T-2 00:00 前不得调用 bookingByTime。
+- T-2 00:00 后，Worker 以任务 Credential 查询 bookingByTime。`bookingstartdate`/`bookingenddate` 必须按当前契约校验并确认 T 在响应范围内。不同日期返回的合法日期范围和列表内容可以变化，不将旧响应沿用到新日期。
+- 正式预约开放时间由当前目标日响应的 `bookingstarttime` 决定。远期任务创建时的已知 07:30 仅为预计展示值；首次 T-2 查询后，系统把该值与业务日期组合得到实际 `resolved_official_open_at_utc`，并调整 official_open Job 的 `next_action_at_utc`。之后任一新的合法准备响应若给出另一个有效时刻，继续更新调度。若确认的开放时刻已到或已过，但当前窗口和目标场次仍有效，official_open 立即进入最终实时查询；如果窗口/场次已失效，则暂停或结束，不能按旧时刻盲目执行。时间值变化本身不构成 contract drift。
+- `bookingendtime` 和每日预约窗口按当前有效响应解释。预约副作用同时要求当前业务时刻落在有效写窗口、目标日期仍被当前上游支持、场次尚未开始、实时场地仍可预约。支付另按订单状态与支付端点有效期校验，不无证据地把预约截止套给支付。
+- `execution_mode=at` 的精确时间不可被 `bookingstarttime` 变化自动改写。若实时开放晚于精确时间或目标时段已不可预约，任务暂停要求用户处理，不替用户更改授权。
+- `can_query`、`can_book`、`can_pay` 和 `can_mutate_upstream` 由该服务按当前时间和动作统一返回。Vue、API 路由、Agent 和 Worker 不得各自重写门禁。
+- 只有字段缺失、类型/结构变化，或已验证字段语义发生无法解释的变化时才进入 `contract_drift`。`nodeList` 顺序、`timeList`、冲突、价格、合法开放时刻和合法日期范围在不同目标日期间变化属于业务数据变化，不能仅因值不同就判为协议漂移。
 
-T-2 日 00:00 到上游 `bookingstarttime` 之间允许只读查询、语义解析和计划编辑，禁止 `createBookingBytime`、支付单创建、支付或任何其他上游副作用。即使目标日 T-2 已在过去，创建预约仍须检查当前业务日的 bookingstarttime/bookingendtime。支付也不得早于当日 bookingstarttime，但 bookingendtime 是预约时段上限；没有支付端点证据时不把它套用为支付截止时间，支付还须通过已确认订单状态及其自身有效期检查。所有副作用只能由 BookingExecutionService 暴露，并在发送前再次检查 BookingWindowPolicy 和当前响应；时间字段不匹配、响应结构漂移或门禁不满足时 fail closed。
+`BookingWindowPolicy` 的返回至少包括业务时区/日期、默认目标日期、目标日、query_open_at、预计及已解析正式开放时间、当前每日预约窗口、`can_query`、`can_book`、`can_pay`、contract 状态和 reason_code。示例：星期一 00:00 后可查星期一/二/三；星期日目标日 T 的查询基准为星期五 00:00。T-2 日基于明确日期计算，禁止由“第三天”文字推导日期偏移。
 
-### 5.2 BookingJob、统一队列与状态机
+### 5.2 BookingJob、Preparation Window 与执行队列
 
-所有任务放入 SQLite 的 BookingJob 表。Worker 按 `next_action_at_utc <= now_utc` 领取 queued 行；已过期租约的 running 任务和需要核对的 cancel_requested 任务也由同一 Worker 领取，但只能走恢复/取消核对流程。
+所有任务使用同一个 SQLite BookingJob 表、状态机、租约和 Worker 调度器。Job 状态与执行 phase 分开：
 
-创建 BookingJob 时服务端固定 PlanRevision、语义快照、Credential 和执行时刻。execution_mode=official_open 表示由 Policy 计算最早有效预约时刻，并将初始 next_action_at_utc 设为 max(now_utc, T-2 00:00)；允许在查询窗口前任意天创建。默认后天任务的 scheduled_for_utc 为 T-2 日 bookingstarttime（当前基准 07:30）。execution_mode=at 必须显式提供 scheduled_for_utc，且不早于目标日预约开放时刻、落入该时刻对应的每日写窗口，并早于候选场次开始时间。execution_mode=now 只允许在当下 can_book_by_time 为 true 时使用。无可用的每日写窗口、过早、过晚或过期请求返回 422 和明确边界，绝不静默改写用户显式指定的时间。省略执行时间的请求按 official_open 处理，不得把远期意图当成“立即执行”。
+- phase：`waiting_query_window`、`credential_preflight`、`preparing`、`waiting_booking_open`、`final_resolving`、`getting_price`、`creating_booking`、`processing_payment`、`recovering`。
+- status：`queued`、`running`、`awaiting_human`、`cancel_requested`、`succeeded`、`failed`、`cancelled`、`needs_attention`。
 
-Worker phase 与 BookingJob status 分开保存。phase 至少包括 waiting_query_window、preparing、waiting_booking_open、resolving_at_open、getting_price、creating_booking、processing_payment 和 recovering；人工作用仍由 status=awaiting_human 表示。远期任务初始为 status=queued、phase=waiting_query_window、resolution_status=unresolved_future。查询窗口到达后执行一次只读准备并追加 ResolutionSnapshot；准备完成后设为 queued/waiting_booking_open 并释放租约和 Credential 锁。正式开放时重新领取、查询最新 bookingByTime 并解析；若 Worker 首次运行时预约窗口已开，则该次最新查询直接作为最终查询，无须为形式重复调用。
+长期任务生命周期：
 
-BookingJob 状态：
+1. 用户任意提前天数创建 Job；状态为 `queued/waiting_query_window`，保留不可变 Intent 快照，不调用上游。
+2. 到 T-2 日 00:00，Worker 领取任务并取得 Credential 执行锁，执行只读 Credential preflight（当前 Token、账户指纹、Credential 状态、预约资料完整性），随后调用 bookingByTime 获取该目标日真实数据。
+3. 每次成功查询都经 Adapter 归一化，并生成当次 PreparationObservation。QueuePolicyValidator 先按 Intent 生成确定性基线队列；Preparation Agent 可异步给出提案。有效提案通过校验后，追加一条 `PreparedQueueRevision`，只保存语义候选顺序和引用的 observation，不保存可复用的下单坐标/价格。Agent 提案绑定产生它的 observation；如果结果返回时该 observation 已不是 Job 最新 observation，该结果只留作审计，不能成为 active queue。
+4. 00:00 到实际 `bookingstarttime` 之间，`PreparationRefreshPolicy` 可安排多次低频刷新。每次新鲜查询可追加新的 observation 和 PreparedQueueRevision；历史 revision 不覆盖，Job 只推进“最新准备版本”指针。刷新间隔是服务级可配置策略，需依据 req、脱敏成功运行日志及 Retry-After/429 证据设置；不得使用 1 秒全局请求门禁作为轮询频率，不允许用户或多个 Credential 规避门禁。只要初始查询与开放时刻之间有足够窗口且未被上游退避阻断，策略至少安排一次开放前中间刷新；间隔不足时服从 gate/backoff，并保证开放时的最终刷新。Worker 每次只做一轮受控查询，释放锁后等待下一次 `next_action_at_utc`。
+5. 每次响应都重新读取并解释合法 `bookingstarttime`。如果开放时刻改变，official_open Job 更新 `resolved_official_open_at_utc` 和下一动作；用户选了 `at` 时保持精确时间并在不兼容时暂停。
+6. 到官方开放时，Worker 再次绕过缓存调用 bookingByTime，使用该次响应重算 occupancy、court/time 映射和所有价格相关状态；QueuePolicyValidator 以不可变 Intent 和最新合法 PreparedQueueRevision 的语义顺序生成本次 `FinalExecutionQueue`。准备阶段的任何 nodeid、下标、坐标、价格或可用性都不能直接复制到最终队列。
+7. 最终队列通过门禁后，按 `bookingByTime → CandidateResolver → QueuePolicyValidator → getPayPrice → createBookingBytime` 的确定性路径执行；不等待 LLM，不添加无证据固定 sleep。CandidateResolver 只在此时从当前 `nodeList` 和 `timeList` 生成坐标。
 
-- queued：已持久化，等待执行时间到达或等待 Worker 领取。
-- running：Worker 持有有效租约，正在执行或恢复核对。
-- awaiting_human：已暂停并等待用户完成验证或确认具体金额等人工作用。
-- cancel_requested：用户要求停止；Worker 需在安全边界处理并核对已经发出的上游操作。
-- succeeded：预约流程已按要求完成，最终状态已确认。
-- failed：已确认失败，且不存在需要继续核对的未知副作用。
-- cancelled：本地执行器已停止继续执行。此状态不代表上游订单已取消或退款。
-- needs_attention：上游副作用或订单状态无法安全确认，自动执行停止，需人工处理。
+`PreparedQueueRevision` 是 BookingJob 的派生准备状态，不修改 `PlanRevision` 或 `intent_snapshot_json`。没有有效 Agent 提案时，用用户明确的候选顺序和已授权 fallback 构建队列。只有通过授权校验的候选能进入队列；硬排除、协议未知或超出用户范围的提案不能被执行。
 
-主要状态转换：
-
-- queued -> running 或 cancelled
-- running -> queued（只读准备完成、等待下一阶段）、awaiting_human、succeeded、failed、cancel_requested 或 needs_attention
-- awaiting_human -> queued 或 cancel_requested
-- cancel_requested -> cancelled 或 needs_attention
-- needs_attention -> queued 仅限用户恢复操作已满足恢复前置条件且上游状态已核对；否则保持暂停。
-- succeeded、failed 和 cancelled 为终态。若上游仍有未结订单，终态任务仍须展示独立的 ExternalOrder 状态，不能把本地终态解释为上游终态。
-
-每次状态转换都追加带时间和操作者的 JobEvent。API 返回可供用户理解的错误摘要和状态，不返回堆栈、凭证或完整上游响应。
+`FinalExecutionQueue` 绑定最新查询的响应指纹、Adapter 版本、Job lease epoch 和本次执行 attempt，只服务于当前开放时尝试。租约丢失、进程在副作用开始前崩溃或需要重新查询时，旧 FinalExecutionQueue 失效，Worker 必须再获取实时响应和重新解析。它可以用于审计本次实际下单坐标，但不得被后续尝试或另一个目标日重用。
 
 ### 5.3 Worker 租约与 Credential 执行锁
 
-Worker 领取任务和获取 Credential 锁必须在同一个 SQLite BEGIN IMMEDIATE 事务中完成：
+Worker 领取任务和获取 Credential 锁必须在同一个 SQLite `BEGIN IMMEDIATE` 事务中完成。记录持久化 lease owner、到期时间、heartbeat 和递增 epoch；同一 Credential 同时最多执行一个任务。网络调用期间不持有 SQLite 写事务；每次写回状态前校验 owner/epoch。接管过期任务先进入 `recovering`，不能因租约过期重发任何副作用。
 
-- 在同一队列中选择到期的 queued 任务、租约已过期的 running 任务，以及需核对的 cancel_requested 任务；后两类只能恢复或取消核对，不能直接开始新的预约副作用。检查当前用户和 Credential 关系仍有效。
-- 对每个任务写入持久化 lease：lease_owner、lease_expires_at_utc、lease_heartbeat_at_utc 和递增的 lease_epoch。
-- 同一 Credential 同时只能关联一个执行任务；Credential 锁有独立持久化行和到期时间，不能只依赖 Python 进程内的 Mutex。
-- 获取锁失败时任务保持 queued，稍后重试领取；不得让任务先进入 running 再无锁执行。
-- 网络调用期间不持有 SQLite 写事务。Worker 定期续租，并在写入 JobStep、订单或任务状态前校验 lease_owner 和 lease_epoch。
-- 网络超时必须短于租约时长，Worker 需在每个副作用请求前检查租约仍有效。接管过期的 running 任务时，原子递增 lease_epoch、标记 recovery_required，并先执行恢复核对。
-- 如果旧 Worker 的网络副作用已在途或结果不明，数据库 fencing 不能撤销上游请求；新 Worker 必须按 JobStep 和 ExternalOrder 查询上游状态，不能因为旧租约过期就重发请求。
-- 没有未决副作用的 awaiting_human 任务可释放执行锁；有未决外部订单或支付操作的任务保留 Credential 锁预留，直到上游状态核实或人工处理，防止同一 Credential 被另一任务误用。
-- 删除、停用 Credential 时，禁止领取新任务。排队任务被安全取消；运行中任务进入 cancel_requested 并在安全边界完成核对。
+同一 Job 的一次低频准备查询完成后可以释放 Credential 锁，等待时不占锁；每次刷新和正式执行都重新取得锁并使用 Credential 当前最新 Token。无未决副作用的 `awaiting_human` 可以释放锁；存在未知订单/支付副作用时保留恢复所需锁定，直到状态核实。停用或软删除 Credential 后不领取新任务；运行中任务在安全边界取消并核对。
 
-全局 Worker 并发上限保持较小且可配置。不同 Credential 可并行；同一 Credential 串行。并发上限不由 Agent 或普通用户计划修改。
+服务级 Worker 并发上限较小且可配置。不同 Credential 可在该上限内并行；同一 Credential 串行。全局上游 gate 跨所有用户和 Token 共享。
 
 ### 5.4 JobStep、外部副作用与崩溃恢复
 
-每个 BookingJob 有多条持久化 JobStep，例如准备阶段 bookingByTime、开放时 bookingByTime、候选解析、getPayPrice、createBookingBytime、订单查询、支付下单和支付状态核验。JobStep 至少记录步骤类型、序号、状态、尝试次数、开始/结束时间、稳定的本地 operation_id、经脱敏的结果摘要和关联 ExternalOrder。每次准备/开放阶段解析追加一条 ResolutionSnapshot，记录 contract version、查询时间、候选 SlotKey 的解析结果及响应指纹；准备阶段结果标记 write_eligible=false，不得作为开放时下单输入。
+每个 Job 的只读检查、PreparationObservation、Agent 提案校验、CandidateResolver、getPayPrice、createBookingBytime、订单核对和支付都写入 JobStep。步骤记录稳定的本地 operation_id、状态、尝试次数、lease epoch、时间、脱敏结果摘要和关联 ExternalOrder，不保存原始 HTTP 请求/响应或凭证。PreparedQueueRevision 追加保存每次有效准备结果；FinalExecutionQueue 记录最终 attempt 使用的响应指纹和运行时解析。
 
-JobStep 状态包括 prepared、in_progress、succeeded、failed_definitive、unknown 和 skipped：
+JobStep 至少有 `prepared`、`in_progress`、`succeeded`、`failed_definitive`、`unknown`、`skipped`：
 
-- bookingByTime 和经契约确认只读的 getPayPrice 查询可以按有限次数和全局退避策略重试；重试不得更换 Credential 来规避限流。
-- 每次 createBooking、创建支付单或支付等副作用操作，必须先在事务中持久化 in_progress 的 JobStep 和本地 operation_id，提交后才发送网络请求。
-- 如果上游支持幂等键，使用稳定的 operation_id；未确认上游支持时，不能假设重复请求幂等。
-- 成功响应、业务失败响应和关联订单 ID 必须在收到后尽快持久化。HTTP 200 本身不是成功依据，须按 endpoint-specific contract 检查 JSON success、message 和必要的 resultData 字段；成功 message 可能是 CORE10008 等代码，不能假设所有接口都返回“成功”。
-- Worker 重启或租约过期后，所有未完成副作用先标记/视为 unknown 并恢复查询。只有上游明确证明副作用已成功或明确证明未发生，才更新 JobStep。
-- 如果上游能证明成功，恢复本地状态而不重发；如果能证明未发生且接口契约允许安全重试，才可受限重试；无法查询、查询结果不完整或状态仍有歧义时转为 needs_attention。
-- 当前抓包确认 createBookingBytime 返回 success=false、message 为“每人每天最多预约1次”时，这是 Credential/用户每日额度的终止性业务失败，不能换场地后继续。只有 Adapter 中逐条登记、明确证明“本次没有订单且仅该候选不可用”的错误才允许尝试快照中的下一项；超时、断连、成功字段与订单字段冲突或未登记 message 一律先对账，不能重发或换候选。
-- JobStep 和 ExternalOrder 不保存完整 HTTP 请求/响应、Cookie、Token、支付密码、二维码或未经筛选的个人资料。
+- bookingByTime、Token 只读验证、订单查询和契约允许的报价查询可按有限次数及全局退避策略重试；刷新查询按 PreparationRefreshPolicy 调度，不采用高速重试。
+- createBooking、支付单创建、支付等副作用每次发送前先持久化 `in_progress` 和 operation_id。只有上游明确支持幂等时才传稳定幂等键，不能推定上游可安全重放。
+- 副作用超时、断连、Worker 崩溃或结果字段冲突均视为 `unknown`：先查询上游订单状态。确认成功则恢复本地记录；明确证明未发生且契约允许时才能重试；无法确定则 `needs_attention`。
+- createBooking 结果未知时不切换下一候选。只有 Adapter 已登记并能证明“本候选失败且未产生订单”的候选级业务失败才允许继续；每日预约额度等用户级终止错误不切换场地。
+- HTTP 200 仍须按 endpoint-specific JSON success/message/resultData 判定。JobStep 和 ExternalOrder 不保存完整响应、Token、支付口令、二维码或未筛选个人资料。
 
-### 5.5 可用性归一化、节流与执行前核验
+### 5.5 可用性、CandidateResolver 与上游请求门禁
 
-AvailabilityService 是所有人工页面、Agent、PlanService 和 Worker 获取场地状态的唯一入口。返回项采用语义 BookingCandidate/SlotKey、fetched_at_utc、occupancy_status、window_status、can_query、can_select_plan、can_book 和 reason_code。占用与时间窗口分开表达；正常候选在 00:00 查询后、正式开放前显示“可准备，预约尚未开放”。查询窗口前返回 unresolved_future，不调用上游。
+AvailabilityService 是页面、Planning Agent、Preparation Agent 和 Worker 读取场地状态的唯一入口。它返回业务语义状态、目标日期、查询时间、当前窗口和 reason_code；不返回原始 HTTP JSON、原始 `conflictList` 或 `coordinatesList`。不同日期的结果严格按日期/用户/凭证隔离，过期缓存只允许用于历史展示。
 
-- 00:00 后可以显示当天、明天、后天各场地和时间段的正常候选、已预订、体育课、体训队、艺术团、项目培训、工会活动、其他活动及其他硬性不可预约项。活动/社团等确认占用是硬排除项，UI 置灰，Agent Schema 拒绝新增，PlanService 在已知当前结果时再次拒绝。
-- CandidateResolver 只使用当前一次响应：按候选 upstream_court_nodeid 在 nodeList[].nodeid 中精确找 courtIndex；按期望开始时间在 timeList[].time 中精确找 timeIndex；随后按官方协议生成 courtIndex-timeIndex。不得按名称、上次坐标或显示顺序猜测。重复 nodeid/时间值、响应数组长度不一致、未知冲突格式/代码或字段类型变化属于 contract_drift，任务暂停。
-- 一小时候选解析为一个 timeList 项；两小时候选必须解析成连续、相邻且实际时间间隔符合已验证槽长的两个 timeList 项，再为同一场地生成两条坐标。发现时间缺口、非连续槽或时长不匹配时，该候选不可提交。每次提交前检查选择数量满足 mintimeselect/maxtimeselect，不同场地下标数不超过 maxAppointmentNodeNum；这些值按当前响应和契约解析，不写死为样例值。
-- conflictList 的状态解释按第 8 节版本化契约。活动、已预订和通用不可预订一律 can_select_plan=false、can_book=false；未知冲突不当成正常候选。timeList[].status 保留原值，但已观察的官方前端没有用它判断网格可用性，因此不得沿用旧 Python 代码将“1”自行解释成硬占用；未来如要解释，必须有新抓包/官方代码和 fixture 证据。
-- 查询窗口外 PlanService 只做语义校验并允许保存 unresolved_future；窗口内若拥有当前响应，确认硬排除的候选不能新增。未拿到响应时可保存语义意图但必须标示未解析，不能返回 can_book=true。人工临时可用性视图可复用按 user、Credential、场馆、日期隔离的语义缓存，初始 TTL 为 1000ms（与本地成功日志实测最短约 668ms 的 bookingByTime 请求间隔相比取较保守值）；不缓存 Token、个人字段或可重放请求。
-- Worker 在 T-2 00:00 准备阶段调用 bookingByTime，校验响应结构和目标日期范围，解析用户明确候选并追加 write_eligible=false 的 ResolutionSnapshot，然后等待预约开放。它不能以准备快照发送 createBooking。
-- 到 scheduled_for_utc/已验证 bookingstarttime，Worker 必须再次绕过缓存调用 bookingByTime，重新检查 BookingWindowPolicy、响应开放字段、conflictList、nodeList、timeList 和每个 SlotKey，再按冻结 priority 尝试。候选变成硬排除时记录并尝试下一个已授权候选；未知状态安全重试查询，仍未知转 needs_attention。目标日过期或场次已开始时确定失败。
-- 每个候选的开放时执行链为最新 bookingByTime -> getPayPrice -> createBookingBytime。getPayPrice 使用这次响应中的 nodeList/timeList 和新生成 coordinatesList；不插入任意等待，不使用准备阶段价格或坐标。报价失败只有在已登记为候选局部且无副作用时才可尝试下一候选；用户/每日额度类失败是终止性业务错误。
-- UpstreamRequestGate 持久化于 SQLite，所有 API、Worker 和 Credential 共用。根据本地成功日志，bookingByTime 曾有业务成功的 HTTP 200 调用，观测到的最短同端点启动间隔约 668ms，未见 HTTP 429 或 Retry-After；因此初始全局最小间隔设为可配置的 1000ms，而不是把观测值当上游保证。后续只能依据脱敏成功日志、上游限制或 Retry-After 调整。bookingByTime 同时最多一个在途请求；查询缓存初始 TTL 同为 1000ms。最终执行查询始终绕过缓存。
-- gate 按上游端点共享，不因换 Token、Credential、Agent 或 Worker 获得独立额度；429/503、Retry-After 或明确上游退避信号设置跨 Credential 的冷却。开放时任务按 SQLite 队列与 gate 顺序执行；不并行扇出、不以高频重试追赶。getPayPrice 与 createBookingBytime 之间不加人为固定延迟，但必须通过同一全局 gate、端点在途锁和服务级退避。
-- 查询类超时按有限次数（初始最多 3 次）指数退避并服从 Retry-After；任何副作用超时/断连先对账，不能重放。Agent 不拥有独立 HTTP 客户端。
+CourtResolver 根据 ReservationIntent 中用户选择的场地语义偏好，检查**本次** `nodeList[].sitename` 的精确规范化匹配，并取该当前数组项的 `nodeid` 和下标；名称规范化规则由版本化 Adapter 固定，只允许明确的空白/Unicode 规范化或显式别名，不做模糊匹配、相似度推断或跨日期复用旧 ID。相同语义标签匹配多个当前场地时 fail closed。若用户允许同场馆任意可用场地，执行器可按本次 `nodeList` 逐项扩展，并仍受用户范围和上游 `maxAppointmentNodeNum` 限制。
+
+TimeResolver 只按当前 `timeList[].time` 精确匹配用户授权的开始时间。一个时间段必须由当前列表中的连续槽组成，且满足本次响应的 `mintimeselect`、`maxtimeselect`、`stepnumber` 与时长规则。解析完成后才生成 `${courtIndex}-${timeIndex}`。上游坐标只存在于本次 FinalExecutionQueue 和调用栈，不写入 ReservationIntent、PlanRevision、PreparedQueueRevision 或 AvailabilityCache。
+
+已确认的活动、体育课、体训队、艺术团、项目培训、工会活动、其他活动、已预订和不可预约状态均为硬排除项。活动代码按第 8 节官方前端映射处理；未知代码、重复 ID/时间、响应类型异常或无法唯一映射均 fail closed。不能把未知状态解释为可用。
+
+目标日 T-2 00:00 以前，PlanService 只保存语义 Intent 并显示 `unresolved_future`；不会用 UI 场地目录、旧价格或历史 availability 做验证。00:00 后用户看到的查询数据仍是当时观察值；PreparedQueueRevision 明确标为准备信息，历史准备数据不能作为未来或正式开放时下单证据。正式开放查询始终绕过缓存。
+
+`UpstreamRequestGate` 以 SQLite 持久化全局端点间隔、在途锁和 Retry-After/backoff，跨 API、Worker、Agent、所有用户和 Token 生效。已观察的成功运行最短同端点间隔可作为门禁配置证据，但门禁最小间隔不是 PreparationRefreshPolicy 的刷新间隔。所有刷新遵守服务级低频策略；收到 429/503 或 Retry-After 时跨 Credential 退避。查询超时可有限重试；副作用未知时必须对账而非重试。
 
 ### 5.6 awaiting_human、恢复与取消
 
-暂停时保存明确的人工作用原因、关联 JobStep/ExternalOrder、提示内容和可执行的下一步。前端不能只显示笼统的“暂停”。
+`awaiting_human` 必须保存具体原因、关联 JobStep/订单、提示和允许的用户动作。Token 即将过期、Token 验证失败、资料缺失、用户验证码操作、精确 `at` 时间与真实开放变化不兼容、报价超出 Intent 价格上限或自动支付关闭，均显示明确原因。
 
-- 图片验证等需要用户操作的情况进入 awaiting_human。用户按上游允许的正规方式完成后，点击恢复；恢复 API 只记录人工作用，不接收自动破解材料或未经定义的上游凭证。
-- 价格变化时，显示服务器重新查询到的金额、币种、原报价、支付上限和关联订单，要求用户对这个确定金额进行一次性确认。
-- 普通恢复操作只表示用户已完成页面提示或要求继续核对，不构成付款授权；价格变化或自动支付关闭时，必须另行产生经过校验的一次性 JobApproval。
-- 用户恢复后，Worker 先重新检查租约、Credential 状态、订单状态、当前价格和支付上限，再继续；不得从暂停前的网络调用位置盲目续跑。
-- 上游订单或支付状态不确定时，普通“确认”不能代替对账。必须先有权威查询结果；无法取得时进入 needs_attention，不得重复创建预约单或支付单。
-- POST /api/jobs/{id}/cancel 对 queued 任务可直接标为本地 cancelled；对 running/awaiting_human 任务只产生 cancel_requested。Worker 停止后续副作用并查询已产生的订单。
-- cancelled 仅表示本地不再继续执行。只有上游明确支持且用户明确发起单独订单取消流程时，才记录上游取消结果；不得声称取消 Job 已取消订单、退款或支付。
+恢复请求只记录用户完成人工作用或要求继续核对，不代替支付授权。Worker 恢复后重新取得锁并检查 Credential 最新 Token、指纹、资料、Job 快照和订单状态；不得从旧步骤盲目续跑。订单/支付状态未知时继续 `needs_attention`，不发起重复副作用。
+
+用户取消 queued Job 可置本地 `cancelled`；取消 running 或存在外部不确定操作的 Job 先写 `cancel_requested`，Worker 在安全边界停止后续副作用并核对已创建订单。`cancelled` 只说明本地执行器停止，不表示上游订单取消或退款。
 
 ### 5.7 支付与自动支付门禁
 
-自动支付是 Credential 级人工作用设置，默认关闭；计划和 Agent 均不能开启或修改它。支付上限以最小货币单位整数存储，禁止使用浮点数。
+自动支付仍由用户在 Credential 设置中单独开启，默认关闭；Intent 或 Agent 不能开启。支付前比较当前 getPayPrice/订单实际金额、ReservationIntent 价格上限、Job 冻结授权、当前 Credential 上限和有效币种，取最严格限制。金额变化、字段缺失、币种未知、订单未确认或状态不确定时暂停。
 
-- 每次 createBookingBytime 前将最新 getPayPrice 的 txamt 原始字符串及规范化金额写入 JobStep；实际金额来自 createBookingBytime 成功结果或权威订单查询。当前 req 未显示上游返回 currency 字段，因此币种必须来自单独验证过的部署级 BOOKING_CURRENCY 契约配置，不能伪称为上游响应字段；未验证币种或 txamt 格式时禁止自动支付。
-- BOOKING_CURRENCY 是本应用部署配置，不是上游 JSON 字段；必须由维护者根据官方收费单位确认。配置缺失时仍可查询和准备计划，但不得自动支付或对金额作币种猜测。
-- 对实际金额、部署级币种、当前 Credential 支付策略和上游订单号 orderno 做完整校验。金额以最小货币单位整数比较；txamt 缺失、格式异常、币种未配置、超过有效上限、价格相较本次报价变化或订单状态未知时进入 awaiting_human/needs_attention。
-- 自动支付只有在 BookingJob 快照创建时记录为允许、当前 Credential 仍启用自动支付、订单状态已确认、金额不超过任务快照上限和当前 Credential 上限，并且价格未发生需用户确认的变化时才可执行。
-- 人工确认价格变化时，只能通过服务端记录的一次性 JobApproval 授权指定的已知订单与精确金额；审批记录不可重复使用，且仍不得超过当前 Credential 支付上限。调整支付上限必须由用户在 Credential 设置中单独完成，Agent 不可代为调整。
-- 调高 Credential 支付上限不会扩大已有任务快照中的自动支付授权。若已知订单金额高于快照上限但不高于用户后来设置的当前上限，只能经一次性人工 JobApproval 继续，不得转为自动支付。
-- 自动支付关闭时，Worker 不得支付；用户如需针对某个已创建订单进行一次性支付，必须通过单独、明确的人工作用确认，并经过相同金额和订单状态校验。
-- 支付及其他上游写操作也必须经过 BookingWindowPolicy 的当前响应 bookingstarttime 写操作门禁（当前已验证值为 07:30）；开放前的人工确认只保存为待处理授权，不得提前向上游提交。
-- 支付调用前先持久化 JobStep/ExternalOrder 状态。崩溃后必须查询订单和支付状态；支付状态不确定时禁止再次支付，转为 needs_attention。
-- 不在首版中自动支付超出用户当前支付上限的金额，不自动处理退款或不确定的付款结果。
+实际金额使用最小货币单位整数；当前 req 未显示 currency 字段时，币种只来自经过确认的部署级契约配置，不冒充上游响应字段。若 getPayPrice 返回金额超过当前 Intent 价格上限，该候选在 createBooking 前被安全跳过，可按用户授权尝试下一个候选；全部候选均超限时等待用户决定是否创建新 Intent/Job。自动支付要求 Job 快照允许、当前 Credential 仍允许、订单状态已核实、价格符合用户上限且没有需确认变化。一次性人工支付批准必须绑定同一订单、精确金额/币种、操作者和过期时间，只能用一次。调高 Credential 上限不扩大旧 Job 快照授权。
+
+每个预约和支付副作用发送前都重新检查 BookingWindowPolicy 和实时执行条件；准备窗口内绝不调用 createBooking、支付单创建或支付。支付状态不确定时先对账，不能再次支付。
 
 ## 6. 数据与隔离
 
 主要实体与约束：
 
-- **User**：唯一登录标识、密码哈希、角色、状态和 UTC 创建时间。
-- **Session**：服务端会话 ID 的哈希、user_id、到期时间、撤销时间、CSRF 校验材料和创建/最近使用时间。
-- **Invitation**：邀请码哈希、创建者、有效期、撤销时间、使用者和使用时间；单次使用。
-- **Credential**：user_id、标签、加密 Token、加密支付凭证（如业务确需）、启用状态、自动支付开关、支付上限与部署级币种引用、策略版本、最近验证时间和 deleted_at。
-- **CredentialExecutionLock**：credential_id、当前 job_id、lease owner/到期时间/epoch；同一 Credential 最多一条有效执行锁。
-- **CredentialPolicyRevision**：Credential 敏感执行设置的版本化记录和操作者，供 BookingJob 快照审计。
-- **CredentialBookingProfileRevision**：user_id、credential_id、revision、加密 reservationPerson/childrennum/accompanyPerson/followList、内容哈希、操作者与创建时间；只追加，供 BookingJob 固定具体上游参与人语义。普通读取只返回脱敏摘要，不给 Agent。
-- **AvailabilityCache**：user_id、credential_id、目标日期/场馆的规范化查询键、脱敏后的语义场地状态/价格、fetched_at_utc 和 expires_at_utc；初始 TTL 为 1000ms。不得持久缓存原始 HTTP 响应、Token、个人字段或作为未来任务坐标使用的数组下标；执行前查询绕过缓存。
-- **UpstreamRequestGate**：按上游服务/端点保存跨 Credential 的全局最小间隔、在途租约和 backoff_until_utc；不是用户数据，所有进程共用。
-- **IdempotencyRecord**：user_id、API 操作名、请求级 idempotency_key、规范化请求哈希、创建的 job_id 和创建时间；同一 key 对应唯一结果。
-- **UserLLMConfig**：user_id、模式（service_default/custom）、用户自定义 base URL、模型、协议、认证模式和加密 API key。自定义配置作为完整 Provider，不逐字段继承环境配置。
-- **BookingPlan**：user_id、当前 revision 指针、创建/更新时间和归档状态；不含 Credential、支付或调度字段。
-- **PlanRevision**：user_id、plan_id、版本号、来源、操作者、变更摘要、规范化计划内容和内容哈希；(plan_id, revision) 唯一且追加后不可更新/删除。
-- **BookingJob**：user_id、plan_id、固定的 plan_revision_id、credential_id、固定的 booking_profile_revision_id、不可变语义 execution_snapshot_json/哈希、upstream_contract_version、scheduled_for_utc、可变 next_action_at_utc、status、execution_phase、resolution_status、租约字段、recovery_required、创建/开始/结束时间和安全错误摘要。execution snapshot 中没有 availability 或上游数组坐标。
-- **ResolutionSnapshot**：user_id、job_id、contract version、fetched_at_utc、语义候选 SlotKey 到本次解析状态的映射、脱敏响应指纹、是否仅用于准备的 write_eligible 标记和创建时间；追加写入。准备阶段记录必须为 write_eligible=false，开放阶段重新请求，不得读取准备阶段下标执行预约。
-- **JobStep**：user_id、job_id、步骤类型和序号、状态、operation_id、重试计数、时间、脱敏结果摘要和 external_order_id；不保存完整请求/响应或明文副作用凭证。
-- **ExternalOrder**：user_id、credential_id、job_id、订单类型、上游订单标识、operation_id、状态、金额/币种、确认来源和时间；只保留恢复和展示所需字段。
-- **JobApproval**：user_id、job_id、订单 ID、动作类型、精确金额/币种、批准人、过期时间、使用时间和幂等 ID；一次性、不可改写。
-- **JobEvent**：user_id、job_id、状态变化、操作者、UTC 时间和脱敏摘要；追加写入。
+- **User / Session / Invitation**：用户、可撤销服务端 Session 和单次邀请码；会话 ID 与邀请码只存哈希，兑换原子完成。
+- **Credential**：`user_id`、标签、当前加密 Token、Token revision、`token_expires_at_utc`、到期/验证状态、`last_validated_at_utc`、`last_validation_result`、不向用户/Agent 暴露的 `upstream_account_fingerprint`、启停状态、支付策略、`deleted_at`。Credential 持久化到期状态；`will_expire_before_job` 是按 Credential+Job 计算的状态投影。不得将多个 Job 的风险混成一个全局 Credential 结论。不保存完整 JWT payload；轮换成功后当前密文替换，不把旧 Token 密文写入 Job。
+- **CredentialTokenRevision**：仅保留 Token 版本号、不可逆本地指纹、解析到期时间、验证结果/时间和操作者等审计元数据，不保留旧 Token 或 payload。
+- **CredentialExecutionLock / CredentialPolicyRevision**：每 Credential 一个持久化执行锁；策略修改保留版本和审计。
+- **CredentialBookingProfileRevision**：加密的预约参与人字段、内容哈希和版本。Job 固定用户确认的 profile revision；普通 API 只返回脱敏摘要，Agent 不可读取。
+- **BookingPlan / PlanRevision**：用户计划与不可变版本。PlanRevision 的规范化内容是 ReservationIntent，不含运行时 availability、历史场地 nodeid、坐标或价格。
+- **BookingJob**：`user_id`、`plan_id`、`plan_revision_id`、`credential_id`、Job 创建时账户指纹、固定 profile revision、不可变 Intent 快照/哈希、Adapter/Policy 版本、`execution_mode`、`scheduled_for_utc`（只用于 at/now 的用户指定时刻）、预计/已解析开放时间、可变 `next_action_at_utc`、status/phase、最新 PreparedQueueRevision 指针、lease/recovery 字段及安全错误摘要。快照不含 Token 密文或运行时场地/时间坐标。
+- **PreparationObservation**：某 Job/用户/目标日期的一次已归一化只读查询摘要，包括 contract version、fetched_at、响应指纹、目标日范围、开放时间、候选状态摘要和必要价格显示信息；不保存原始请求/响应、个人资料或可执行坐标。带 `write_eligible=false`，过期后只用于审计/展示。
+- **PreparedQueueRevision**：`user_id`、`job_id`、递增版本、源 PreparationObservation、Intent 哈希、确定性/Agent 来源、语义候选顺序与时间备选、QueuePolicyValidator 结果、创建时间。追加不可变，不含可复用的 court/time 数组下标、coordinatesList 或可作为正式成交报价的价格。
+- **FinalExecutionQueue**：每个开放执行 attempt 的响应指纹、Adapter 版本、lease epoch、解析后的当前坐标和语义候选顺序。只用于该 attempt 的审计和即时执行；租约/attempt 失效后不得重用，副作用未开始且恢复时需重新查询。
+- **AvailabilityCache / UpstreamRequestGate**：AvailabilityCache 只服务短时 UI 展示且按 user/credential/date/venue 隔离；Gate 是跨用户、跨 Token 的服务级 SQLite 状态，记录端点间隔、在途锁和退避时间。历史缓存不得被当作未来执行事实。
+- **IdempotencyRecord**：`user_id`、API 操作、请求 key、规范化哈希、Job ID 和保留时间；同一 key 与内容唯一。
+- **UserLLMConfig**：按用户隔离的完整 Provider 配置；API key 加密，不做跨 Provider 字段回退。
+- **JobStep / ExternalOrder / JobApproval / JobEvent**：副作用步骤、最小订单状态、一次性人工作用授权和追加式状态审计；不保存完整 HTTP 响应、Token、支付口令或二维码。
 
-所有用户数据表都带有 user_id。API 查询必须在 SQL 条件中绑定当前认证用户的 user_id，例如按 id AND user_id 查询，或通过带 user_id 条件的关联查询；禁止先按资源 ID 无范围读取、再只在 Python 层判断所有权。创建和更新时也要验证所有关联对象属于同一 user_id。
+所有用户数据表带 `user_id`。API SQL 必须在数据库查询中绑定当前 Session 的 `user_id`，关联对象使用复合外键/唯一约束防止跨用户引用；禁止先按资源 ID 无范围读取后再在 Python 层校验。Worker 处理任务时继续校验 Job、PlanRevision、Credential、profile、PreparedQueueRevision 和订单归属。Service 级 gate 不属于某一用户，Agent 不能读取或修改它。
 
-使用复合唯一键和复合外键约束用户归属，例如 (user_id, credential_id)、(user_id, plan_id, plan_revision_id)，防止错误关联其他用户数据。Worker 可按 BookingJob 的 user_id 读取，但仍须校验任务、revision、Credential 的归属关系。管理员跨用户操作须通过单独授权路径审计，不能复用普通用户的无范围查询。
+SQLite 每个连接启用 `PRAGMA foreign_keys=ON` 和 busy timeout；数据库用 WAL；迁移使用有序版本文件和 schema_migrations 表，失败不删除用户数据。不可变快照、Revision、JobStep、订单审批与事件采用追加式语义，并以应用校验及必要约束共同保证。
 
-SQLite 要求：
-
-- 每个连接显式执行 PRAGMA foreign_keys = ON，并配置合理的 busy timeout。
-- 数据库启用 WAL；WAL 文件及数据库备份纳入本机访问控制，不放入 Git。
-- 用有序、版本化 migration 文件和 schema_migrations 表管理演进；启动时按顺序执行，禁止将 create_all 或删除数据库作为迁移。
-- 迁移在可控事务中执行，变更前备份；迁移失败时保留原数据库并明确报错。
-- 通过唯一约束、检查约束和必要索引落实状态、金额、版本、租约和所有权规则。
-- PlanRevision、BookingJob 执行快照、JobStep、ExternalOrder、JobApproval 和 JobEvent 采用追加式审计语义；不可变性由应用服务和必要的 SQLite 约束共同保障。
-
-时间与时区：
-
-- 所有事件时间、租约、邀请码有效期和任务执行时间以 UTC Unix 毫秒整数存储；API 使用带 Z 的 RFC 3339 时间。
-- 预约日期和场次按明确的业务时区解释，首版默认 Asia/Shanghai。前端显示业务本地时间并显式显示时区；LLM 的相对日期先按该时区解析，再转换成标准日期/时间。
-- 业务时区由部署配置 BOOKING_TIMEZONE 提供，默认 Asia/Shanghai；不得按用户浏览器分别采用不同预约窗口。更换该值需经显式迁移，不能静默改变已有 revision 或 BookingJob 的时间含义。
-- 对本地预约日期的字符串和实际执行时间分别建模；不得把“星期四下午 4 点”存成不带时区的机器时间。
-- 若部署改用其他业务时区，需显式配置并在界面展示；不得依据浏览器时区静默改变已存计划。
+所有事件时间、租约和到期时间用 UTC Unix 毫秒存储，API 用 RFC 3339 UTC；预约目标日期与本地时间按冻结的 `BOOKING_TIMEZONE` 解释。更换业务时区必须显式迁移，不能改变已保存意图和 Job 的含义。
 
 ## 7. 认证与凭证保护
 
-- 初始管理员通过本地 CLI 创建，不开放默认管理员密码。
-- 普通注册必须提交管理员创建的高熵、单次、可过期邀请码。邀请码只保存哈希；兑换时在事务内原子校验、标记使用并创建用户，避免并发重复兑换。
-- 密码使用 Werkzeug 支持的 scrypt 哈希，不可逆存储。登录、邀请码兑换和密码操作做基本速率限制；限制状态可存 SQLite，不依赖 Redis。
-- 使用真正可撤销的服务端 Session：Cookie 只带高熵不透明会话标识，SQLite 只保存其哈希和会话元数据。登录时轮换会话，注销、过期、管理员禁用用户或密码更换时撤销对应会话。不得只依赖 Flask 默认客户端签名 Cookie Session 保存登录态。
-- Cookie 设置 HttpOnly、SameSite=Lax 或更严格策略；生产 HTTPS 下设 Secure。所有基于 Cookie 的状态变更 API 使用与会话绑定的 CSRF 防护，并校验 Origin/Referer。
-- Token、支付凭证和用户 LLM API key 在 SQLite 中以应用密钥加密保存；密钥只来自本地环境变量或受保护的部署密钥文件，不存 SQLite、Git 或日志。字段分离加密、只在后端短时解密。
-- CredentialBookingProfileRevision 中的 reservationPerson、childrennum、accompanyPerson/followList 以及任何身份/参与人资料同样按字段加密，仅用户本人设置与 Worker 在该 Job 执行时可读取；普通 API 只返回脱敏摘要，Agent、日志和错误响应不含明细。
-- 使用经过审查的带认证加密方案（例如 Fernet），不自制密码算法；密文标记算法/密钥版本以支持轮换。应用加密密钥与上游协议可能使用的 AES 参数完全分离。
-- Credential 删除采用软删除：立刻从列表隐藏并禁止新任务使用；未完成任务进入安全取消/核对流程。对仍有未决 JobStep 或 ExternalOrder 的 Credential 保留加密密文，仅供恢复核对，禁止创建新的副作用；无未决引用后可清除密文并保留不含秘密的审计墓碑。软删除不等于撤销上游 Token，用户须在上游单独撤销。
-- 邀请码创建、Credential 策略修改、用户禁用和会话撤销均记录操作者与 UTC 时间。
+- 初始管理员通过本地 CLI 创建；普通注册必须使用管理员创建的高熵、单次、可过期邀请码。密码用 scrypt 哈希；登录与兑换做基于 SQLite 的速率限制。
+- 使用真正可撤销的服务端 Session：Cookie 仅含高熵不透明 ID，SQLite 保存其哈希和用户、到期、撤销、CSRF 元数据。登录轮换 Session；注销、过期、管理员禁用用户或密码变更撤销 Session。不能仅依赖 Flask 默认客户端 Cookie Session。
+- Cookie 设置 HttpOnly、SameSite=Lax 或更严格策略；生产 HTTPS 下 Secure。基于 Cookie 的修改请求使用会话绑定 CSRF，并校验 Origin/Referer。
+- Token、支付凭证、Credential profile 与 LLM API key 以应用密钥加密存储；密钥来自受保护环境配置/密钥文件，绝不进 SQLite、Git、日志或 LLM。只在后端短时解密。
+- Credential profile 中的 reservationPerson、childrennum、accompanyPerson/followList 等字段只允许用户本人维护和 Worker 执行时读取；不进入 Agent、普通 API、日志或错误响应。
+- 使用经过审查的认证加密方案和密钥版本，不自制算法。上游 AES 参数与本应用密文密钥完全分离。
+- Credential 软删除后立刻从列表隐藏并禁止新任务；有未知 JobStep/ExternalOrder 时保留恢复所需的当前密文并禁止新副作用，无未决引用后可清除密文并保留无秘密审计墓碑。软删除不等于在上游撤销 Token。
 
-LLM Provider URL 的 SSRF 防护：
+### 7.1 Token 到期元数据与验证
 
-- 只允许明确验证过的 HTTP(S) 根 URL；生产中的远程 Provider 必须使用 HTTPS。HTTP 仅可用于开发环境中管理员精确允许的 loopback Host/Port。拒绝 URL 用户名/密码、查询串、fragment、危险端口、非预期 scheme 和绕过校验的重定向。
-- 对域名解析全部 A/AAAA 结果，拒绝解析到 loopback、link-local、私有、保留、多播、云元数据和 IPv4-mapped IPv6 等地址；禁止混合返回公网与内网地址。
-- DNS 校验必须防止 DNS rebinding：请求连接要绑定到已校验地址，或通过受控出站代理/防火墙强制同等目标限制；不能只在保存配置时解析一次。TLS 证书和 SNI 仍按原始主机名校验。
-- 禁止自动跟随重定向，或在每一跳重新完整执行 URL、DNS、地址和端口校验；不允许把 API key 转发到未校验的重定向目标。
-- 只允许管理员明确配置的本地开发 Host/Port 和精确可信 tailnet Host/Port 作为私有地址例外。例外不能是任意网段；生产不允许用户自定义 localhost。tailnet 访问例外也不得省略认证、超时和响应大小限制。
-- 配置测试与每次模型请求均执行校验；设置连接超时、读取超时、最大响应体和允许的协议路径。不能接受用户提供完整请求 URL 或任意代理地址。
+本地 req 中的上游 Token 观察为 JWT 且有 `exp` 声明。CredentialTokenService 仅在 Token 新增/替换时解析必要的 `exp` 并转换成 `token_expires_at_utc`；本地解析不验证签名，也不代表 Token 真正有效。不得保存或展示完整 JWT payload、payload 副本或非必要 claim。畸形/无 `exp` 的 Token 将到期状态设为 `unknown`，仍需只读验证。
 
-日志采用字段白名单和统一脱敏器。禁止记录 Cookie、Authorization、Token、支付凭证、API key、完整 URL 查询参数、二维码、手机号、身份标识、原始 prompt/完整响应或原始订单详情。异常信息和上游业务摘要先过滤再写日志；安全审计日志仅记录不含秘密的主体、动作、资源 ID 和结果。需要诊断时使用脱敏 fixture，不能把 req 原始抓包放入日志或仓库。
+Credential 的 `token_expiry_status` 与 Job 关联风险显示以下状态：
+
+- `valid`：最近一次安全只读验证成功且预计过期时间不在提醒阈值内。
+- `expiring_soon`：预计在服务端配置的提醒窗口内到期；提醒窗口为服务配置，默认 7 天。
+- `will_expire_before_job`：对某个排队 Job 而言，`token_expires_at_utc` 早于该 Job 的 T-2 preflight 或实际执行时刻；这是 Credential+Job 关联风险，不能误作所有 Job 共用的 Token 固有状态。
+- `expired`：本地 `exp` 已到或过去；立即禁止上游预约/报价/支付写操作，先要求用户更新并验证。
+- `invalid`：安全只读验证明确返回凭证无效/未授权；禁止该 Credential 的所有上游业务操作，直到重新验证成功。
+- `unknown`：无可解析 `exp`，或当前只读验证状态不足以确认有效性。产生副作用前必须完成并通过最新的安全只读验证；如果验证成功但 `exp` 仍不可解析，继续显示到期未知并提示用户，但可按 T-2 preflight 和其他门禁结果判断是否执行。
+
+`last_validated_at_utc` 只记最近一次成功的只读验证时刻；`last_validation_result` 使用白名单状态码和脱敏摘要，不保存完整响应。可在新增/替换 Token、用户主动点击验证、以及 T-2 `credential_preflight` 时验证。只读验证必须来自 req 已确认的安全端点/流程；不可用预约写接口做 Token 探测。
+
+### 7.2 Token 替换、账户连续性与 Job preflight
+
+新 Token 先作为待验证输入在内存中处理：解析 exp、执行安全只读验证并从经过白名单的稳定上游账户标识生成服务端 HMAC 指纹。原始标识只在内存中用于计算，指纹不得展示给用户或 Agent。首次验证成功才建立 Credential 指纹。
+
+替换已有 Token 时，后端必须确认新 Token 的账户指纹与 Credential 既有指纹相同，验证成功后才原子替换当前加密密文、增加 Token revision、更新 expiry/validation 元数据。若指纹不同，拒绝覆盖现 Credential，提示用户创建新的 Credential；若上游不能提供足以确认同一账户的身份字段，连续性为 unknown，不能自动替换。旧 Token 密文不复制到 BookingJob，也不因创建 Job 而冻结。
+
+BookingJob 固定 `credential_id`、用户授权和账户指纹，不固定 Token 密文。Worker 每次请求前使用 Credential 最新 Token，并确认 Token 最近只读验证成功、账户指纹仍匹配、Credential 未停用/软删除。T-2 preflight 同时检查 profile revision、必要字段、Token 状态和账号连续性；失败则在正式开放前设置 `awaiting_human` 或 `needs_attention`，不执行后续预约。若预计 Token 会在准备/执行前到期，Job 创建时允许保留计划，但前端必须突出风险并提示更新。
+
+### 7.3 到期提醒与隐私
+
+用户登录后的主要页面显示只属于该用户的高优先级汇总提醒，列出 Credential 标签、预计过期/风险时间、关联 Job 和可操作的验证/替换入口。Token 已过期、验证失败或即将在 Job 前到期时使用醒目提示；不能显示 JWT、完整 payload、账户指纹或其他用户数据。提醒可暂时收起，但风险继续显示在 Credential 和 Job 状态中。
+
+### 7.4 LLM Provider SSRF 与日志
+
+LLM Provider 必须作为完整配置使用。custom base URL 与 custom API key 同属一个 Provider，不得混入服务级密钥。只允许受校验的 HTTP(S) 根 URL；生产远程 Provider 使用 HTTPS。拒绝 URL 用户名/密码、查询串、fragment、危险端口、非预期 scheme 和绕过校验的重定向。解析所有 A/AAAA 结果并拒绝 loopback、私有、link-local、保留、多播、云元数据、IPv4-mapped IPv6 等地址；不得接受公网与内网混合结果。防 DNS rebinding：每次请求都校验 DNS，并将连接绑定到已校验地址或通过等价受控出站策略限制目标；TLS 证书与 SNI 仍按原始主机名校验。禁止自动跟随重定向，或每一跳完整重新校验 URL/DNS/地址/端口；不能把 API key 转发到未经校验的目标。开发环境的 loopback 和 tailnet 私有例外仅限管理员配置的精确 Host/Port，不接受任意私有网段或用户自定义 localhost。Provider 保存与每次模型请求均须校验，并设置连接/读取超时、响应体大小限制和允许的协议路径。
+
+统一日志采用字段白名单。禁止记录 Cookie、Authorization、JWT、Token、账户指纹、支付凭证、LLM key、完整 URL 查询参数、二维码、电话/身份标识、原始 prompt/响应或原始订单详情。诊断只使用人工合成 fixture 和脱敏摘要。
 
 ## 8. 上游接口与 req 抓包观察
 
-本节是版本化上游契约的当前事实来源。契约依据本机 req 抓包解密后的结构、同一来源中的官方前端脚本，以及脱敏汇总的本地成功日志。Python 代码、旧 README 和旧假设只能辅助理解；有冲突时更新 Adapter 与本规格，不得要求抓包去适配旧实现。当前 Adapter 标识为 bdtyg-court-v1。原始 req、解密后的真实字段值、Token、用户身份字段、支付口令和真实订单值均不进入 Git、fixture、日志、Agent 上下文或普通 API。
+本节以当前项目本地 `req/` 抓包和其中官方前端代码作为上游协议最高事实来源，辅以脱敏成功运行日志；旧 Python 实现、README、注释和历史规格不能覆盖这些证据。冲突时修改规格与 Adapter，不反向解释抓包。当前 Adapter 标识为 bdtyg-court-v1。不同目标日期的列表、价格和开放时间都是动态业务数据。原始 req、完整 JWT payload、解密值、个人字段和真实订单值均不进入 Git、fixture、日志、Agent 上下文或普通 API。
 
 ### 8.1 HTTP 封装与可见字段
 
-- 上游接口使用 POST JSON；认证头为 token。外层请求体为 item 字段，内容是内层 JSON UTF-8 文本按本机环境密钥执行 AES-CBC/PKCS7 后的十六进制字符串。密钥、IV 和 Token 只由本机 env 提供，Adapter 运行时短暂读取；不打印、不写日志、不进入快照。解密只用于本地契约分析，不保存解密产物。
+- 上游接口使用 POST JSON；认证头为 token。Token 当前观察为带 `exp` 声明的 JWT；本地仅解析 `exp` 形成到期提醒，不保存/展示 payload，不以未验签解析结果当作有效性证明。Token 的真实有效性必须通过安全只读验证。外层请求体为 item 字段，内容是内层 JSON UTF-8 文本按本机环境密钥执行 AES-CBC/PKCS7 后的十六进制字符串。密钥、IV 和 Token 只由本机 env 提供，Adapter 运行时短暂读取；不打印、不写日志、不进入快照。解密只用于本地契约分析，不保存解密产物。
 - 所有响应均需解析 HTTP 状态及 JSON。标准外层响应为 success、message、resultData。HTTP 200 不代表业务成功；Adapter 必须按 endpoint-specific 的 success/message/resultData 组合分类。
 
 ### 8.2 bookingByTime 与场地/时间坐标
 
 - 请求路径为 /service/appointment/appointment/phone/bookingByTime；内层字段为 nodeid（上游场馆 nodeid）和 selectdate（目标日期）。
 - 已观察的 bookingByTime 成功组合为 success=true、message=CORE10008，resultData 字段为 timeList、mintimeselect、conflictList、maxAppointmentNodeNum、bookingstartdate、bookingenddate、start、end、isNew、bookingstarttime、nodeList、priceList、maxtimeselect、bookingendtime、stepnumber。字段缺失、类型或结构发生未登记变化时返回 contract_drift，不猜测字段。
-- nodeList 元素为 sitename 与 nodeid。顶层请求 nodeid 是场馆标识；nodeList[].nodeid 是该场馆内单个场地标识。PlanRevision 必须同时保存前者与后者的语义身份及可选名称快照。
+- nodeList 元素为 sitename 与 nodeid。顶层请求 nodeid 是用户所选场馆查询范围；nodeList[].nodeid 是当前响应中单个场地的身份。ReservationIntent 可固定用户选择的场馆查询范围，但不能固定场地 nodeid。每个目标日期都必须重新读取 nodeList，并以当前 `sitename` 的版本化精确语义匹配解析场地偏好；目录和旧响应只用于 UI/审计，不是执行事实。
 - timeList 元素为 time 与 status；time 是当前响应中的可预约时间槽标记。官方前端直接把 timeList 传给报价和创建接口，但未用 status 判定网格空闲；status 当前只按原字符串保留，值 0/1 不能在后端被自行解释为可用/不可用。
 - stepnumber 是官方前端用于网格行数的值，须与当前 timeList 结构按已验证规则一致。mintimeselect、maxtimeselect 是一次选择允许的最少/最多时间槽数；maxAppointmentNodeNum 是一次预约允许覆盖的不同场地数上限。数值类型可能以字符串返回，Adapter 需严格解析，缺失、非数值或越界时 fail closed。
 - conflictList 元素使用 courtIndex-timeIndex[-type]。前两段是 nodeList 场地下标、timeList 时间下标；无第三段时官方前端标为已预订。带类型时官方前端将其映射到 courseN，并阻止选择：
@@ -339,9 +307,9 @@ LLM Provider URL 的 SSRF 防护：
   - 7：官方 UI 的 cannotSelect/不可预订状态。
   - 0 在前端有 qita-grid 样式但抓包代码未提供清晰图例；作为未分类硬性排除处理，直到新契约证据确认。
   未知类型、非整数下标、越界坐标、段数不是 2 或 3 都是 contract_drift。Agent 不接收这些原始代码。
-- booking 坐标字符串固定为“场地下标-时间下标”，即 courtIndex-timeIndex。两小时预约由 CandidateResolver 从当前 timeList 找到精确起始时间与连续后续时间槽，为同一场地生成两条坐标；禁止跨缺口、按近似时间匹配或复用旧坐标。
+- booking 坐标字符串固定为“场地下标-时间下标”，即 courtIndex-timeIndex。该下标只对生成它的那一次响应有效。两小时预约由 CandidateResolver 从当前 timeList 找到精确起始时间与连续后续时间槽，为同一场地生成两条坐标；禁止跨缺口、按近似时间匹配或复用旧坐标。最终开放时重新查询后重新生成坐标。
 - priceList 元素为 price、x、y。官方前端按网格行/列查询价格，其中 x=timeIndex、y=courtIndex；这与 booking 坐标 courtIndex-timeIndex 顺序相反。priceList 只用于当前可用性展示，不是支付金额的最终来源。
-- bookingstartdate/bookingenddate 是当前响应声明的目标日期范围；bookingstarttime/bookingendtime 是上游给出的正式预约开放/截止时刻。当前样本观察到 bookingstarttime=07:30、bookingendtime=23:00。start/end 与 isNew 原样保留；start/end 不替代 booking 时间。官方客户端根据 isNew 和目标日是否等于 bookingenddate 对 UI 时间门禁作条件判断，但服务端执行门禁不得由未验证的 isNew 组合放宽。当前三日策略或时刻与上游值冲突时暂停为 contract_drift。
+- bookingstartdate/bookingenddate 与 bookingstarttime/bookingendtime 是本次响应声明的范围和窗口。当前样本中曾观察到 bookingstarttime=07:30、bookingendtime=23:00；其他目标日期可以返回不同的合法时刻/范围。只要字段结构、类型和已验证语义保持一致，值变化时 BookingWindowPolicy 更新 official_open 调度，不判为 contract_drift。start/end 与 isNew 原样保留；start/end 不替代 booking 时间。服务端不得由未验证的 isNew 组合放宽门禁。
 
 ### 8.3 报价、创建与业务结果
 
@@ -353,81 +321,67 @@ LLM Provider URL 的 SSRF 防护：
 - openPlatFormPayOrder 当前抓包的内层字段含 txamt、orderno、payway、password。password 是支付秘密，只可按原有支付安全策略短时解密使用；任何 snapshot、JobStep、ExternalOrder、日志、Agent 和响应均不得保存或返回该值。已观察支付响应为 success=true/message=“支付成功”，但支付结果仍须通过 payOrderForPhone/payOrderDetails 权威核对，HTTP 状态或单条提交响应都不代表最终已支付。
 - payOrderForPhone 的请求字段为 pageNumber、pageSize、ordertype；payOrderDetails 的请求字段为 bookingno、id。订单核对只投影匹配所需的 orderno、bookingno/id、status、paytime、金额等字段；完整结果含身份、联系方式、二维码和其他个人字段，禁止向 UI/Agent/日志透传。图片验证接口/图片资源说明流程存在人工验证；不破解、不模拟、不绕过。
 
-### 8.4 UpstreamContractAdapter 与 fixture
+### 8.4 UpstreamContractAdapter、准备刷新与 fixture
 
-- Adapter 将外层加密传输、endpoint-specific Schema、业务结果分类、冲突码映射与 CandidateResolver 隔离；版本升级时保留旧版本解释已创建任务的快照和审计数据。
-- 在本机成功日志中，bookingByTime 有成功业务响应记录；观测到同端点请求最短启动间隔约 668ms，未发现 429 或 Retry-After。该观测不能证明上游承诺的最大频率，因此初始全局最小间隔取较保守的 1000ms 并保持服务端可配置；收到 Retry-After/429 后统一提高冷却时间。
-- 契约 fixture 必须人工合成并脱敏，包含 bookingByTime 的完整字段形状、数组顺序变化、冲突类型 1-7/未知值、时间缺口、getPayPrice 成功与失败、createBooking 成功及每日额度终止失败、HTTP 200 但业务失败、响应结构漂移等情形。使用虚构 nodeid、姓名和订单号；不得复制原始 item 密文、Token、电话、身份标识、支付口令、二维码、真实预约时间/价格或可重放值。
-- 任何真实响应只允许以脱敏、字段白名单摘要用于内存分析；不将原始 req 文件、解密结果或运行日志加入 Git。真实预约和支付不作为自动化测试对象。
-
-userAddress/getUserInfo 响应含身份标识、电话和用户名字段；payOrderDetails 含订单标识、联系方式、二维码及支付详情字段。服务端只投影执行需要的字段，不将完整响应传给 Agent、前端或普通日志。ExternalOrder 只存订单核对所需最小字段。
-
-执行器不能依赖用户保存计划时的旧 availability。每次正式 createBookingBytime 前都重新查询并解析；查询类接口超时或断连可按全局退避策略有限重试。createBookingBytime、创建支付单、支付等副作用接口超时、断连或无法确定业务结果时属于结果未知，必须先对账，不能直接重试或切换下一个候选。
-
-验证相关步骤若要求用户操作，Worker 暂停为 awaiting_human 并提供清晰状态；不识别、不求解、不模拟用户操作、不绕过验证码或频率限制。实施时如需要契约样本，应先生成不含凭证、个人数据、二维码和可重放值的脱敏 fixture。真实预约和支付不作为自动化验证对象。
+- Adapter 将外层加密传输、endpoint-specific Schema、业务结果分类、冲突码映射与当前响应的 CandidateResolver 隔离。版本升级保留旧版本用于审计，不允许旧任务把历史运行数据当作新日期执行依据。
+- bookingByTime 的 `nodeList`、`timeList`、`conflictList`、`priceList`、开放日期/时刻和价格均按每次目标日期查询重新取得。PreparationObservation 只保存脱敏归一化摘要；正式开放 FinalExecutionQueue 必须引用当次绕过缓存的响应。
+- 成功日志曾观测到约 668ms 的最短同端点启动间隔，未发现 429/Retry-After；该观测只支持 UpstreamRequestGate 的最低端点间隔设置，不代表上游承诺，也不是准备轮询间隔。准备刷新间隔由服务级 PreparationRefreshPolicy 配置并依据成功日志/上游响应调整；必须是低频、跨 Credential 共用 gate，受 429/Retry-After 冷却约束，用户和 Agent 无权缩短。
+- 脱敏 fixture 必须人工合成。覆盖同一契约下不同目标日期的 node/time/conflict/price 顺序变化、合法 bookingstarttime 变化、可用性和价格变化、场地名称无法唯一匹配、时间缺口、冲突类型 1-7/未知值、报价业务结果、创建成功/失败及结构漂移。合法业务值变化应刷新运行时解析而非触发 contract_drift。
+- fixture 不复制真实 nodeid、用户日期、价格、姓名、订单号、JWT、item 密文、Token、支付口令、二维码或可重放值。只允许字段白名单、类型和结构进入测试素材。
+- 每个 fixture 只证明其覆盖的契约边界。未知类型、字段类型/结构变化、业务 message 未登记等 fail closed；不得通过 LLM 猜测并继续执行。真实预约和支付不作为自动化测试对象。
 
 ## 9. API 草案
 
-认证和邀请：
+认证与邀请：
 
-- POST /api/admin/invitations：管理员创建单次邀请码及有效期；只返回一次性邀请码。
-- GET /api/admin/invitations、DELETE /api/admin/invitations/{id}：管理员查询不含邀请码明文的状态、撤销未使用邀请码。
-- POST /api/auth/register：使用邀请码注册。兑换和用户创建原子完成；可选择返回新建会话。
-- POST /api/auth/login、GET /api/auth/session、POST /api/auth/logout：服务端会话登录、状态读取和撤销注销。
+- `POST /api/admin/invitations` 创建单次邀请码；`GET/DELETE` 只读取状态或撤销未使用邀请码。
+- `POST /api/auth/register` 原子兑换邀请码并创建账户；`POST /api/auth/login`、`GET /api/auth/session`、`POST /api/auth/logout` 管理服务端 Session。
 
 Credential 与 LLM：
 
-- GET/POST /api/credentials：读取当前用户 Credential 的脱敏摘要或添加一个 Credential。
-- PATCH/DELETE /api/credentials/{id}：仅由用户修改非秘密标签/启用状态/自动支付上限，或发起软删除。支付设置修改需明确确认并递增策略版本；Agent 没有调用此 API 的工具。
-- GET/PUT /api/credentials/{id}/booking-profile：由 Credential 所属用户查看脱敏参与人摘要或创建新的 CredentialBookingProfileRevision；明文身份/参与人资料不返回给 Agent 或普通读接口。
-- POST /api/credentials/{id}/validate：用户主动验证当前 Credential；响应不包含 Token。
-- GET/PUT/DELETE /api/llm/settings：读取模式和脱敏配置、设置完整的用户自定义 Provider、或改用服务级默认。读取时只返回安全的 base URL、模型、协议、认证类型和 key 是否已配置。
-- POST /api/llm/test：用户主动测试当前完整 Provider；记录脱敏结果，不返回或记录 key。
+- `GET/POST /api/credentials` 查询脱敏状态或创建 Credential；`PATCH/DELETE /api/credentials/{id}` 修改标签/启停/支付策略或软删除。
+- `POST /api/credentials/{id}/token` 添加 Token；`POST /api/credentials/{id}/rotate-token` 验证并轮换同一账户 Token。请求体只在 TLS/服务端短时处理 Token；响应只含状态、预计过期时间和脱敏验证结果。
+- `POST /api/credentials/{id}/validate` 只读验证当前 Token；`GET/PUT /api/credentials/{id}/booking-profile` 获取脱敏摘要或追加 profile revision。
+- `GET/PUT/DELETE /api/llm/settings` 读写当前用户完整 Provider；`POST /api/llm/test` 仅由用户主动调用，并执行 SSRF 校验。
 
-场地窗口与 availability：
+预约窗口与可用性：
 
-- GET /api/booking-window?target_date=YYYY-MM-DD：返回服务端业务时区、当前业务日期、默认目标日、当前三日查询窗口、任意目标日 T-2 的 query_open_at/预约开放基准、当前响应验证状态及 can_query/can_book_by_time。前端不得自行重算。
-- GET /api/availability?credential_id=...&target_date=YYYY-MM-DD：目标日未进入查询窗口时返回 query_not_open/unresolved_future，不调用上游；已进入窗口后由 AvailabilityService 返回语义候选、硬排除原因及窗口状态。响应包含 fetched_at_utc、occupancy_status、window_status、can_select_plan、can_book 和 reason_code，不返回 coordinatesList 或原始 conflictList。省略 target_date 时只查当前三日窗口；请求按全局 UpstreamRequestGate 执行。
+- `GET /api/booking-window?target_date=YYYY-MM-DD` 返回业务时区、默认目标日、三日查询窗口、T-2 查询时间、预计开放值、已由当前响应确认的开放值以及服务端 `can_query/can_book/can_pay`。开放值可随新合法响应更新。
+- `GET /api/availability?credential_id=...&target_date=...` 在 T-2 前返回 `unresolved_future` 而不调用上游；进入窗口后返回语义场地/时段状态、来源查询时刻、窗口状态和硬排除原因，不返回数组坐标或原始冲突数据。查询受全局 gate 约束。
 
 计划与 Agent：
 
-- GET/POST /api/plans、GET/PATCH /api/plans/{id}：创建、读取或追加计划版本。PATCH 必须携带 base_version 或 If-Match；冲突返回 409 和当前版本摘要。
-- GET /api/plans/{id}/revisions：读取当前用户自己的历史 revision。
-- POST /api/plans/{id}/agent-edits：提交 Schema 化的计划差异，使用相同乐观锁和 PlanService；不得接受 job、支付、Credential 策略或调度字段。
-- POST /api/plans 和 POST /api/plans/{id}/agent-edits 保存时始终执行语义 Schema 校验。查询窗口前不要求 validation_credential_id，也不发上游查询；保存结果标记 unresolved_future。窗口内可选择 validation_credential_id 请求实时预览/校验；已明确硬排除的候选拒绝保存，未取得实时结果的候选不能标为可用。Agent 不能自行指定或替换 validation Credential。
+- `GET/POST /api/plans`、`GET/PATCH /api/plans/{id}` 和 `GET /api/plans/{id}/revisions` 管理 BookingPlan/ReservationIntent；更新必须携带 base_version/If-Match。
+- `POST /api/plans/{id}/agent-edits` 提交 Planning Agent 的语义差异，经用户确认、Schema、权限和 optimistic locking 后由 PlanService 保存；不接受 job、Credential、支付、Token、坐标或调度字段。
+- Preparation Agent 仅由 Worker 内部以隔离工具面调用；没有可由浏览器直接调用的创建队列接口。
 
 任务与订单：
 
-- POST /api/jobs：仅用户明确确认后创建，必须携带请求头 Idempotency-Key。请求体含 plan_id、可选 plan_revision_id、credential_id、booking_profile_revision_id 和 execution_mode（official_open、at、now）；at 模式需传 scheduled_for_utc。official_open 模式可在目标日查询窗口前任意天创建；服务端按 BookingWindowPolicy 计算 earliest_valid_booking_at 写入 scheduled_for_utc，初始 next_action_at_utc=max(now_utc,T-2 00:00)，返回 queued/waiting_query_window/unresolved_future。now 仅在当前 can_book_by_time=true 时接受。服务端事务内校验 profile 与用户/Credential 归属并固定 profile revision、快照和 PlanRevision；客户端不能传坐标、执行快照、个人资料明文、自动支付授权、任意上游请求或 source=agent。
-- 同一用户对同一创建操作重放相同 Idempotency-Key 和相同规范化请求时，返回原 BookingJob，不再创建任务；key 相同但请求内容不同返回 409。并发重复请求也只能创建一个 Job。IdempotencyRecord 至少保留到其 BookingJob 及重试窗口结束，不能用短 TTL 让延迟网络重试创建重复任务。
-- GET /api/jobs、GET /api/jobs/{id}：查询当前用户自己的任务、status、phase、next_action_at_utc、resolution_status、快照摘要和 JobStep 状态；只返回语义候选及原因，不返回上游坐标。
-- POST /api/jobs/{id}/cancel：发出本地取消请求；运行中只产生 cancel_requested，响应明确说明上游订单状态需单独核对。
-- POST /api/jobs/{id}/resume：用户确认验证已完成或请求恢复；Worker 重新获取锁并对账后决定是否继续，不直接跳过校验。
-- POST /api/jobs/{id}/payment-approvals：对服务器显示且已核实的一个订单和精确金额创建一次性人工授权。服务端校验订单归属、金额、币种、当前支付上限和状态；模型工具不能访问。
-- GET /api/external-orders、GET /api/external-orders/{id}：只展示当前用户的最小订单状态和金额。除非上游取消接口已确认支持且另有明确授权，不提供将本地取消映射成上游取消的行为。
+- `POST /api/jobs` 仅在用户明确确认时创建，要求 `Idempotency-Key`；请求含 plan/revision、credential、profile revision、`execution_mode`（`official_open`、`at`、`now`）和支付授权。`at` 必须给精确 `scheduled_for_utc`。`official_open` 可任意提前创建，初始 `next_action_at_utc` 指向 T-2 00:00，并返回预计开放时间与 `unresolved_future`；开放预计值不冻结。
+- `GET /api/jobs`、`GET /api/jobs/{id}` 仅返回当前用户状态、phase、下一动作、Credential 到期风险、语义快照摘要和 JobStep 摘要。
+- `GET /api/jobs/{id}/preparations` 返回用户自己的 PreparedQueueRevision 历史、刷新时间、Agent 提案摘要和 validator 结果；不返回历史 coordinatesList、下标或原始响应。
+- `POST /api/jobs/{id}/cancel` 运行中先写 `cancel_requested`；`POST /api/jobs/{id}/resume` 只记录用户人工作用，恢复前重新检查 Token、订单和安全门禁。
+- `POST /api/jobs/{id}/payment-approvals` 创建绑定订单/精确金额/币种的一次性人工批准；`GET /api/external-orders` 只返回当前用户最小订单状态。
 
-除登录、注册和公开的健康检查外，所有接口均需登录并在 SQL 查询中绑定当前 user_id。管理员接口另做角色校验和审计。客户端不得提交 Token 作为上游调用参数；只传当前用户 Credential ID，由后端按 user_id 读取并短时解密。所有修改端点还要校验 CSRF 和幂等要求。
+除注册、登录及必要健康检查外，所有查询与修改必须要求应用登录并在 SQL 条件中绑定当前 `user_id`。管理员端点单独授权审计。客户端不能提交上游 Token、coordinatesList、原始请求、执行快照或账户指纹。所有 Cookie 修改操作校验 CSRF。
 
 ## 10. 前后端体验
 
-前端提供：
+前端应提供：
 
-- 登录和邀请码注册；无公开自助注册入口。
-- Credential 标签、启停状态、验证结果和自动支付设置；支付上限用明确币种和金额展示。
-- 计划日期选择器默认选中业务日期后天，但允许提前选择任意未来目标日并编辑语义候选。实时场地查询仍只允许当前三日窗口；窗口外显示 unresolved_future。00:00 查询开放和实际预约开放时刻由后端返回，前端不自行计算。
-- 场地结果分别显示 occupancy_status 与 window_status。查询开放后、正式 bookingstarttime 前的正常候选仍可加入计划；活动、社团和其他硬性占用显示具体原因且不可选择。用户明确选择今天/明天时，仅显示仍未过时且当前上游窗口覆盖的候选。
-- 场地网格、两小时/一小时计划队列、人工排序、删除、保存版本和冲突提示。
-- Agent 修改预览、队列差异、版本历史和冲突后重新生成提示；Agent 界面没有真实任务创建、支付策略或执行设置控制。
-- LLM Provider 设置：服务级默认/个人自定义模式切换、base URL、API key、模型和兼容协议；已保存的 key 只显示配置状态，可替换或清除。
-- BookingJob 创建表单：选择计划版本、Credential 和“预约开放时执行”或明确时间；明确时间早于目标开放或不在当前每日写窗口时拒绝，不自动更改。长期任务显示初始查询时刻 T-2 00:00、预约目标开放时刻 T-2 bookingstarttime、Policy 计算的最早有效执行时刻，以及未解析/准备/等待开放阶段。
-- 创建任务时确认 Credential 对应的预约参与人 profile revision；界面只显示必要的脱敏摘要。后续修改 profile 产生新 revision，不影响已创建任务；Agent 不读取或选择参与人明细。
-- 00:00 准备完成后展示当前解析摘要，但注明该结果不是最终预约坐标。正式开放时 Worker 重新查询并解析；界面显示最新候选状态、当前步骤和跳过原因，永不显示或要求用户编辑 courtIndex/timeIndex。
-- 统一任务列表：到期时间、状态、当前步骤、可读错误、取消/恢复操作和 awaiting_human 提示。
-- 价格待确认时明确显示已核实的订单、实际金额、币种、支付上限及一次性确认内容；未知状态不得出现可直接支付的确认按钮。
-- 上游订单摘要与本地 Job 状态分开显示；本地取消不显示为“上游订单已取消”。
-- 所有时间按业务时区展示，并在需要时标出 UTC 或时区名称。
+- 登录、邀请码注册，以及登录后只针对当前用户的高优先级 Token 风险汇总提示。
+- Credential 列表展示标签、启停状态、预计过期时间/剩余时间、`valid/expiring_soon/will_expire_before_job/expired/invalid/unknown` 风险、最近安全验证时间和结果；不显示 Token、完整 JWT payload 或账户指纹。提供新增、只读验证和同账户 Token 轮换入口。
+- 任意未来目标日的 ReservationIntent 编辑器：目标日、场馆语义范围、时间/时长、用户场地排序、是否允许同场馆备用、是否允许限定范围内时间浮动、最高可接受价格和币种。场地目录只用于帮助用户选语义偏好，界面明确标注“尚未按目标日期验证”。
+- 日期窗口和开放时间由后端返回；前端不自行计算 T-2、午夜或 bookingstarttime。目标日未进入查询窗口显示 `unresolved_future`，不能把上次查询状态或历史价格当作当前可用。
+- T-2 后的准备界面展示每次 PreparedQueueRevision 的查询时刻、数据新鲜度、候选增删/重排、硬排除原因、Preparation Agent 建议与 QueuePolicyValidator 结果。清楚标示为准备数据，绝不向用户显示可编辑/可复用的上游坐标。
+- Agent 不可用时继续展示确定性队列；越出用户授权范围的 Agent 建议标为等待用户确认，并引导用户创建新的计划版本和 Job，不静默扩大当前 Job 授权。
+- Job 创建页区分 `official_open`（跟随上游正式开放，展示预计值及“实际开放时间以 T-2 当前响应为准”）、`at`（用户精确时刻）和 `now`。预计开放时间被合法上游响应更新时，展示旧预计值/新确认值和调度变更原因。`at` 不被自动更改。
+- 正式开放执行时显示当前查询/解析/报价/创建步骤和候选跳过原因；最终队列只对应本次最新查询，UI 不暴露 court/time 下标供用户编辑。
+- 支付待确认时显示已核实订单、实际金额、币种、Intent 价格上限、Job 授权和 Credential 支付上限；不确定的状态没有可直接支付按钮。
+- 统一任务列表显示 status、phase、next action、最新准备版本、Credential 过期风险、恢复/取消操作。Job 本地取消与上游订单取消分开呈现。
+- 所有预约日期/时刻按业务时区展示，并显示该时区。
 
-本地开发阶段前后端分别启动，Vite 代理 API；上线到 Tailscale 时使用同源 HTTPS 访问。CORS 不允许任意来源，开发和生产来源分别明确配置。反向代理只信任显式配置的代理地址；不信任客户端伪造的 forwarded headers。
+本地开发前后端分别运行，Vite 代理 API。生产使用同源 HTTPS/Tailscale 私有访问；CORS 仅允许明确来源，反向代理只信任明确配置的地址。
 
 ## 11. LLM 接口配置
 
@@ -465,74 +419,64 @@ Provider 配置按一整组选择，禁止逐字段回退或混合：
 
 ## 13. Git 与实施阶段
 
-当前仓库已初始化在 main，但没有应用代码基线提交；现有应用文件仍未跟踪，且混有重复打包目录、Windows 二进制、日志和抓包文件。
+当前项目在本地 `main`，项目级 `.gitignore` 排除 `.env`、`req/`、运行日志、个人预约计划和 SQLite 数据/WAL。实施前仍需挑选唯一可维护源码、恢复或建立 Vue/Vite 源码并提交干净基线；重复打包目录、Windows 二进制、压缩包和个人数据不得进入基线。脱敏 fixture 必须人工合成。
 
-本次已新增项目级 .gitignore，明确排除 env、req/、运行日志、个人 booking_plan.json 和 SQLite 数据/WAL。实施开始前仍需挑选可维护源码并提交干净的源代码基线；Windows 可执行文件、打包压缩包和重复发布目录也不进入基线。当前 .git/info/exclude 只是本机规则，不能替代项目级忽略文件。脱敏 fixture 必须人工合成。基线提交完成后，建立一个 feature worktree（建议分支名 codex/multitenant-booking）；所有实现阶段在该 worktree 内按垂直功能分批提交，完成后本地合并回 main，不需要配置远程。
+完成干净基线后再建立功能 worktree（建议 `codex/multitenant-booking`），按以下垂直阶段实现；worktree 仅用于隔离开发，不改变应用技术路线：
 
-实施阶段：
+1. **源码和启动基线**：确定唯一后端源码、前端源码位置、Conda `test` 环境依赖、启动与本地配置。
+2. **数据库与认证**：SQLite WAL/foreign keys/migrations、用户、服务端 Session、邀请码、CSRF、所有权查询和日志脱敏。
+3. **Credential Token 生命周期**：加密 Token、JWT `exp` 元数据、只读验证、账户指纹、同账户轮换、expiry 风险与登录提醒、T-2 preflight。
+4. **语义预约计划**：ReservationIntent、PlanRevision、optimistic locking、用户场地语义偏好、明确 fallback/time-float/price ceiling、Agent 计划差异。
+5. **任务与阶段调度**：BookingJob 不可变授权快照、`official_open` 动态开放、精确 `at` 模式、请求幂等、phase/next_action、lease 和 Credential 锁。
+6. **契约与准备队列**：版本化 UpstreamContractAdapter、PreparationObservation、PreparedQueueRevision、受限 Preparation Agent、QueuePolicyValidator、多次低频 refresh policy、数组重排/值变化 fixture。
+7. **最终执行与恢复**：开放时 uncached bookingByTime、FinalExecutionQueue、当前坐标解析、JobStep/ExternalOrder、副作用未知对账、awaiting_human、取消和支付安全。
+8. **前端闭环**：预约意图、T-2 多次准备状态、Token 风险提示、official_open/at 区别、订单摘要和恢复操作。
+9. **本地安全验证**：租户隔离、Token 过期/轮换/错账户、Job immutable snapshot、队列刷新和进程恢复、最新数据重新解析、限流共享、SSRF 和脱敏 fixture；不对真实预约/支付端点自动化测试。
+10. **Tailscale 私有接入**：完成应用认证与 CSRF/CORS 后配置 Serve/ACL，仅授权 tailnet 成员可到达服务。
 
-1. **源码与启动基线**：确定唯一后端源码、恢复或建立前端源码、补充 Conda test 依赖和启动说明；确认敏感文件排除规则。
-2. **SQLite 与认证基础**：WAL、外键、migration、User、服务端 Session、邀请创建/兑换、CSRF 和所有权查询约束。
-3. **Credential 与 Provider 安全**：密文存储、软删除、策略版本和支付上限；完整 LLM Provider 模式、密钥隔离和 SSRF 防护。
-4. **统一计划**：Plan/PlanRevision、语义 BookingCandidate/内部 SlotKey、明确 fallback_policy、查询窗口外 unresolved_future、追加式修订、optimistic locking、人工编辑和 Agent 计划差异。
-5. **任务模型与队列**：BookingWindowPolicy、BookingJob 不可变语义快照、execution_phase/next_action_at_utc、waiting_query_window -> preparing -> waiting_booking_open -> running、请求级幂等；远期/立即/定时任务进入同一队列；状态机、lease 和 Credential 执行锁。
-6. **上游契约与可靠执行器**：按脱敏 req 和官方前端建立版本化 UpstreamContractAdapter/CandidateResolver；验证冲突映射、坐标顺序、getPayPrice/createBookingBytime 字段与业务失败分类；JobStep、ResolutionSnapshot、ExternalOrder、副作用恢复、bookingstarttime 最终门禁、实时 availability、证据驱动的全局节流/短缓存/退避、awaiting_human、取消/恢复和支付门禁。
-7. **前端闭环**：Credential 和 Provider 设置、计划编辑与 Agent 预览、Job 创建/调度、订单摘要与人工作用确认。
-8. **本地安全验证**：双用户隔离、邀请码竞态、计划并发更新、远期任务阶段恢复、00:00 预解析与开放时重新解析、数组顺序变化、候选缺失/活动硬排除、Worker 重启恢复、租约过期、同 Credential 锁、重放保护、LLM SSRF 边界及日志脱敏；上游只用模拟服务和人工合成的脱敏 fixture。
-9. **Tailscale 私有接入**：关闭 debug，配置 Serve/ACL，验证授权成员可访问、未授权成员不可访问且均需应用登录。
-
-每阶段先按已审阅规格编写实现计划；不把该规格本身视为已授权实施。实施中若发现上游接口无法提供可靠订单查询或任务恢复所需字段，先记录限制和安全降级方式，不盲目重试副作用。
+每个实施阶段须先有经用户审阅的实施计划；本规格不等同于实施授权。遇到上游缺少可靠对账能力时，采用 `needs_attention` 安全暂停，不盲目重放。
 
 ## 14. 验收标准
 
-- 邀请码只能兑换一次且可过期、可撤销；并发兑换最多创建一个用户。
-- 用户登录态由可撤销的服务端 Session 管理；注销后旧 Cookie 不能继续访问业务接口。
-- 用户 A 不能读取或修改用户 B 的 Credential、计划、revision、Job、订单、会话或 LLM 设置；SQL 查询本身始终绑定 user_id。
-- Credential 软删除后不可创建新任务；有未决副作用时保留恢复所需密文且禁止新副作用，无未决引用后清除密文。
-- BookingJob 固定同一用户/ Credential 的 CredentialBookingProfileRevision；之后修改参与人资料不改变已创建任务。缺少 profile 或跨用户/Credential 关联时拒绝创建/执行，个人字段不会进入 Agent、日志或普通 API。
-- Token、支付凭证和 LLM API key 在 SQLite 中不可读；日志、Agent 输入、API 错误和前端响应不含原始凭证。
-- 自定义 LLM Provider 始终使用同一用户的 base URL、key/无认证、模型和协议；用户缺失 key 不会继承服务级 key。
-- SSRF 测试覆盖 loopback、私有/链路本地、元数据地址、IPv4-mapped IPv6、混合 DNS 结果、DNS rebinding 和重定向。
-- 没有 LLM 配置时，人工预约功能仍可用；连接测试只在用户主动操作后发起。
-- 人工 UI 和 Agent 修改同一份计划，产生不可变 revision；并发修改能返回版本冲突。
-- 创建 BookingJob 时固定 plan_revision_id 和执行快照哈希；之后编辑计划不能改变已创建任务；修改时间或 revision 需新建任务。
-- Agent 无法调用创建 Job、取消/恢复 Job、修改支付策略或发起真实 createBooking/支付请求。
-- 立即与定时任务都在同一 BookingJob 表和 Worker 队列调度；不同 Credential 可在全局限制内并行，同 Credential 不并发。
-- 两个 Worker 同时领取同一任务或同 Credential 任务时，事务和持久化租约/锁只允许一个执行者。
-- 在 createBooking、支付调用前崩溃、网络断开、租约过期或 Worker 重启后，先核对 JobStep/ExternalOrder 与上游状态；状态不确定时不会重复提交。
-- 每个正式 createBookingBytime 前重新 bookingByTime 查询并解析实时 availability；00:00 准备阶段的 ResolutionSnapshot 明确 write_eligible=false，不能作为开放时坐标。HTTP 200 的业务失败不会被当成成功。
-- 星期一提前创建星期日目标任务时不调用上游，状态为 queued/waiting_query_window/unresolved_future；星期五 00:00 自动查询、解析并追加准备快照，之后 queued/waiting_booking_open；星期五当前 bookingstarttime（已验证样本 07:30）到达时再查询、重新解析，按冻结 priority 执行 getPayPrice -> createBookingBytime。
-- 星期一 00:00 的 BookingWindowPolicy 精确返回星期一、星期二、星期三可查询；星期日目标日 T 的 query_open_at 为星期五 00:00，已验证 booking_open_at 为星期五 07:30。测试覆盖日期边界和 07:29:59/07:30:00；当前响应与已验证时刻不一致时进入 contract_drift。今天/明天目标的 T-2 已过去时，也必须在当前本地日 07:30 前阻止所有副作用。
-- 任意远期目标日可保存语义 BookingPlan 并创建 execution_mode=official_open Job；任何 T-2 查询窗口前，API/Worker/Agent 均不调用 bookingByTime 或上游写接口。查询开放至当前 bookingstarttime 之间只读准备；开放前及窗口结束/场次已开始后，所有副作用均由后端最终门禁阻断。
-- POST /api/jobs 在正式开放前允许创建 execution_mode=official_open 的远期任务，scheduled_for_utc 为 Policy 计算的最早有效执行时刻，next_action_at_utc 为 max(now_utc,T-2 query_open_at)；明确传入早于目标开放或不在每日写窗口的 execution_mode=at 返回 422，不会静默更改。now 模式只在当前每日写窗口与目标预约窗口均已开时接受。
-- 对今天/明天目标，即使其 T-2 目标开放时刻已过去，每日 bookingstarttime 前仍不能发出预约或支付请求；bookingendtime 后不能创建预约。支付在开放后按已确认订单状态和支付端点有效期判断，不得误用 bookingendtime 作为支付截止。若存在场次开始前的下一个有效预约窗口，official_open 才可排到该时刻，否则任务创建明确拒绝。
-- 每个目标日按 T-2 天计算查询和预约开放时刻；默认 D+2，但在上游允许时今天/明天未过时场次也可由用户明确选择，不存在把“第三天”误算成 D+3 的偏移。
-- PlanRevision 使用语义 BookingCandidate 字段（target_date、上游场馆 nodeid、nodeList 场地 nodeid、名称快照、开始时间、时长、预约类型、priority、内部 SlotKey）；无 upstream slot_id 时不构造假 ID。计划和 Job 快照无任何旧 court/time 下标或 coordinatesList。
-- CandidateResolver 只以最新 nodeList[].nodeid 和 timeList[].time 精确求下标；场地/时间缺失、ID 重复、时间不连续或契约结构异常均 fail closed，不按名称/近似时间/旧下标猜测。两小时坐标必须为同一场地的两个连续有效时段并满足 mintimeselect、maxtimeselect、maxAppointmentNodeNum。
-- conflictList 无类型后缀映射为已预订；类型 1-6 依官方前端映射体育课、项目培训、体训队、艺术团、工会活动、其他活动；类型 7 为不可预订，类型 0 和未知类型 fail closed。timeList.status 原样保留，不用旧 Python 的 status=1 过滤逻辑误判候选。priceList.x 为 timeIndex、y 为 courtIndex，与预约坐标顺序相反。
-- bookingByTime 请求内层字段为 nodeid/selectdate；getPayPrice 与 createBookingBytime 的字段集合与响应结构由版本化 Adapter fixture 验证。getPayPrice 成功要求 success=true、message=“成功”及 txamt；createBookingBytime 的已验证成功组合包含 success=true、message=CORE10008、orderno/txamt。success=false 且 message=“每人每天最多预约1次”是终止性业务失败，不切换场地；未知业务 message 先对账。
-- Availability 查询缓存与全局 gate 跨 API、Agent、Credential 和 Worker 生效；不使用任意 2s/15s 常量。本地成功日志最短同端点观测约 668ms，初始配置为 1000ms；收到 429/Retry-After 跨 Credential 冷却，最终开放查询绕过缓存。更换 Token/Worker 不能规避限流。
-- 查询超时可有限重试；createBooking 或支付超时/断连不重放，并先对账。createBooking 结果未知时不能转向下一候选。
-- POST /api/jobs 相同 Idempotency-Key 和请求体的并发/网络重试只创建一个任务；相同 key 携带不同内容返回 409。
-- 用户取消运行中 Job 时先显示 cancel_requested；本地 Job 取消不会被表示成上游订单取消或退款。
-- 图片验证进入 awaiting_human；用户恢复后先核对状态再继续。
-- 自动支付默认关闭；金额缺失、币种不符、超限、价格变化或订单状态不确定时暂停，不发生支付。
-- 用户对特定订单/金额的一次性确认可追溯、过期且只能使用一次；Agent 不能生成此授权。
-- SQLite 每个连接启用外键，数据库使用 WAL，schema migration 可重复运行且不删除用户数据。
-- 事件时间按 UTC 持久化，预约日期和 UI 按配置的业务时区解释与显示。
-- 日志采用脱敏白名单，不含密钥、Token、个人资料、Cookie、二维码或完整上游响应。
-- 项目级 .gitignore 确保 env、req/、日志、booking_plan.json、SQLite 数据及 WAL 不会被新 clone 意外加入 Git；契约 fixture 为人工合成，不包含真实 ID、价格、日期、请求密文或个人字段。
-- Tailscale 未授权成员不能访问服务；授权成员仍需通过应用登录。
-- 验证使用模拟上游或脱敏 fixture，不对真实预约和支付接口发起自动化测试。
+- 邀请码单次兑换、过期和撤销可用；并发兑换最多创建一个用户。登录态使用可撤销服务端 Session，注销后旧 Cookie 失效。
+- 所有用户表、Credential、ReservationIntent、PreparedQueueRevision、Agent 上下文、BookingJob、订单和 API 查询按 `user_id` 隔离；用户 A 无法读取用户 B 任何资源。
+- JWT `exp` 解析只保存到期时间和安全状态，不保存完整 payload；日志/API/Agent/UI 不含 Token、payload 或账户指纹。JWT 本地解码不能替代真实只读验证。
+- Token 状态区分 valid、expiring_soon、will_expire_before_job、expired、invalid、unknown；expired/invalid 禁止真实上游预约与支付副作用。用户登录后看到仅含本人 Token 风险的高优先级提示。
+- 同账户 Token 轮换先只读验证并核对账户指纹，成功后 Job 使用最新 Token；不同账户不能覆盖旧 Credential，必须建立新 Credential。无法确定账户连续性时 fail closed。
+- Job 创建时固定 credential_id、账户指纹、profile revision 和用户授权，但不固定旧 Token 密文；T-2 preflight 在正式开放前发现 Token 失效、profile 缺失/无效或 Credential 禁用并暂停。
+- 任意提前天数创建未来 ReservationIntent/Job 不调用 bookingByTime；PlanRevision 和 intent snapshot 不含历史场地 nodeid、数组下标、coordinatesList、availability 或价格。
+- “星期一提前设置星期日 18:00–20:00，6 号场优先、5 号场第二”保存为语义偏好；本地场地目录仅供 UI 选项，不会使系统宣称场地已验证可用。
+- T-2 00:00 开始调用目标日真实 bookingByTime；若开放前窗口足够且无上游退避，准备阶段至少再进行一次服务级低频刷新，并在开放时进行最终刷新。每次有效响应均可追加 PreparationObservation 和 PreparedQueueRevision，不覆盖旧 revision，也不改 PlanRevision/ReservationIntent/用户授权。
+- 同目标日不同 refresh 的 nodeList/timeList/conflictList/priceList 顺序、可用性、价格和开放时间变化时，产生新准备状态，不把旧数组位置或旧价格当作事实。
+- PreparedQueueRevision 只含语义候选顺序、来源、验证摘要及源 observation；其任何历史价格、坐标或状态都不能作为最终创建请求输入。
+- Preparation Agent 只收到归一化数据，不接触 req 原文、Token、完整 JWT payload、个人资料、原始 JSON、conflictList 原码或 coordinatesList；不能调用 JobService、createBooking、支付或 Credential 设置。
+- QueuePolicyValidator 拒绝日期、时长、场馆、场地、时间浮动或价格超出用户授权的提案；越界建议不生效并等待用户明确确认/创建新的授权 Job。
+- Preparation Agent 不可用时，确定性 Intent 队列仍能执行；正式开放关键链路不等待 LLM。
+- 00:00 至正式开放之间只做允许的只读查询、preflight、语义解析和队列准备，Worker/API/Agent 不调用 createBooking、创建支付单或支付。
+- 正式开放时强制绕过缓存重新 bookingByTime；CandidateResolver 只用该响应的 nodeList/timeList 和当前冲突状态生成 FinalExecutionQueue 与坐标，再通过 QueuePolicyValidator、getPayPrice、createBookingBytime 执行。
+- 开放时响应中 bookingstarttime 从已知预计 07:30 改为另一合法时刻，official_open 的 `resolved_official_open_at_utc/next_action_at_utc` 随之更新，不触发 contract_drift。字段结构/类型/语义异常才暂停为 drift。
+- `execution_mode=at` 的精确 `scheduled_for_utc` 在开放时间变化后不被修改；不兼容时等待用户处理。Worker 睡眠或延迟恢复后仍须重新查询；只有窗口和场次仍有效才可迟到执行。
+- 6 号场在新 nodeList 中名称唯一匹配时映射到新 nodeid/下标；旧 nodeid/数组下标变化不影响意图。名称缺失、重复、模糊或目标时间不在新 timeList 时 fail closed 或按明确授权继续下一个候选，不按旧目录猜。
+- 一/两小时槽只由当前 timeList 精确解析并检查连续性、mintimeselect、maxtimeselect、maxAppointmentNodeNum；活动、社团、已预订、其他硬性占用始终不能加入最终队列。
+- Prep Agent 队列重排只能在授权候选范围内；用户允许同场馆任意场地或时间浮动时才可在该范围内扩展。没有明确授权的 fallback 不自动发生。
+- 重复 POST /api/jobs 在相同 Idempotency-Key/请求体下只生成一个任务；key 内容冲突返回 409。
+- 不同用户/Token 共享 UpstreamRequestGate；429/Retry-After 跨 Credential 退避，不能通过多用户、Agent 或 Worker 绕过。准备刷新频率与最低 request gate 分开配置。
+- 同一 Credential 的持久化执行锁保证不并行；lease 过期/Worker 崩溃后先对账。createBooking/支付结果未知时不重试、不切换候选。
+- 已知“每人每天最多预约1次”类账户额度失败是终止性业务错误，不能换场地继续。HTTP 200 业务失败不视为成功。
+- 自动支付默认关闭；价格超过 Intent/Job/Credential 最严格上限、币种未知、金额变化或订单状态不确定时暂停，不发送支付。
+- 取消运行中任务产生 `cancel_requested`；本地 `cancelled` 不等于上游订单取消或退款。
+- SQLite 外键、WAL、迁移、UTC 时间和业务时区展示规则生效；迁移不删除用户数据。
+- Tailscale 仅允许授权 tailnet 成员到达服务；每个成员仍需应用登录。`.env`、`req/`、日志、个人计划和 SQLite 文件不进入 Git，fixture 使用人工合成数据。
+- 验证只通过模拟上游和脱敏合成 fixture；不自动请求真实预约或支付副作用接口。
 
 ## 15. 不在首版范围
 
-- 公网匿名访问、开放自助注册、公开 Funnel。
-- Redis/Celery、多节点调度、PostgreSQL 或微服务架构。
-- LLM 直接访问 Token、支付凭证、任意 HTTP 客户端、数据库或 Worker。
-- Agent 创建真实任务、触发真实预约、控制自动支付或执行策略。
-- 非 OpenAI Chat Completions 兼容协议的 Provider Adapter。
-- 验证码识别/绕过、反复高速轮询或规避上游限额。
-- 未经查询确认就重放 createBooking、支付或其他副作用请求。
-- 自动处理上游取消、退款、未知支付结果或超出支付上限的金额。
-- 服务器休眠时仍保证自动任务运行；本地机器休眠期间 Worker 无法执行任务。
+- 公网匿名访问、开放自助注册或公开 Tailscale Funnel。
+- Redis/Celery、多节点调度、PostgreSQL 或微服务。
+- Planning/Preparation Agent 直接创建真实 BookingJob、调用预约或支付、修改 Credential/Token/支付策略，或使用任意 HTTP/数据库/shell 工具。
+- LLM 在正式开放关键链路中实时决策或读取原始上游冲突数据。
+- 通过场地名称模糊猜测、历史 nodeid、旧坐标或旧价格执行未来日期预约。
+- 验证码识别/绕过、反复高速轮询、通过多 Token/多用户规避上游限额。
+- 未经上游对账就重放 createBooking、支付或其他副作用。
+- 自动处理上游取消、退款、未知支付结果或超出用户授权范围的场地/时间/价格。
+- 保证本地机器休眠、断网或 Worker 关闭时仍准时执行任务。
