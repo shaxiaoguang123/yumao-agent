@@ -239,8 +239,8 @@ TimeResolver 只按当前 `timeList[].time` 精确匹配用户授权的开始时
 主要实体与约束：
 
 - **User / Session / Invitation**：用户、可撤销服务端 Session 和单次邀请码；会话 ID 与邀请码只存哈希，兑换原子完成。
-- **Credential**：`user_id`、标签、`current_token_revision_id`、到期/验证状态、`last_validated_at_utc`、`last_validation_result`、不向用户/Agent 暴露的 `upstream_account_fingerprint`、启停状态、支付策略、`deleted_at`。`will_expire_before_job` 是按 Credential+Job 计算的状态投影；不得把多个 Job 风险混成全局结论。Credential 不存完整 JWT payload，也不把 Token Revision 固定进 BookingJob。
-- **CredentialTokenRevision**：保存 Credential 的递增版本、加密 Token 密文、Token 本地指纹、`token_expires_at_utc`、只读验证结果/时间、账户指纹引用和操作者；不保存 JWT payload。轮换后新 Revision 立即成为 current；旧密文只在被活动 BookingExecutionAttempt 或未决副作用恢复引用时保留，所有引用结束后销毁旧密文，仅保留不含 Token 的审计元数据。
+- **Credential**：`user_id`、标签、`credential_version`、`current_token_revision_id`、到期状态、`last_confirmed_validation_state`、`last_successful_validation_at_utc`、`requires_revalidation`、不向用户/Agent 暴露的 `upstream_account_fingerprint`、启停状态、支付策略、`deleted_at`。最新验证尝试从 append-only `CredentialValidationObservation` 投影；超时/429/5xx 等瞬态失败不能改写 last confirmed state。`will_expire_before_job` 是按 Credential+Job 计算的状态投影；不得把多个 Job 风险混成全局结论。Credential 不存完整 JWT payload，也不把 Token Revision 固定进 BookingJob。
+- **CredentialTokenRevision**：保存 Credential 的递增版本、初次验证成功时的 immutable Token/账户绑定事实、加密 Token envelope、Token 本地指纹、`token_expires_at_utc`、初次只读验证结果/时间和操作者；不保存 JWT payload。后续 `/validate` 结果写入 Credential summary/ValidationObservation，不修改 revision 的语义历史。只允许带审计的 encryption-key rewrap 和 ciphertext clearing 更新密文 envelope 字段。轮换后新 Revision 立即成为 current；旧密文只在被活动 BookingExecutionAttempt 或未决副作用恢复引用时保留，所有引用结束后在活动 SQLite 记录中清为 NULL 并记录 `ciphertext_cleared_at_utc_ms`，仅保留无秘密审计元数据。该逻辑清除不保证 SQLite WAL/free pages/备份中的物理擦除；数据库文件、WAL 和备份整体按敏感加密数据保护。
 - **CredentialExecutionLock / UpstreamAccountExecutionLock / CredentialPolicyRevision**：Credential 锁按 credential_id 唯一；账户锁按稳定、版本化 HMAC 的 upstream_account_fingerprint 跨用户/credential_id 唯一，只约束真实执行 attempt 和未决订单/支付。密钥轮换必须原子迁移锁键，避免同一账户因指纹版本变化被拆成两把锁。策略修改保留版本和审计。账户锁属于服务级状态，不向普通用户或 Agent 暴露指纹。
 - **CredentialBookingProfileRevision**：加密的预约参与人字段、内容哈希和版本。Job 固定用户确认的 profile revision；普通 API 只返回脱敏摘要，Agent 不可读取。
 - **BookingPlan / PlanRevision**：用户计划与不可变版本。PlanRevision 的规范化内容是 ReservationIntent，不含运行时 availability、历史场地 nodeid、坐标或价格。
@@ -275,22 +275,22 @@ SQLite 每个连接启用 `PRAGMA foreign_keys=ON` 和 busy timeout；数据库�
 
 本地 req 中的上游 Token 观察为 JWT 且有 `exp` 声明。CredentialTokenService 仅在 Token 新增/替换时解析必要的 `exp` 并转换成 `token_expires_at_utc`；本地解析不验证签名，也不代表 Token 真正有效。不得保存或展示完整 JWT payload、payload 副本或非必要 claim。畸形/无 `exp` 的 Token 将到期状态设为 `unknown`，仍需只读验证。
 
-Credential 的 `token_expiry_status` 与 Job 关联风险显示以下状态：
+本地到期状态、已确认的上游有效性和最近验证尝试必须分开保存。Token revision 的 expiry state 为 `expiry_unknown`、`expiry_ok`、`expiring_soon` 或 `expired`；Credential 的 `last_confirmed_validation_state` 为 `never_confirmed`、`confirmed_valid` 或 `confirmed_invalid`。最近尝试结果用白名单状态码记录在 append-only `CredentialValidationObservation` 中，例如 `success`、`explicit_invalid`、`network_error`、`rate_limited`、`contract_drift`、`validation_unknown`、`unresolved_identity` 或 `internal_error`。API/UI 可以据此投影简洁状态，但不能将 expiry 与认证结果合并成一个不可解释字段。
 
-- `valid`：最近一次安全只读验证成功且预计过期时间不在提醒阈值内。
-- `expiring_soon`：预计在服务端配置的提醒窗口内到期；提醒窗口为服务配置，默认 7 天。它是 UI 风险提醒，不会单独使 Job 进入 `awaiting_human`。若只读验证仍有效且 `token_expires_at_utc` 晚于该 Job 的当前实际执行时刻，Job 正常执行。
+- `valid`：当前 revision 最近一次契约确认状态为 `confirmed_valid`，且 expiry 为 `expiry_ok`。
+- `expiring_soon`：当前 revision 已确认有效，预计在服务端配置提醒窗口内到期；提醒窗口默认为 7 天。它是 UI 风险提醒，不会单独使 Job 进入 `awaiting_human`。若当前 Token 仍经验证有效且过期时间晚于该 Job 当前实际执行时刻，Job 正常执行。
 - `will_expire_before_job`：对某个排队 Job 而言，预计过期时间早于其当前预计 preflight/执行时刻；这是 Credential+Job 关联风险，应高优先级提醒用户在执行前轮换，但不因预计风险本身立即阻断仍有效的准备工作。每次合法 `official_open` 更新时间后重新计算；正式 attempt 开始时按实际当前时间和实际开放时刻复核。
-- `expired`：本地 `exp` 已到或过去；禁止该 Credential 发起任何上游业务请求（包括 bookingByTime、报价、订单查询和写操作），直到用户更新 Token 并完成只读验证。
-- `invalid`：安全只读验证明确返回凭证无效/未授权；禁止该 Credential 的所有上游业务操作，直到重新验证成功。
-- `unknown`：无可解析 `exp`，或当前只读验证状态不足以确认有效性。发出任何预约/报价/订单/支付业务请求前，必须先完成并通过 req 契约确认的安全只读 Token 验证；验证通过但 exp 仍不可解析时继续显示到期未知并提示用户。
+- `expired`：本地解析到的有效 `exp` 已到或过去；禁止该 Credential 发起任何上游业务请求（包括 bookingByTime、报价、订单查询和写操作），直到用户更新 Token 并完成只读验证。
+- `invalid`：安全只读验证的 endpoint-specific 契约明确返回凭证无效/未授权；禁止该 Credential 的所有上游业务操作，直到 Token 轮换并成功验证。未知业务错误、超时、429、5xx 或 contract drift 不得映射为 invalid。
+- `unknown`：expiry 无法安全解析、尚无确认有效性，或 `requires_revalidation=true`。发出任何预约/报价/订单/支付业务请求前，必须先完成并通过 req 契约确认的安全只读 Token 验证；验证通过但 exp 仍不可解析时继续显示 expiry 未知并提示用户。
 
-`last_validated_at_utc` 只记最近一次成功的只读验证时刻；`last_validation_result` 使用白名单状态码和脱敏摘要，不保存完整响应。可在新增/替换 Token、用户主动点击验证、以及 T-2 `credential_preflight` 时验证。只读验证必须来自 req 已确认的安全端点/流程；不可用预约写接口做 Token 探测。
+`last_successful_validation_at_utc` 只记当前 revision 最近一次成功的只读验证时刻；Credential 的 DTO 从最新匹配的 `CredentialValidationObservation` 投影最近尝试时间/结果，不保存原始 response。瞬态尝试失败保留 `last_confirmed_validation_state` 和成功时间。可在新增/替换 Token、用户主动点击验证、以及 T-2 `credential_preflight` 时验证。只读验证必须来自 req 已确认的安全端点/流程；不可用预约写接口做 Token 探测。
 
 ### 7.2 Token 替换、账户连续性与 Job preflight
 
 新 Token 先作为待验证输入在内存中处理：解析 exp、执行安全只读验证并从经过白名单的稳定上游账户标识生成服务端 HMAC 指纹。原始标识只在内存中用于计算，指纹不得展示给用户或 Agent。首次验证成功才建立 Credential 指纹。
 
-替换已有 Token 时，后端必须确认新 Token 的账户指纹与 Credential 既有指纹相同，验证成功后才原子增加 Token Revision 并切换 Credential 的 current revision。新 Revision 立即供下一次 Preparation/read-only 单元或新的 execution attempt 使用。若旧 Revision 被活动 attempt/未决副作用引用，其加密密文暂时保留供该 attempt 连续执行/恢复；引用清除后销毁旧密文，仅保留审计元数据。若指纹不同，拒绝覆盖现 Credential，提示用户创建新的 Credential；若上游不能提供足以确认同一账户的身份字段，连续性为 unknown，不能自动替换。BookingJob 长期不固定旧 Token 密文或 Revision。
+替换已有 Token 时，后端必须确认新 Token 的账户指纹与 Credential 既有指纹相同，验证成功后才原子增加 Token Revision 并切换 Credential 的 current revision。新 Revision 立即供下一次 Preparation/read-only 单元或新的 execution attempt 使用。若旧 Revision 被活动 attempt/未决副作用引用，其加密密文暂时保留供该 attempt 连续执行/恢复；引用清除后，在活动 SQLite 记录中将 ciphertext 清为 NULL 并记录 `ciphertext_cleared_at_utc_ms`，仅保留无秘密审计元数据。该逻辑清除不承诺 SQLite WAL/free pages/备份中的物理擦除；数据库文件、WAL 和备份整体按敏感加密数据保护。若指纹不同，拒绝覆盖现 Credential，提示用户创建新的 Credential；若上游不能提供足以确认同一账户的身份字段，连续性为 unknown，不能自动替换。BookingJob 长期不固定旧 Token 密文或 Revision。
 
 BookingJob 固定 `credential_id`、用户授权和账户指纹，不固定 Token Revision。T-2 preflight 检查当前 Revision、profile revision、必要字段、Credential 状态和账号连续性。`expiring_soon` 与 `will_expire_before_job` 本身只产生提醒，不使 Job 暂停；只要当前 Token 仍有效且已验证，准备可继续。若实际到 execution attempt 时 Token 已过期、明确 invalid 或验证条件不满足，则不得发出上游业务请求，Job 进入 `awaiting_human`；未知有效性先完成安全只读验证。Job 创建时允许保留存在到期风险的计划，并向用户醒目提示。
 
@@ -310,7 +310,7 @@ LLM Provider 必须作为完整配置使用。custom base URL 与 custom API key
 
 ### 8.1 HTTP 封装与可见字段
 
-- 上游接口使用 POST JSON；认证头为 token。Token 当前观察为带 `exp` 声明的 JWT；本地仅解析 `exp` 形成到期提醒，不保存/展示 payload，不以未验签解析结果当作有效性证明。Token 的真实有效性必须通过安全只读验证。外层请求体为 item 字段，内容是内层 JSON UTF-8 文本按本机环境密钥执行 AES-CBC/PKCS7 后的十六进制字符串。密钥、IV 和 Token 只由本机 env 提供，Adapter 运行时短暂读取；不打印、不写日志、不进入快照。解密只用于本地契约分析，不保存解密产物。
+- 上游接口使用 POST JSON，认证头为 `token`。Token 当前观察为带 `exp` 声明的 JWT；本地仅解析 `exp` 形成到期提醒，不保存/展示 payload，不以未验签解析结果当作有效性证明。Token 的真实有效性必须通过安全只读验证。多数已观察加密接口的外层请求体为 `item` 字段，内容是内层 JSON UTF-8 文本按本机环境密钥执行 AES-CBC/PKCS7 后的十六进制字符串；密钥、IV 和 Token 只由本机 env 提供，Adapter 运行时短暂读取。`/service/appointment/appointment/userAddress/getUserInfo` 是已观察到的例外：请求为 POST JSON `{}`，认证头仍为 `token`，响应为直接 JSON，不使用 `item` 封装或响应解密。密钥、Token 和原始个人资料不打印、不写日志、不进入快照；解密只用于本地契约分析，不保存解密产物。
 - 所有响应均需解析 HTTP 状态及 JSON。标准外层响应为 success、message、resultData。HTTP 200 不代表业务成功；Adapter 必须按 endpoint-specific 的 success/message/resultData 组合分类。
 
 ### 8.2 bookingByTime 与场地/时间坐标
