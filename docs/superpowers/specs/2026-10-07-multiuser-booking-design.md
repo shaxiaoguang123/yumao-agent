@@ -18,7 +18,8 @@
 - 保留 Planning Agent，并新增受限 Preparation Agent。后者只处理经 AvailabilityService 和 UpstreamContractAdapter 归一化的当天数据，输出队列提案；所有提案须通过 QueuePolicyValidator。LLM 不可用时，确定性基线队列仍可运行。
 - Agent 不能创建 BookingJob、调用真实预约或支付副作用、改变 Credential 或支付安全设置。正式开放关键路径不依赖 LLM 实时推理。
 - Credential 的 Token 以加密 Revision 保存；Job 长期只固定 Credential 身份与用户授权，每个正式 attempt 在开始时选取当时当前且已验证的 Revision 并在 attempt 内固定使用。JWT `exp` 只提供本地过期提醒；真实有效性由安全的只读上游验证确认。
-- Credential Token 替换必须确认仍属于同一上游账户。不同账户必须新建 Credential；任务在执行前检查账户指纹、Token 有效性、预约资料和 Credential 启用状态。
+- Credential 的 Token read-only validation 与 account continuity 分层。`token_validation_capability` 已确认但 continuity 尚未确认时，可以保存 `account_binding_state=unresolved` 的 Credential；它可以继续验证、禁用或删除，但不能轮换 Token、参与账户去重或用于未来账户级预约执行。只有 `account_binding_state=confirmed` 才能轮换、参与同用户账户去重或绑定 `UpstreamAccountExecutionLock`。身份矛盾或 identity contract 失去可信度时进入 `needs_reconfirmation`，保留旧指纹仅作连续性核对，成功验证并匹配后才能恢复。
+- 同一应用用户、同一 confirmed 上游账户最多有一个 non-deleted Credential；已启用或已禁用的同账户记录都使新增返回安全 conflict，建议用户重新启用或轮换原 Credential。为避免在禁止 matching 时绕过该上限，现有 `unresolved`/`needs_reconfirmation` Credential 会阻止同一用户新增另一条 Credential，直到 binding confirmed 或原记录软删除；account-continuity capability 未确认时，用户已有任一 non-deleted Credential 就不能再创建第二条。不同应用用户可以分别绑定同一上游账户，不建立跨 user 唯一约束，也不泄露跨用户匹配信息。
 - BookingJob 长期只固定 credential_id、账户指纹和用户授权；每个正式 execution attempt 在进入 final_resolving 时固定 attempt_token_revision，同一预约/报价/创建/订单/支付链路使用同一 Token Revision。
 - 同一 upstream_account_fingerprint 即同一上游账户。真实预约/订单/支付 attempt 同时受 CredentialExecutionLock 与 UpstreamAccountExecutionLock 保护；多个 Credential 或用户不能并发对同一上游账户产生副作用。
 - 同一批到期任务按 resolved_execution_at_utc、created_at_utc、job_id 的固定升序处理，Worker 和 UpstreamRequestGate 共用该优先级，不依赖线程调度随机顺序。
@@ -183,8 +184,8 @@ Worker 使用 SQLite `BEGIN IMMEDIATE` 原子选择并领取到期 Job。所有�
 - **CredentialExecutionLock**：同一个 credential_id 同时只能有一个活动执行单元；按租约 owner、到期时间、heartbeat 和递增 epoch 持久化。准备查询结束后可释放，等待期间不占锁。
 - **UpstreamAccountExecutionLock**：以服务端 HMAC 化的 `upstream_account_fingerprint` 为唯一键，是跨 Credential、跨用户共享的服务级锁。正式 execution attempt 从 `final_resolving` 开始前，与 Credential 锁和 Job lease 在同一个事务中获取；持有至预约/订单/支付副作用确定且关联 ExternalOrder 进入可释放状态。未知副作用或待恢复订单时继续持锁，避免同账户另一 Credential 并行创建订单/支付。只读准备查询无需账户副作用锁，但仍受 Credential 锁和全局 UpstreamRequestGate 限制。
 - Credential 锁和账户锁的获取/释放均须校验 lease epoch；网络调用期间不持有 SQLite 写事务。旧 Worker 网络请求在途时，lease fencing 不代表上游请求已取消，接管者必须先按 JobStep/ExternalOrder 对账。
-- 同一用户新增 Credential 并验证出已存在的账户指纹时，界面明确提示这与已有 Credential 是同一上游账户，默认建议轮换已有 Credential Token。用户明确确认仍要单独建档后才允许保留重复 Credential；它仍共享同一 UpstreamAccountExecutionLock。不得向一个用户透露其他用户持有的同一账户信息。
-- 新 Credential 验证发现不同指纹时不得覆盖既有 Credential；同指纹跨用户不共享身份详情，但服务级账户锁仍保证副作用串行。
+- 同一用户新增 Credential 并验证出已有 `confirmed` 账户指纹时，一律返回安全 conflict，提示重新启用或轮换现有 Credential；V1 没有重复确认操作。`unresolved` Credential 无法参与指纹去重；若后续提升/恢复绑定时发现已有同用户 `confirmed` Credential，则保持原 `unresolved`/`needs_reconfirmation` 状态并返回 conflict。
+- 新 Token 候选验证发现不同指纹时不得覆盖当前 Credential。只有当前 Token 验证出现明确连续性矛盾，才将该 Credential 移至 `needs_reconfirmation` 并保留旧指纹；rotation candidate 不匹配只拒绝候选，不改变原绑定。同指纹跨用户不共享身份详情，但服务级账户锁仍保证副作用串行。
 - 没有未决副作用的 `awaiting_human` 可释放两种执行锁；若存在未决订单/支付，锁保持到恢复核对或用户处理完成。停用/软删除 Credential 后不领取新任务，运行中任务在安全边界取消并核对。
 
 服务级 Worker 并发上限较小且可配置。不同账户可在全局限制内并行；相同账户即使对应不同 Credential 也不能并发真实预约、订单或支付副作用。
@@ -193,7 +194,9 @@ Worker 使用 SQLite `BEGIN IMMEDIATE` 原子选择并领取到期 Job。所有�
 
 每个 Job 的准备查询、Credential preflight、PreparationObservation、Agent 提案校验、CandidateResolver、getPayPrice、createBookingBytime、订单核对和支付都写入 JobStep。每条 JobStep 记录 `execution_attempt_id`（如属于正式 attempt）、`token_revision_id`（只存版本引用，不含 Token）、稳定 operation_id、状态、尝试次数、lease epoch、时间、脱敏结果摘要和关联 ExternalOrder。
 
-正式 attempt 开始时固定一个 `attempt_token_revision_id`。同一 attempt 的最终 bookingByTime、getPayPrice、createBookingBytime、后续订单查询和支付均使用该 revision；Credential 的 active revision 在轮换时可立即切换，但不能改写已开始 attempt 的引用。副作用调用前检查该 pinned revision 的验证/到期状态及账户指纹。
+正式 attempt 开始时固定一个 `attempt_token_revision_id`。同一 attempt 的最终 bookingByTime、getPayPrice、createBookingBytime、后续订单查询和支付均使用该 revision；Credential 的 active revision 在轮换时可立即切换，但不能改写已开始 attempt 的引用。每个副作用前检查 Credential 仍启用且 `account_binding_state=confirmed`，pinned Token Revision 的验证/到期状态允许，并且账户身份与 Job 快照一致。
+
+若已创建 Job 所引用的 Credential 在开始正式 attempt 前变为 `unresolved`/`needs_reconfirmation`、被停用或其账户绑定不再匹配 Job 快照，Worker 不开始副作用并以明确 Credential binding reason 进入 `awaiting_human`。若该变化发生在 attempt 已经执行时，停止后续副作用；存在 `in_progress/unknown` 外部操作时进入 `needs_attention`、保留账户锁并先对账，不能仅凭本地状态变化释放锁或换 Token 重放。
 
 JobStep 状态至少有 `prepared`、`in_progress`、`succeeded`、`failed_definitive`、`unknown`、`skipped`：
 
@@ -220,7 +223,7 @@ TimeResolver 只按当前 `timeList[].time` 精确匹配用户授权的开始时
 
 ### 5.6 awaiting_human、恢复与取消
 
-`awaiting_human` 必须保存具体原因、关联 JobStep/订单、提示和允许的用户动作。Credential 已过期、明确 invalid、unknown 的安全只读验证失败/不可用、账户指纹/资料异常、用户验证码操作、精确 `at` 时间与真实开放变化不兼容、报价超出 Intent 价格上限或需要用户支付批准，均可进入该状态。`unknown` 本身先触发 Worker 的安全只读验证，不会仅因尚未验证就要求人工；验证失败或需用户动作时才暂停。单独的 `expiring_soon` 或 `will_expire_before_job` 是提醒，不自动阻断；若 Token 仍通过验证且覆盖当前实际执行时刻，Job 正常继续。
+`awaiting_human` 必须保存具体原因、关联 JobStep/订单、提示和允许的用户动作。Credential 已过期、明确 invalid、unknown 的安全只读验证失败/不可用、`account_binding_state` 不再为 confirmed、账户指纹/资料异常、用户验证码操作、精确 `at` 时间与真实开放变化不兼容、报价超出 Intent 价格上限或需要用户支付批准，均可进入该状态。`unknown` 本身先触发 Worker 的安全只读验证，不会仅因尚未验证就要求人工；验证失败或需用户动作时才暂停。单独的 `expiring_soon` 或 `will_expire_before_job` 是提醒，不自动阻断；若 Token 仍通过验证且覆盖当前实际执行时刻，Job 正常继续。
 
 恢复请求只记录用户完成人工作用或要求继续核对，不代替支付授权。Worker 恢复后重新取得 Credential/账户锁并按当前 ExecutionAttempt 的 pinned Token Revision、账户指纹、资料、Job 快照和订单状态核对；不得从旧步骤盲目续跑或在同一 attempt 中切换 Token Revision。订单/支付状态未知时继续 `needs_attention`，不发起重复副作用。
 
@@ -239,8 +242,8 @@ TimeResolver 只按当前 `timeList[].time` 精确匹配用户授权的开始时
 主要实体与约束：
 
 - **User / Session / Invitation**：用户、可撤销服务端 Session 和单次邀请码；会话 ID 与邀请码只存哈希，兑换原子完成。
-- **Credential**：`user_id`、标签、`credential_version`、`current_token_revision_id`、到期状态、`last_confirmed_validation_state`、`last_successful_validation_at_utc`、`requires_revalidation`、不向用户/Agent 暴露的 `upstream_account_fingerprint`、启停状态、支付策略、`deleted_at`。最新验证尝试从 append-only `CredentialValidationObservation` 投影；超时/429/5xx 等瞬态失败不能改写 last confirmed state。`will_expire_before_job` 是按 Credential+Job 计算的状态投影；不得把多个 Job 风险混成全局结论。Credential 不存完整 JWT payload，也不把 Token Revision 固定进 BookingJob。
-- **CredentialTokenRevision**：保存 Credential 的递增版本、初次验证成功时的 immutable Token/账户绑定事实、加密 Token envelope、Token 本地指纹、`token_expires_at_utc`、初次只读验证结果/时间和操作者；不保存 JWT payload。后续 `/validate` 结果写入 Credential summary/ValidationObservation，不修改 revision 的语义历史。只允许带审计的 encryption-key rewrap 和 ciphertext clearing 更新密文 envelope 字段。轮换后新 Revision 立即成为 current；旧密文只在被活动 BookingExecutionAttempt 或未决副作用恢复引用时保留，所有引用结束后在活动 SQLite 记录中清为 NULL 并记录 `ciphertext_cleared_at_utc_ms`，仅保留无秘密审计元数据。该逻辑清除不保证 SQLite WAL/free pages/备份中的物理擦除；数据库文件、WAL 和备份整体按敏感加密数据保护。
+- **Credential**：`user_id`、标签、`credential_version`、`current_token_revision_id`、`account_binding_state`（`unresolved`/`confirmed`/`needs_reconfirmation`）、到期状态、`last_confirmed_validation_state`、`last_successful_validation_at_utc`、`requires_revalidation`、启停状态、支付策略、`deleted_at`。仅 `confirmed` 保存可用于同用户去重和未来账户锁的活动 `upstream_account_fingerprint` 与 `account_identity_contract_version`；`needs_reconfirmation` 保留原指纹/contract version 只用于同一 Credential 的恢复核对；`unresolved` 不保存活动账户指纹。最新发起的验证尝试从 append-only `CredentialValidationObservation` 按 allocated request order 投影，最近成功验证时间独立展示；超时/429/5xx 等瞬态失败不能改写 last confirmed state 或 account binding。`last_confirmed_validation_state` 和验证摘要始终语义上属于 `current_token_revision_id`，没有冗余 `validation_summary_revision_id`。`will_expire_before_job` 是按 Credential+Job 计算的状态投影；不得把多个 Job 风险混成全局结论。Credential 不存完整 JWT payload，也不把 Token Revision 固定进 BookingJob。
+- **CredentialTokenRevision**：保存 Credential 的递增版本、初次 Token 验证结果/时间、初次建立账户 binding 时的可空 contract/key-version 元数据、加密 Token envelope、Token 本地指纹、`token_expires_at_utc` 和操作者；不保存 JWT payload。初次可能只确认 Token 有效、Credential 仍为 `unresolved`；后续 `/validate` 可以更新 Credential 当前摘要和三态 binding，不修改 revision 的语义历史。只允许带审计的 encryption-key rewrap 和 ciphertext clearing 更新密文 envelope 字段。轮换后新 Revision 立即成为 current；旧密文只在被活动 BookingExecutionAttempt 或未决副作用恢复引用时保留，所有引用结束后在活动 SQLite 记录中清为 NULL 并记录 `ciphertext_cleared_at_utc_ms`，仅保留无秘密审计元数据。该逻辑清除不保证 SQLite WAL/free pages/备份中的物理擦除；数据库文件、WAL 和备份整体按敏感加密数据保护。
 - **CredentialExecutionLock / UpstreamAccountExecutionLock / CredentialPolicyRevision**：Credential 锁按 credential_id 唯一；账户锁按稳定、版本化 HMAC 的 upstream_account_fingerprint 跨用户/credential_id 唯一，只约束真实执行 attempt 和未决订单/支付。密钥轮换必须原子迁移锁键，避免同一账户因指纹版本变化被拆成两把锁。策略修改保留版本和审计。账户锁属于服务级状态，不向普通用户或 Agent 暴露指纹。
 - **CredentialBookingProfileRevision**：加密的预约参与人字段、内容哈希和版本。Job 固定用户确认的 profile revision；普通 API 只返回脱敏摘要，Agent 不可读取。
 - **BookingPlan / PlanRevision**：用户计划与不可变版本。PlanRevision 的规范化内容是 ReservationIntent，不含运行时 availability、历史场地 nodeid、坐标或价格。
@@ -275,7 +278,7 @@ SQLite 每个连接启用 `PRAGMA foreign_keys=ON` 和 busy timeout；数据库�
 
 本地 req 中的上游 Token 观察为 JWT 且有 `exp` 声明。CredentialTokenService 仅在 Token 新增/替换时解析必要的 `exp` 并转换成 `token_expires_at_utc`；本地解析不验证签名，也不代表 Token 真正有效。不得保存或展示完整 JWT payload、payload 副本或非必要 claim。畸形/无 `exp` 的 Token 将到期状态设为 `unknown`，仍需只读验证。
 
-本地到期状态、已确认的上游有效性和最近验证尝试必须分开保存。Token revision 的 expiry state 为 `expiry_unknown`、`expiry_ok`、`expiring_soon` 或 `expired`；Credential 的 `last_confirmed_validation_state` 为 `never_confirmed`、`confirmed_valid` 或 `confirmed_invalid`。最近尝试结果用白名单状态码记录在 append-only `CredentialValidationObservation` 中，例如 `success`、`explicit_invalid`、`network_error`、`rate_limited`、`contract_drift`、`validation_unknown`、`unresolved_identity` 或 `internal_error`。API/UI 可以据此投影简洁状态，但不能将 expiry 与认证结果合并成一个不可解释字段。
+本地到期状态、已确认的上游有效性、账户绑定和最近验证尝试必须分开保存。Token revision 的 expiry state 为 `expiry_unknown`、`expiry_ok`、`expiring_soon` 或 `expired`；Credential 的 `last_confirmed_validation_state` 为 `never_confirmed`、`confirmed_valid` 或 `confirmed_invalid`，独立的 `account_binding_state` 为 `unresolved`、`confirmed` 或 `needs_reconfirmation`。最近尝试结果用白名单状态码记录在 append-only `CredentialValidationObservation` 中，例如 `success`、`explicit_invalid`、`network_error`、`rate_limited`、`contract_drift`、`validation_unknown`、`unresolved_identity` 或 `internal_error`，账户连续性另用安全的 `account_binding_outcome` 表达。API/UI 可以据此投影简洁状态，但不能将 expiry、Token validity 和账户连续性合并成一个不可解释字段。
 
 - `valid`：当前 revision 最近一次契约确认状态为 `confirmed_valid`，且 expiry 为 `expiry_ok`。
 - `expiring_soon`：当前 revision 已确认有效，预计在服务端配置提醒窗口内到期；提醒窗口默认为 7 天。它是 UI 风险提醒，不会单独使 Job 进入 `awaiting_human`。若当前 Token 仍经验证有效且过期时间晚于该 Job 当前实际执行时刻，Job 正常执行。
@@ -284,15 +287,15 @@ SQLite 每个连接启用 `PRAGMA foreign_keys=ON` 和 busy timeout；数据库�
 - `invalid`：安全只读验证的 endpoint-specific 契约明确返回凭证无效/未授权；禁止该 Credential 的所有上游业务操作，直到 Token 轮换并成功验证。未知业务错误、超时、429、5xx 或 contract drift 不得映射为 invalid。
 - `unknown`：expiry 无法安全解析、尚无确认有效性，或 `requires_revalidation=true`。发出任何预约/报价/订单/支付业务请求前，必须先完成并通过 req 契约确认的安全只读 Token 验证；验证通过但 exp 仍不可解析时继续显示 expiry 未知并提示用户。
 
-`last_successful_validation_at_utc` 只记当前 revision 最近一次成功的只读验证时刻；Credential 的 DTO 从最新匹配的 `CredentialValidationObservation` 投影最近尝试时间/结果，不保存原始 response。瞬态尝试失败保留 `last_confirmed_validation_state` 和成功时间。可在新增/替换 Token、用户主动点击验证、以及 T-2 `credential_preflight` 时验证。只读验证必须来自 req 已确认的安全端点/流程；不可用预约写接口做 Token 探测。
+`last_successful_validation_at_utc` 只记当前 revision 最近一次成功的只读验证时刻；Credential DTO 的 `latest_requested_validation_attempt` 按已分配的 attempt/request ID 投影最近发起而非最近完成的 observation，包含 `started_at_utc` 和 `completed_at_utc`，不保存原始 response。该字段顺序避免较慢的旧请求覆盖后来发起的新请求；即使最新发起的尝试被 gate 拒绝，UI 仍独立展示最近成功验证时刻。瞬态尝试失败保留 `last_confirmed_validation_state`、account binding 和成功时间。可在新增/替换 Token、用户主动点击验证、以及 T-2 `credential_preflight` 时验证。只读验证必须来自 req 已确认的安全端点/流程；不可用预约写接口做 Token 探测。
 
 ### 7.2 Token 替换、账户连续性与 Job preflight
 
-新 Token 先作为待验证输入在内存中处理：解析 exp、执行安全只读验证并从经过白名单的稳定上游账户标识生成服务端 HMAC 指纹。原始标识只在内存中用于计算，指纹不得展示给用户或 Agent。首次验证成功才建立 Credential 指纹。
+新 Token 先作为待验证输入在内存中处理：解析 exp 并执行安全只读验证。Task 0 分别确认 Token validation capability 与 account continuity capability。只有后者已确认且当前 Adapter/identity contract 提供可靠标识时，才能计算服务端 HMAC 指纹并创建 `confirmed` binding；若 Token validation 成功但 account continuity 尚未确认，创建 `unresolved` Credential，不存账户指纹。原始标识只在内存中用于计算，指纹不得展示给用户或 Agent。有限抓包无需证明身份字段的全球唯一性或未来永久稳定性；Task 0 记录观测范围和未证明事项。
 
-替换已有 Token 时，后端必须确认新 Token 的账户指纹与 Credential 既有指纹相同，验证成功后才原子增加 Token Revision 并切换 Credential 的 current revision。新 Revision 立即供下一次 Preparation/read-only 单元或新的 execution attempt 使用。若旧 Revision 被活动 attempt/未决副作用引用，其加密密文暂时保留供该 attempt 连续执行/恢复；引用清除后，在活动 SQLite 记录中将 ciphertext 清为 NULL 并记录 `ciphertext_cleared_at_utc_ms`，仅保留无秘密审计元数据。该逻辑清除不承诺 SQLite WAL/free pages/备份中的物理擦除；数据库文件、WAL 和备份整体按敏感加密数据保护。若指纹不同，拒绝覆盖现 Credential，提示用户创建新的 Credential；若上游不能提供足以确认同一账户的身份字段，连续性为 unknown，不能自动替换。BookingJob 长期不固定旧 Token 密文或 Revision。
+Token rotation 仅允许 `account_binding_state=confirmed` 的 Credential。后端对新 Token 执行成功的只读验证并确认其指纹与当前绑定一致后，才原子增加 Token Revision 并切换 current revision。`unresolved` 与 `needs_reconfirmation` Credential 只能验证当前 Token、禁用或删除，不能 rotation。当前 Token 验证出现真实身份矛盾时进入 `needs_reconfirmation`，保留旧指纹、不覆盖绑定；network error、429、5xx、timeout 或普通 contract drift 不会降级 confirmed。恢复只允许当前 Token 在当前 approved identity contract 下验证成功并与保留指纹常量时间匹配；username、tel、label、用户口头确认或模糊匹配均无效。新 Revision 立即供下一次 Preparation/read-only 单元或新的 execution attempt 使用。若旧 Revision 被活动 attempt/未决副作用引用，其加密密文暂时保留供该 attempt 连续执行/恢复；引用清除后，在活动 SQLite 记录中将 ciphertext 清为 NULL 并记录 `ciphertext_cleared_at_utc_ms`，仅保留无秘密审计元数据。该逻辑清除不承诺 SQLite WAL/free pages/备份中的物理擦除；数据库文件、WAL 和备份整体按敏感加密数据保护。Rotation candidate 指向其他账户只拒绝候选，不改变旧 Credential；新账户必须创建新 Credential。BookingJob 长期不固定旧 Token 密文或 Revision。
 
-BookingJob 固定 `credential_id`、用户授权和账户指纹，不固定 Token Revision。T-2 preflight 检查当前 Revision、profile revision、必要字段、Credential 状态和账号连续性。`expiring_soon` 与 `will_expire_before_job` 本身只产生提醒，不使 Job 暂停；只要当前 Token 仍有效且已验证，准备可继续。若实际到 execution attempt 时 Token 已过期、明确 invalid 或验证条件不满足，则不得发出上游业务请求，Job 进入 `awaiting_human`；未知有效性先完成安全只读验证。Job 创建时允许保留存在到期风险的计划，并向用户醒目提示。
+BookingJob 只能引用启用、未删除且 `account_binding_state=confirmed` 的 Credential；`unresolved` 或 `needs_reconfirmation` 不得创建账户绑定任务或取得 `UpstreamAccountExecutionLock`。Job 固定 `credential_id`、confirmed 账户指纹和用户授权，不固定 Token Revision。T-2 preflight 检查当前 Revision、profile revision、必要字段、Credential 状态和账号连续性。`expiring_soon` 与 `will_expire_before_job` 本身只产生提醒，不使 Job 暂停；只要当前 Token 仍有效且已验证，准备可继续。若实际到 execution attempt 时 Token 已过期、明确 invalid 或验证条件不满足，则不得发出上游业务请求，Job 进入 `awaiting_human`；未知有效性先完成安全只读验证。Job 创建时允许保留存在到期风险的计划，并向用户醒目提示。
 
 ### 7.3 到期提醒与隐私
 
@@ -362,8 +365,7 @@ LLM Provider 必须作为完整配置使用。custom base URL 与 custom API key
 
 Credential 与 LLM：
 
-- `GET/POST /api/credentials` 查询脱敏状态或创建 Credential；`PATCH/DELETE /api/credentials/{id}` 修改标签/启停/支付策略或软删除。
-- `POST /api/credentials/{id}/token` 添加 Token；`POST /api/credentials/{id}/rotate-token` 验证并轮换同一账户 Token。新 Revision 立即成为 current，但只供下一次新的 execution attempt 使用；已开始 attempt 继续 pin 原 Revision。请求体只在 TLS/服务端短时处理 Token；响应只含状态、预计过期时间和脱敏验证结果。
+- `GET/POST /api/credentials` 查询脱敏状态或创建 Credential；创建请求携带 label 和初始 Token。Token validation capability 已确认但账户连续性未确认时允许创建 `unresolved` Credential。`POST /api/credentials/{id}/rotate-token` 仅对 `account_binding_state=confirmed` 的 Credential 验证并轮换同一账户 Token；同用户已存在 confirmed Credential 时返回安全 conflict，提示启用或轮换原记录。新 Revision 立即成为 current，但只供下一次新的 execution attempt 使用；已开始 attempt 继续 pin 原 Revision。请求体只在 TLS/服务端短时处理 Token；响应只含状态、预计过期时间、binding state 和脱敏验证结果。`PATCH/DELETE /api/credentials/{id}` 修改标签/启停/支付策略或软删除。
 - `POST /api/credentials/{id}/validate` 只读验证当前 Token；`GET/PUT /api/credentials/{id}/booking-profile` 获取脱敏摘要或追加 profile revision。
 - `GET/PUT/DELETE /api/llm/settings` 读写当前用户完整 Provider；`POST /api/llm/test` 仅由用户主动调用，并执行 SSRF 校验。
 
@@ -380,7 +382,7 @@ Credential 与 LLM：
 
 任务与订单：
 
-- `POST /api/jobs` 仅在用户明确确认时创建，要求 `Idempotency-Key`；请求含 plan/revision、credential、profile revision、`execution_mode`（`official_open`、`at`、`now`）和支付授权。`at` 必须给精确 `scheduled_for_utc`。`official_open` 可任意提前创建，初始 `next_action_at_utc` 指向 T-2 00:00，并返回预计开放时间与 `unresolved_future`；开放预计值不冻结。
+- `POST /api/jobs` 仅在用户明确确认时创建，要求 `Idempotency-Key`；请求含 plan/revision、启用且未删除、`account_binding_state=confirmed` 的 Credential、profile revision、`execution_mode`（`official_open`、`at`、`now`）和支付授权。Credential 若在后续执行前进入 `needs_reconfirmation` 或账户快照不再匹配，则按 Credential binding reason 阻止副作用。`at` 必须给精确 `scheduled_for_utc`。`official_open` 可任意提前创建，初始 `next_action_at_utc` 指向 T-2 00:00，并返回预计开放时间与 `unresolved_future`；开放预计值不冻结。
 - `GET /api/jobs`、`GET /api/jobs/{id}` 仅返回当前用户状态、phase、下一动作、Credential 到期风险、语义快照摘要、JobStep 摘要及当前 attempt 的状态/cutoff 时间；可返回非秘密的 Token Revision 序号供审计，但不返回 Token 或账户指纹。
 - `GET /api/jobs/{id}/preparations` 返回用户自己的 PreparedQueueRevision 历史、刷新时间、提案级 status（含 `requires_user_confirmation`/stale）、cutoff 信息和 validator 结果；不返回历史 coordinatesList、下标或原始响应。提案级 status 不映射为 BookingJob 新主状态。
 - `POST /api/jobs/{id}/cancel` 运行中先写 `cancel_requested`；`POST /api/jobs/{id}/resume` 只记录用户人工作用，恢复前重新检查 Token、订单和安全门禁。
@@ -393,7 +395,7 @@ Credential 与 LLM：
 前端应提供：
 
 - 登录、邀请码注册，以及登录后只针对当前用户的高优先级 Token 风险汇总提示。
-- Credential 列表展示标签、启停状态、预计过期时间/剩余时间、`valid/expiring_soon/will_expire_before_job/expired/invalid/unknown` 风险、最近安全验证时间和结果；明确 `expiring_soon` 只提醒，`will_expire_before_job` 高优先级提醒但不自动暂停仍有效任务；不显示 Token、完整 JWT payload 或账户指纹。提供新增、只读验证和同账户 Token 轮换入口。
+- Credential 列表展示标签、启停状态、`account_binding_state`、预计过期时间/剩余时间、`valid/expiring_soon/will_expire_before_job/expired/invalid/unknown` 风险、最近成功验证时间和按 request order 的最近发起验证结果；不将后完成的旧请求误显示为最新发起项。明确 `unresolved` 可验证/禁用/删除但不能轮换或创建账户绑定 Job；`needs_reconfirmation` 必须在当前 approved identity contract 下通过连续性核对才能恢复；`expiring_soon` 只提醒，`will_expire_before_job` 高优先级提醒但不自动暂停仍有效任务。不显示 Token、完整 JWT payload、账户指纹或 identity-contract version。提供新增、只读验证和仅对 confirmed 绑定开放的 Token 轮换入口；不提供 duplicate-confirmation UI。
 - 任意未来目标日的 ReservationIntent 编辑器：目标日、场馆语义范围、时间/时长、用户场地排序、是否允许同场馆备用、是否允许限定范围内时间浮动、最高可接受价格和币种。场地目录只用于帮助用户选语义偏好，界面明确标注“尚未按目标日期验证”。
 - 日期窗口和开放时间由后端返回；前端不自行计算 T-2、午夜或 bookingstarttime。目标日未进入查询窗口显示 `unresolved_future`，不能把上次查询状态或历史价格当作当前可用。
 - T-2 后的准备界面展示每次 PreparedQueueRevision 的查询时刻、数据新鲜度、候选增删/重排、硬排除原因、Preparation Agent 建议与 QueuePolicyValidator 结果。清楚标示为准备数据，绝不向用户显示可编辑/可复用的上游坐标。
@@ -465,8 +467,14 @@ Provider 配置按一整组选择，禁止逐字段回退或混合：
 - 所有用户表、Credential、ReservationIntent、PreparedQueueRevision、Agent 上下文、BookingJob、订单和 API 查询按 `user_id` 隔离；用户 A 无法读取用户 B 任何资源。
 - JWT `exp` 解析只保存到期时间和安全状态，不保存完整 payload；日志/API/Agent/UI 不含 Token、payload 或账户指纹。JWT 本地解码不能替代真实只读验证。
 - Token 状态区分 valid、expiring_soon、will_expire_before_job、expired、invalid、unknown；expired/invalid 禁止所有上游业务请求。用户登录后看到仅含本人 Token 风险的高优先级提示。
-- 同账户 Token 轮换先只读验证并核对账户指纹，成功后下一次新 execution attempt 使用新 Token Revision；正在运行的 attempt 保持原 Revision。不同账户不能覆盖旧 Credential，必须建立新 Credential。无法确定账户连续性时 fail closed。
-- Job 创建时固定 credential_id、账户指纹、profile revision 和用户授权，但不固定旧 Token Revision；每个正式 attempt 单独 pin 当前 Revision。T-2 preflight 在正式开放前发现 Token 失效、profile 缺失/无效或 Credential 禁用并暂停。
+- `token_validation_capability` 与 `account_continuity_capability` 可独立成立。前者成立而后者未成立时，允许在该用户没有其他 non-deleted Credential 时创建 `unresolved` Credential，仍可重验、禁用、删除；此情形不阻塞 Credential 子系统。`unresolved` 不能轮换、参与 same-account duplicate detection 或用于账户级 BookingJob/锁；它存在期间不能为该用户再创建另一条 Credential，直到 binding confirmed 或原记录软删除。
+- `account_binding_state` 仅为 `unresolved`、`confirmed`、`needs_reconfirmation`。`confirmed` 仅在当前 approved identity contract 下成功验证并建立 account fingerprint 后成立。普通 network error、429、5xx、timeout 或普通 contract drift 不降级；明确 contract 废弃、Adapter 无法再信任旧绑定或真实连续性矛盾才转 `needs_reconfirmation`。该状态保留历史指纹但暂停 rotation、duplicate matching 和账户级执行；恢复只能靠当前 Token 在当前 approved contract 下成功验证并与旧指纹常量时间匹配。disable/enable 不改 binding state；enable 独立设置 `requires_revalidation=true`；soft delete 清除活动指纹并禁用绑定用途。
+- Token validation success 和 account-binding outcome 是 Credential 的独立维度；`latest_requested_validation_attempt` 按已分配的 attempt/request 顺序表示最近发起尝试，不是最近完成尝试。`started_at`、`completed_at` 与 `last_successful_validation_at` 并存，UI 可显示“最近发起：被限流”及“最近成功验证：时间”，不把两者当作矛盾。
+- 同一用户同一 `confirmed` 上游账户最多保留一个 non-deleted Credential，启用和停用状态都计入；同用户冲突建议启用/轮换原 Credential，不存在重复确认能力。`unresolved` 没有可匹配指纹，`needs_reconfirmation` 明确暂停 duplicate matching；为保持唯一性又不匹配这些指纹，两种状态存在时都阻止新 Credential 创建，直到 binding confirmed 或原记录软删除。后续从这两种状态提升到 `confirmed` 时仍须在同一事务内与现有同用户 confirmed bindings 做最终唯一性检查。不同用户可分别绑定同一账户，不建立跨用户唯一约束。
+- Fingerprint 使用单一 `fingerprint HMAC keyring`，以 `upstream-account-v1` 和 `credential-token-v1` domain separation 分离用途；配置名为 `APP_UPSTREAM_FINGERPRINT_KEYS` 与 `APP_UPSTREAM_FINGERPRINT_ACTIVE_KEY_ID`。Account-fingerprint dependency 与 token-fingerprint dependency 是同一 keyring key-version 的两种保留原因。Encryption keyring 独立且禁止 key material reuse。
+- HTTP transport 使用显式有限 connect/read timeout、monotonic total deadline、streaming 与响应大小限制。每个已开始的 blocking read 可在 read timeout 上界内超出 total deadline，V1 不承诺内核级精确取消；gate lease 覆盖 total deadline 与安全余量。Retry-After delta-seconds 必须解析、clamp 到 `MAX_UPSTREAM_BACKOFF_SECONDS` 并采用 monotonic max；HTTP-date 仅在抓包证据需要时用标准库解析，异常值使用安全 fallback。
+- 同账户 Token 轮换仅对 `confirmed` Credential 开放；只读验证并核对账户指纹成功后，下一次新 execution attempt 使用新 Token Revision；正在运行的 attempt 保持原 Revision。不同账户不能覆盖旧 Credential，必须建立新 Credential。无法确定账户连续性时保持 `unresolved`/`needs_reconfirmation` 并 fail closed。
+- Job 创建仅接受启用、未删除且 `account_binding_state=confirmed` 的 Credential，固定 credential_id、账户指纹、profile revision 和用户授权，但不固定旧 Token Revision；每个正式 attempt 单独 pin 当前 Revision。T-2 preflight 在正式开放前发现 Token 失效、profile 缺失/无效或 Credential 禁用/账户绑定状态不合格并暂停。
 - 任意提前天数创建未来 ReservationIntent/Job 不调用 bookingByTime；PlanRevision 和 intent snapshot 不含历史场地 nodeid、数组下标、coordinatesList、availability 或价格。
 - “星期一提前设置星期日 18:00–20:00，6 号场优先、5 号场第二”保存为语义偏好；本地场地目录仅供 UI 选项，不会使系统宣称场地已验证可用。
 - T-2 00:00 开始调用目标日真实 bookingByTime；若开放前窗口足够且无上游退避，准备阶段至少再进行一次服务级低频刷新，并在开放时进行最终刷新。每次有效响应均可追加 PreparationObservation 和 PreparedQueueRevision，不覆盖旧 revision，也不改 PlanRevision/ReservationIntent/用户授权。
@@ -492,7 +500,7 @@ Provider 配置按一整组选择，禁止逐字段回退或混合：
 - Tailscale 仅允许授权 tailnet 成员到达服务；每个成员仍需应用登录。`.env`、`req/`、日志、个人计划和 SQLite 文件不进入 Git，fixture 使用人工合成数据。
 - 同一 Job 的正式 attempt 在 final_resolving 开始时固定 `attempt_token_revision`；即使用户在该链路中轮换 Token，该 attempt 的最终 bookingByTime、getPayPrice、createBookingBytime、订单核对和支付仍引用同一 Revision；下一次新 attempt 才选新 Revision。
 - 若 createBooking/支付已为 `in_progress` 或 `unknown`，恢复先用 pinned Revision 对账；若必须换同账户新 Token，只能先做只读核对，不能以新 Revision 重放副作用。只有上游状态确定、旧 attempt 关闭且后续动作安全时才能开新 attempt。
-- 两个不同 Credential 具有相同 `upstream_account_fingerprint` 时，`UpstreamAccountExecutionLock` 只允许一个真实预约/订单/支付 attempt；只读准备可并行但共享全局 gate。重复 Credential 创建前提示同一账户并优先建议轮换已有 Token。
+- 同一用户同一 confirmed upstream account 最多存在一个 non-deleted Credential，disabled 记录也会阻止重复创建；返回同用户安全 conflict 并建议重启用/轮换。现有 unresolved/needs_reconfirmation 或 continuity capability 尚未确认时，按同用户创建门禁禁止新增 Credential，以免在不允许 fingerprint matching 时绕过上限。不同用户可分别绑定同一账户；跨用户不做产品层 duplicate lookup 或 unique constraint。两个不同用户的 Credential 若有相同 `upstream_account_fingerprint`，`UpstreamAccountExecutionLock` 只允许一个真实预约/订单/支付 attempt；只读准备可并行但共享全局 gate。
 - 多个用户/Job 在同一开放时间到期时，SQLite Worker 按 `resolved_execution_at_utc ASC → created_at_utc ASC → job_id ASC` 固定领取；UpstreamRequestGate 使用同一优先级，重复请求/多账号不能获得额外限额。
 - 超出 Intent 的 Preparation Agent 提案状态为 `requires_user_confirmation`，不会进入 active PreparedQueueRevision、不会新增 Job status、不会暂停旧 Job；旧 Job 继续使用确定性基线。采纳越界建议必须新建 PlanRevision/BookingJob。
 - `expiring_soon` 且只读验证有效、Token 预计覆盖当前实际执行时间时，只显示醒目提醒，Job 不进入 awaiting_human。`will_expire_before_job` 发高优先级提醒；若未轮换且正式 attempt 时已 expired/invalid，则阻断上游业务请求。`unknown` 在业务请求前必须安全只读验证。
