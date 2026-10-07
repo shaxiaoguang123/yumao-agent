@@ -365,7 +365,7 @@ LLM Provider 必须作为完整配置使用。custom base URL 与 custom API key
 
 Credential 与 LLM：
 
-- `GET/POST /api/credentials` 查询脱敏状态或创建 Credential；创建请求携带 label 和初始 Token。Token validation capability 已确认但账户连续性未确认时允许创建 `unresolved` Credential。`POST /api/credentials/{id}/rotate-token` 仅对 `account_binding_state=confirmed` 的 Credential 验证并轮换同一账户 Token；同用户已存在 confirmed Credential 时返回安全 conflict，提示启用或轮换原记录。新 Revision 立即成为 current，但只供下一次新的 execution attempt 使用；已开始 attempt 继续 pin 原 Revision。请求体只在 TLS/服务端短时处理 Token；响应只含状态、预计过期时间、binding state 和脱敏验证结果。`PATCH/DELETE /api/credentials/{id}` 修改标签/启停/支付策略或软删除。
+- `GET/POST /api/credentials` 查询脱敏状态或创建 Credential；创建请求携带 label 和初始 Token。Token validation capability 已确认但账户连续性未确认，或当前成功响应缺少可用身份字段时，仅当该用户没有其他 non-deleted Credential 才允许创建 `unresolved` Credential；已有 Credential 且候选身份不能比较时返回安全 conflict，不持久化候选 Token。`POST /api/credentials/{id}/rotate-token` 仅对 `account_binding_state=confirmed` 的 Credential 验证并轮换同一账户 Token；同用户已存在 confirmed Credential 时返回安全 conflict，提示启用或轮换原记录。新 Revision 立即成为 current，但只供下一次新的 execution attempt 使用；已开始 attempt 继续 pin 原 Revision。请求体只在 TLS/服务端短时处理 Token；响应只含状态、预计过期时间、binding state 和脱敏验证结果。`PATCH/DELETE /api/credentials/{id}` 修改标签/启停/支付策略或软删除。
 - `POST /api/credentials/{id}/validate` 只读验证当前 Token；`GET/PUT /api/credentials/{id}/booking-profile` 获取脱敏摘要或追加 profile revision。
 - `GET/PUT/DELETE /api/llm/settings` 读写当前用户完整 Provider；`POST /api/llm/test` 仅由用户主动调用，并执行 SSRF 校验。
 
