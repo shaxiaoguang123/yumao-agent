@@ -237,6 +237,43 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(wrong.status_code, 401)
         self.assertEqual(wrong.get_json(), unknown.get_json())
 
+    def test_invalid_login_usernames_use_only_a_bounded_rate_limit_key(self) -> None:
+        invalid_usernames = (
+            "x" * 5000,
+            "bad\u0000name",
+            {"username": "Alice"},
+        )
+        with patch("backend.api.auth.verify_password", return_value=False) as verify:
+            responses = [
+                self.client.post(
+                    "/api/auth/login",
+                    json={"username": username, "password": "some strong test password"},
+                    headers=self._origin_headers(),
+                )
+                for username in invalid_usernames
+            ]
+
+        self.assertTrue(all(response.status_code == 401 for response in responses))
+        self.assertTrue(all(
+            response.get_json() == {"error": "invalid_credentials"}
+            for response in responses
+        ))
+        self.assertEqual(verify.call_count, len(invalid_usernames))
+        conn = self.db.connect_database(self.database_path, BUSY_TIMEOUT_MS)
+        try:
+            keys = conn.execute(
+                "SELECT bucket_type, bucket_key FROM auth_attempts WHERE event_type='login'"
+            ).fetchall()
+        finally:
+            conn.close()
+        username_keys = [row["bucket_key"] for row in keys if row["bucket_type"] == "normalized_username"]
+        pair_keys = [row["bucket_key"] for row in keys if row["bucket_type"] == "username_source_ip"]
+        self.assertEqual(username_keys, ["<invalid-username>"] * len(invalid_usernames))
+        self.assertEqual(
+            pair_keys,
+            ["<invalid-username>\x00127.0.0.1"] * len(invalid_usernames),
+        )
+
     def test_auth_json_body_limit_rejects_oversized_login_before_parsing(self) -> None:
         response = self.client.post(
             "/api/auth/login",

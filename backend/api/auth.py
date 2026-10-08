@@ -150,6 +150,17 @@ def _password_change_buckets(user_id: str, source_ip: str) -> list[RateLimitBuck
     ]
 
 
+def _login_username_key(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    if any(unicodedata.category(character).startswith("C") for character in value):
+        return ""
+    normalized = normalize_username(value)
+    if not 3 <= len(normalized) <= 64:
+        return ""
+    return normalized
+
+
 def _limited_response(retry_after_seconds: int):
     response = jsonify({"error": "rate_limited"})
     response.status_code = 429
@@ -236,7 +247,7 @@ def login():
     assert body is not None
     username = body.get("username")
     password = body.get("password")
-    normalized = normalize_username(username) if isinstance(username, str) else ""
+    normalized = _login_username_key(username)
     username_bucket = normalized or "<invalid-username>"
     source_ip = request.remote_addr or "unknown"
     now_utc_ms = _now_utc_ms()
