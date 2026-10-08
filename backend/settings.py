@@ -48,6 +48,10 @@ class AppSettings:
     login_pair_window_seconds: int = 900
     register_ip_attempt_limit: int = 10
     register_ip_window_seconds: int = 3600
+    password_change_user_attempt_limit: int = 5
+    password_change_user_window_seconds: int = 900
+    password_change_ip_attempt_limit: int = 30
+    password_change_ip_window_seconds: int = 900
 
 
 def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
@@ -225,4 +229,16 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         login_pair_window_seconds=_positive_int(source, "LOGIN_PAIR_WINDOW_SECONDS", 900),
         register_ip_attempt_limit=_positive_int(source, "REGISTER_IP_ATTEMPT_LIMIT", 10),
         register_ip_window_seconds=_positive_int(source, "REGISTER_IP_WINDOW_SECONDS", 3600),
+        password_change_user_attempt_limit=_positive_int(
+            source, "PASSWORD_CHANGE_USER_ATTEMPT_LIMIT", 5
+        ),
+        password_change_user_window_seconds=_positive_int(
+            source, "PASSWORD_CHANGE_USER_WINDOW_SECONDS", 900
+        ),
+        password_change_ip_attempt_limit=_positive_int(
+            source, "PASSWORD_CHANGE_IP_ATTEMPT_LIMIT", 30
+        ),
+        password_change_ip_window_seconds=_positive_int(
+            source, "PASSWORD_CHANGE_IP_WINDOW_SECONDS", 900
+        ),
     )

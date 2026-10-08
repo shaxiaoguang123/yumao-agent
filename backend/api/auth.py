@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import json
 import time
 import unicodedata
 from typing import Callable
@@ -15,15 +16,31 @@ from backend.db import connect_database
 
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
+_MAX_AUTH_JSON_BODY_BYTES = 16 * 1024
 
 
 def _now_utc_ms() -> int:
     return time.time_ns() // 1_000_000
 
 
-def _json_body() -> dict:
-    value = request.get_json(silent=True)
-    return value if isinstance(value, dict) else {}
+def _json_body() -> tuple[dict | None, object | None]:
+    if not request.is_json:
+        return None, _error("invalid_request", 400)
+    if request.content_length is not None and request.content_length > _MAX_AUTH_JSON_BODY_BYTES:
+        return None, _error("request_too_large", 413)
+    try:
+        raw = request.stream.read(_MAX_AUTH_JSON_BODY_BYTES + 1)
+    except Exception:
+        return None, _error("invalid_request", 400)
+    if len(raw) > _MAX_AUTH_JSON_BODY_BYTES:
+        return None, _error("request_too_large", 413)
+    try:
+        value = json.loads(raw.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None, _error("invalid_request", 400)
+    if not isinstance(value, dict):
+        return None, _error("invalid_request", 400)
+    return value, None
 
 
 def _error(code: str, status: int):
@@ -113,6 +130,26 @@ def _login_buckets(event_type: str, username_key: str, source_ip: str) -> list[R
     return buckets
 
 
+def _password_change_buckets(user_id: str, source_ip: str) -> list[RateLimitBucket]:
+    settings = current_app.extensions["app_settings"]
+    return [
+        RateLimitBucket(
+            "password_change",
+            "user_id",
+            user_id,
+            settings.password_change_user_attempt_limit,
+            settings.password_change_user_window_seconds,
+        ),
+        RateLimitBucket(
+            "password_change",
+            "source_ip",
+            source_ip,
+            settings.password_change_ip_attempt_limit,
+            settings.password_change_ip_window_seconds,
+        ),
+    ]
+
+
 def _limited_response(retry_after_seconds: int):
     response = jsonify({"error": "rate_limited"})
     response.status_code = 429
@@ -144,7 +181,10 @@ def session_status():
 
 @auth_bp.post("/register")
 def register():
-    body = _json_body()
+    body, body_error = _json_body()
+    if body_error is not None:
+        return body_error
+    assert body is not None
     source_ip = request.remote_addr or "unknown"
     settings = current_app.extensions["app_settings"]
     decision = current_app.extensions["rate_limit_service"].check_and_record(
@@ -190,7 +230,10 @@ def register():
 
 @auth_bp.post("/login")
 def login():
-    body = _json_body()
+    body, body_error = _json_body()
+    if body_error is not None:
+        return body_error
+    assert body is not None
     username = body.get("username")
     password = body.get("password")
     normalized = normalize_username(username) if isinstance(username, str) else ""
@@ -270,7 +313,20 @@ def logout():
 @require_session
 @require_csrf
 def change_password():
-    body = _json_body()
+    user_id = g.session_context.user.user_id
+    attempt_at_utc_ms = _now_utc_ms()
+    rate_decision = current_app.extensions["rate_limit_service"].check_and_record(
+        "password_change",
+        _password_change_buckets(user_id, request.remote_addr or "unknown"),
+        attempt_at_utc_ms,
+    )
+    if not rate_decision.allowed:
+        return _limited_response(rate_decision.retry_after_seconds)
+
+    body, body_error = _json_body()
+    if body_error is not None:
+        return body_error
+    assert body is not None
     current_password = body.get("current_password")
     new_password = body.get("new_password")
     if not isinstance(current_password, str) or not isinstance(new_password, str):
@@ -278,7 +334,6 @@ def change_password():
 
     database_path = current_app.config["DATABASE_PATH"]
     busy_timeout_ms = current_app.config["SQLITE_BUSY_TIMEOUT_MS"]
-    user_id = g.session_context.user.user_id
     conn = connect_database(database_path, busy_timeout_ms)
     try:
         row = conn.execute(

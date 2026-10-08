@@ -237,6 +237,28 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(wrong.status_code, 401)
         self.assertEqual(wrong.get_json(), unknown.get_json())
 
+    def test_auth_json_body_limit_rejects_oversized_login_before_parsing(self) -> None:
+        response = self.client.post(
+            "/api/auth/login",
+            data='{"username":"' + ("x" * 17_000) + '","password":"some strong test password"}',
+            content_type="application/json",
+            headers=self._origin_headers(),
+        )
+
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.get_json(), {"error": "request_too_large"})
+
+    def test_auth_json_rejects_non_object_body(self) -> None:
+        response = self.client.post(
+            "/api/auth/login",
+            data="[]",
+            content_type="application/json",
+            headers=self._origin_headers(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json(), {"error": "invalid_request"})
+
     def test_unknown_user_uses_one_versioned_dummy_hash_verification(self) -> None:
         with patch("backend.api.auth.verify_password", return_value=False) as verify:
             response = self.client.post(
@@ -585,6 +607,44 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "current_password_invalid")
         self.assertTrue(self.client.get("/api/auth/session").get_json()["authenticated"])
+
+    def test_password_change_attempts_are_rate_limited_per_user_before_password_verification(self) -> None:
+        self._insert_user("user-1", "Alice", "alice correct test password")
+        limited_app = _module("backend.app").create_app({
+            **self.config,
+            "PASSWORD_CHANGE_USER_ATTEMPT_LIMIT": 1,
+            "PASSWORD_CHANGE_USER_WINDOW_SECONDS": 900,
+            "PASSWORD_CHANGE_IP_ATTEMPT_LIMIT": 10,
+            "PASSWORD_CHANGE_IP_WINDOW_SECONDS": 900,
+        })
+        client = limited_app.test_client()
+        login = client.post(
+            "/api/auth/login",
+            json={"username": "Alice", "password": "alice correct test password"},
+            headers=self._origin_headers(),
+        )
+        self.assertEqual(login.status_code, 200)
+        csrf = login.get_json()["csrf_token"]
+        body = {
+            "current_password": "wrong current password",
+            "new_password": "alice newer strong password",
+        }
+
+        with patch("backend.api.auth.verify_password", return_value=False) as verify:
+            first = self._post_with_csrf(
+                client, "/api/auth/change-password", csrf, json=body,
+                environ_overrides={"REMOTE_ADDR": "198.51.100.10"},
+            )
+            second = self._post_with_csrf(
+                client, "/api/auth/change-password", csrf, json=body,
+                environ_overrides={"REMOTE_ADDR": "198.51.100.11"},
+            )
+
+        self.assertEqual(first.status_code, 400)
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.get_json()["error"], "rate_limited")
+        self.assertGreaterEqual(int(second.headers["Retry-After"]), 1)
+        verify.assert_called_once()
 
     def test_old_session_and_csrf_pair_cannot_reach_protected_mutation_after_rotation(self) -> None:
         self._insert_user("user-1", "Alice", "alice correct test password")
