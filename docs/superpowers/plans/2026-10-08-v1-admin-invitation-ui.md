@@ -35,8 +35,16 @@ The architecture document mentions invitation list/status and revoke routes, but
 - Keep this iteration separate from `feature/03-reservation-intent`. Preserve that existing worktree and its plan commit. Do not develop on `main`.
 - The primary checkout has an uncommitted local-run documentation change and three unrelated untracked files. Preserve them; never use `git clean`, reset, or broad staging.
 - Commit Task 1 and Task 2 separately using only their exact file lists. Task 3 is acceptance/integration-only and has no feature commit.
+- Plan checkbox/status updates are optional. If tracked updates are made, save them in an exact-path documentation-only commit separate from Task code commits; alternatively use a separate execution record. No uncommitted plan edits may remain at integration.
 - Do not stage `.env`, `req/`, databases/WAL, logs, browser state, invitation codes, or generated frontend output. Tests use synthetic accounts/codes and mocked HTTP; no real invitation is created.
-- After tests and independent review, present the result and wait for explicit user approval before integrating. If approved, fast-forward merge to `main`; create `v1-admin-invitations-ui` only if the user explicitly approves that milestone tag. After this merge, rebase the preserved `feature/03-reservation-intent` branch onto the updated `main` and rerun its complete acceptance before implementing or integrating that feature.
+- After Admin UI tests and independent review, present the result and wait for explicit user approval before integrating. If approved, fast-forward merge to `main`; create `v1-admin-invitations-ui` only if the user explicitly approves that milestone tag.
+- After that merge, preserve `feature/03-reservation-intent`. Rebase it onto updated `main` only if its worktree is clean; otherwise stop and preserve its changes. Before ReservationIntent implementation, run only the existing baseline:
+
+  `conda run -n test python -m unittest discover -s backend/tests -v`
+
+  `cd frontend && npm ci && npm test -- --run && npm run build`
+
+  The backend suite includes v4 schema-readiness/migration checks on temporary databases. Do not require not-yet-implemented ReservationIntent tests or schema v5 at this handoff and do not migrate the configured application database. Tasks 0–5 then implement ReservationIntent; full new-feature acceptance belongs to its Task 6.
 
 ## Global Constraints
 
@@ -178,7 +186,7 @@ The architecture document mentions invitation list/status and revoke routes, but
 
 - [ ] **Step 4: Fast-forward integration after approval**
 
-  Recheck the latest local `main`; rebase this branch if needed and repeat backend tests, frontend tests, production build, `git diff --check main...HEAD`, and `git status --short`. With explicit approval, merge using `git merge --ff-only feature/admin-invitations-ui`. Create `v1-admin-invitations-ui` only if the user explicitly approves that tag. Preserve `feature/03-reservation-intent`; after the admin merge, rebase it onto the new `main` and rerun its full acceptance before implementation or integration.
+  Recheck the latest local `main`; ensure this feature worktree is clean and the primary checkout can fast-forward without overwriting tracked changes. If a local change would be overwritten or the merge refuses, stop and preserve it; do not stash/reset/clean automatically. Rebase this branch if main advanced, then repeat backend tests, frontend tests, production build, `git diff --check main...HEAD`, and `git status --short`. With explicit approval, merge using `git merge --ff-only feature/admin-invitations-ui`. Create `v1-admin-invitations-ui` only if the user explicitly approves that tag. Preserve `feature/03-reservation-intent`; after the admin merge, rebase it onto the new `main` only if clean, then run its baseline regression tests/schema readiness checks before starting Tasks 0–5.
 
 ## Follow-On Boundaries
 
