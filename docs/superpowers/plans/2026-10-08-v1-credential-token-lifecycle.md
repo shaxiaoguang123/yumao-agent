@@ -401,42 +401,45 @@
 - Create: `frontend/src/views/CredentialView.vue`
 - Create: `frontend/src/api/credentials.test.js`
 - Create: `frontend/src/views/CredentialView.test.js`
+- Modify: `frontend/src/main.js` to provide the Credential API bound to the authenticated SessionStore request transport.
+- Modify: `frontend/src/stores/session.js` and `frontend/src/stores/session.test.js` to expose and verify that in-memory request bridge.
 - Modify: `frontend/src/router.js`
+- Modify: `frontend/src/router.test.js` to verify the protected Credential route.
 - Modify: `frontend/src/App.vue`
 - Modify: `frontend/src/views/HomeView.vue`
 
 **Interfaces:**
 
-- Credential API helpers use the existing HTTP client, `credentials: include`, and in-memory CSRF behavior; no Token, CSRF, or account identifier enters browser storage, query parameters, router state, or logs.
+- Credential API helpers use the request bridge from the existing SessionStore client, preserving `credentials: include`, Session invalidation, and in-memory CSRF behavior; no Token, CSRF, or account identifier enters browser storage, query parameters, router state, or logs.
 - The view supports create, list, current Token validation, confirmed-only rotation, enable/disable, and soft delete. It clears Token fields after success, failure, cancel, or navigation.
 - Display `account_binding_state` separately from expiry and Token validation. Show latest requested attempt with started/completed time and last successful validation separately. Explain `unresolved`/`needs_reconfirmation` restrictions; show only current-user same-account conflict guidance. Do not offer duplicate-confirmation controls.
 - Home shows only current user's Credential expiry/binding warnings. `expiring_soon` is a reminder; `needs_reconfirmation` blocks account-bound future work. The view does not implement any booking or job controls.
 
-- [ ] **Step 1: Install the checked-in frontend dependency lock**
+- [x] **Step 1: Install the checked-in frontend dependency lock**
 
   From `frontend/`, run `npm ci`. This new UI reuses the existing package manifest and lockfile; do not treat a missing Vitest binary as an expected red test.
 
-- [ ] **Step 2: Write failing API helper and view tests**
+- [x] **Step 2: Write failing API helper and view tests**
 
   Cover initial list/create/validate/rotate/enable/disable/delete flows, busy/error/loading state, Token input clearing, unresolved/reconfirmation controls, latest-requested vs last-success display, same-account conflict behavior, and prohibition on Token/account-fingerprint placement in local/session storage or URLs.
 
-- [ ] **Step 3: Run frontend tests and confirm expected failures**
+- [x] **Step 3: Run frontend tests and confirm expected failures**
 
   From `frontend/`, run `npm test -- --run`.
 
   Expected: existing identity UI tests pass; new Credential view/API assertions fail because the view and helper are not implemented.
 
-- [ ] **Step 4: Implement route/navigation and Credential view**
+- [x] **Step 4: Implement route/navigation and Credential view**
 
   Add an authenticated `/credentials` route and visible navigation. Keep application auth error handling unchanged; upstream validation errors use non-401 result codes.
 
-- [ ] **Step 5: Run frontend tests and production build**
+- [x] **Step 5: Run frontend tests and production build**
 
   Run: `cd frontend && npm test -- --run`; then run `cd frontend && npm run build`.
 
   Expected: focused Credential tests and all existing frontend tests pass; build succeeds. Do not commit `frontend/dist/` or `frontend/node_modules/`.
 
-- [ ] **Step 6: Commit the frontend**
+- [x] **Step 6: Commit the frontend**
 
   Commit only the named Vue/JS/test files as `feat: add credential management UI`.
 

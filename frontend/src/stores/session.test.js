@@ -18,6 +18,16 @@ const authenticatedResponse = {
 };
 
 describe('Session store', () => {
+  it('exposes a request bridge to the same in-memory authenticated HTTP client', async () => {
+    const createSessionStore = await loadSessionStore();
+    const client = makeClient();
+    const store = createSessionStore({ client });
+
+    await store.request('/api/credentials');
+
+    expect(client.request).toHaveBeenCalledWith('/api/credentials', undefined);
+  });
+
   it('refreshes an authenticated Session into memory', async () => {
     const createSessionStore = await loadSessionStore();
     const client = makeClient();

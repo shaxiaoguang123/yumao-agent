@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import AccountView from './views/AccountView.vue';
+import CredentialView from './views/CredentialView.vue';
 import HomeView from './views/HomeView.vue';
 import InviteRegisterView from './views/InviteRegisterView.vue';
 import LoginView from './views/LoginView.vue';
@@ -20,6 +21,12 @@ export function createAppRouter(sessionStore, history = createWebHistory()) {
         path: '/account',
         name: 'account',
         component: AccountView,
+        meta: { requiresAuth: true },
+      },
+      {
+        path: '/credentials',
+        name: 'credentials',
+        component: CredentialView,
         meta: { requiresAuth: true },
       },
       { path: '/:pathMatch(.*)*', redirect: { name: 'home' } },

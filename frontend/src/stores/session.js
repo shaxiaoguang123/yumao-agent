@@ -31,6 +31,8 @@ export function createSessionStore({ client: providedClient } = {}) {
     },
   });
 
+  store.request = (path, options) => client.request(path, options);
+
   function acceptSession(payload) {
     store.user = payload.user;
     store.csrfToken = payload.csrf_token;

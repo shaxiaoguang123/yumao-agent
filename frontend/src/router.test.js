@@ -84,4 +84,35 @@ describe('auth router guard', () => {
     expect(store.refresh).toHaveBeenCalledOnce();
     expect(router.currentRoute.value.name).toBe('login');
   });
+
+  it('protects the Credential route and permits it after an authenticated refresh', async () => {
+    const createAppRouter = await loadRouterFactory();
+    const store = makeStore();
+    store.status = 'unauthenticated';
+    store.refresh.mockImplementation(async () => {
+      store.status = 'authenticated';
+      store.initialRefreshComplete = true;
+    });
+    const router = createAppRouter(store, createMemoryHistory());
+
+    await router.push('/credentials');
+
+    expect(store.refresh).toHaveBeenCalledOnce();
+    expect(router.currentRoute.value.name).toBe('credentials');
+    expect(router.currentRoute.value.meta.requiresAuth).toBe(true);
+  });
+
+  it('redirects an anonymous visitor away from the Credential route', async () => {
+    const createAppRouter = await loadRouterFactory();
+    const store = makeStore();
+    store.refresh.mockImplementation(async () => {
+      store.status = 'unauthenticated';
+      store.initialRefreshComplete = true;
+    });
+    const router = createAppRouter(store, createMemoryHistory());
+
+    await router.push('/credentials');
+
+    expect(router.currentRoute.value.name).toBe('login');
+  });
 });
