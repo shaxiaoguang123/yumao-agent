@@ -36,7 +36,7 @@ def _json_body() -> tuple[dict | None, object | None]:
         return None, _error("request_too_large", 413)
     try:
         value = json.loads(raw.decode("utf-8", errors="strict"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         return None, _error("invalid_request", 400)
     if not isinstance(value, dict):
         return None, _error("invalid_request", 400)

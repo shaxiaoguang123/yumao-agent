@@ -259,6 +259,21 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json(), {"error": "invalid_request"})
 
+    def test_auth_json_reports_parser_limit_errors_as_invalid_request(self) -> None:
+        oversized_integer = '{"username":"Alice","password":"some strong test password","value":' + ("9" * 5000) + "}"
+        deeply_nested = '{"username":"Alice","password":"some strong test password","value":' + ("{" * 1400) + '"end":true' + ("}" * 1400) + "}"
+
+        for body in (oversized_integer, deeply_nested):
+            with self.subTest(body_bytes=len(body)):
+                response = self.client.post(
+                    "/api/auth/login",
+                    data=body,
+                    content_type="application/json",
+                    headers=self._origin_headers(),
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.get_json(), {"error": "invalid_request"})
+
     def test_unknown_user_uses_one_versioned_dummy_hash_verification(self) -> None:
         with patch("backend.api.auth.verify_password", return_value=False) as verify:
             response = self.client.post(
