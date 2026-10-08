@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import AccountView from './views/AccountView.vue';
+import AdminInvitationsView from './views/AdminInvitationsView.vue';
 import CredentialView from './views/CredentialView.vue';
 import HomeView from './views/HomeView.vue';
 import InviteRegisterView from './views/InviteRegisterView.vue';
@@ -29,6 +30,12 @@ export function createAppRouter(sessionStore, history = createWebHistory()) {
         component: CredentialView,
         meta: { requiresAuth: true },
       },
+      {
+        path: '/admin/invitations',
+        name: 'admin-invitations',
+        component: AdminInvitationsView,
+        meta: { requiresAuth: true, requiresAdmin: true },
+      },
       { path: '/:pathMatch(.*)*', redirect: { name: 'home' } },
     ],
   });
@@ -45,6 +52,15 @@ export function createAppRouter(sessionStore, history = createWebHistory()) {
 
     if (to.meta.requiresAuth && sessionStore.status === 'unauthenticated') {
       return { name: 'login', replace: true };
+    }
+    if (
+      to.meta.requiresAdmin
+      && (
+        sessionStore.status !== 'authenticated'
+        || sessionStore.user?.role !== 'admin'
+      )
+    ) {
+      return { name: 'home', replace: true };
     }
     if (
       (to.name === 'login' || to.name === 'register')
