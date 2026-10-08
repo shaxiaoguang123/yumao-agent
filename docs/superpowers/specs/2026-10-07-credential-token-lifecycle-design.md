@@ -1,7 +1,7 @@
 # V1 Credential and Token Lifecycle Design
 
 - Date: 2026-10-07
-- Status: Design approved / implementation plan pending review
+- Status: Design approved / V1 implementation complete
 - Parent architecture: [V1 Final Architecture Spec](2026-10-07-multiuser-booking-design.md)
 - Predecessor milestone: V1 Identity and App Foundation, tag `v1-identity-foundation`
 

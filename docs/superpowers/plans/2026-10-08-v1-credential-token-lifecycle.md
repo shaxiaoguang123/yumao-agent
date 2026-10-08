@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **Plan status:** V1 Credential and Token Lifecycle Implementation Plan / Ready for Execution
+> **Plan status:** V1 Credential and Token Lifecycle Implementation Plan / Completed
 
 **Goal:** Implement user-owned Credentials and safe Token lifecycle management on the existing Flask/Vue/SQLite identity foundation, including read-only upstream validation, revocable encrypted Token revisions, explicit account binding state, and a shared SQLite request gate.
 
@@ -81,19 +81,19 @@
 - `account_continuity_capability` is true only if the observed identity field is a defensible same-account continuity signal in the available samples and official flow. Do not require proof of global uniqueness or future permanence; explicitly record those remain unproven.
 - The request minimum interval is endpoint-specific. If evidence does not identify a safe `getUserInfo` interval, leave the runtime gate unconfigured and keep validation disabled; do not borrow the approximately 668 ms observation, because it was not identified as this endpoint.
 
-- [ ] **Step 1: Inspect only the local capture/source metadata and required in-memory fields**
+- [x] **Step 1: Inspect only the local capture/source metadata and required in-memory fields**
 
   Read the local primary-checkout `req/` files in memory. If local capture decryption is required, use only the already-provisioned local environment through a process that never prints or logs the decryption value or decrypted payload. Do not copy ignored captures into this branch or temporary repository files.
 
-- [ ] **Step 2: Record the request and success contract without sensitive values**
+- [x] **Step 2: Record the request and success contract without sensitive values**
 
   Confirm the observed method/path/header/body shape, HTTP status, JSON envelope, success/message/resultData combination, identity field name and official frontend use. Record invalid-Token response semantics and `getUserInfo` timing only when directly evidenced. Do not include Token values, JWT claims/payload, identity values, raw bodies, cookies, or authorization header contents.
 
-- [ ] **Step 3: Record capability results and stop conditions**
+- [x] **Step 3: Record capability results and stop conditions**
 
   Write the sanitized evidence note. If `token_validation_capability` is unsupported, stop before Tasks 1–8 and report the missing local evidence; do not make a live request. If Token validation is supported but account continuity is not, set the implementation to unresolved-only capability and continue. If the endpoint-specific request interval is not evidenced, keep `UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS` unconfigured and preserve the `503` disabled behavior.
 
-- [ ] **Step 4: Review and commit the safe evidence note**
+- [x] **Step 4: Review and commit the safe evidence note**
 
   Run `git diff --check`, inspect the note for sensitive values, and commit only the new evidence note as `docs: record getUserInfo contract evidence`.
 
@@ -124,31 +124,31 @@
 - Token revision rows hold immutable version/exp/fingerprint/initial-validation facts and encrypted envelope metadata. Observation rows hold only safe result enums, status class, attempt order/times, gate owner/epoch, and snapshot/apply state. Neither rows nor indexes contain raw identity or Token data.
 - Composite foreign keys include `user_id`. Indexes support user-scoped list/current-revision lookups, same-user fingerprint checks across retained key versions, and gate lease state. There is no cross-user account-fingerprint UNIQUE constraint.
 
-- [ ] **Step 1: Write failing keyring settings tests**
+- [x] **Step 1: Write failing keyring settings tests**
 
   Add a test-only `credential_test_settings` helper and update the existing auth API/flow app fixtures to use synthetic keyrings. Add tests for valid canonical 32-byte keys, malformed/noncanonical base64url, wrong decoded lengths, duplicate IDs rejected before mapping creation, empty keyring, missing active ID, active ID absent, key-ID validation, cross-ring material reuse, repr/Flask-config redaction, and accepted printable bytes (no entropy heuristic). Add tests for timeout ordering, response-size bounds, Retry-After fallback/max, optional upstream interval parsing, the 604800-second default/positive configured Token reminder window, and invalid settings.
 
-- [ ] **Step 2: Write failing schema-v2 migration/readiness tests**
+- [x] **Step 2: Write failing schema-v2 migration/readiness tests**
 
   Test all required Credential columns/tables, state CHECK constraints, same-user composite foreign keys, revision uniqueness, the single seeded `getUserInfo` gate row required for readiness, `foreign_key_check`, and `CURRENT_SCHEMA_VERSION=2`. Confirm the existing `0001_identity.sql` remains byte-for-byte unchanged and old identity data survives migration. Key-dependency startup tests are owned by Task 5, after the dependency checker exists.
 
-- [ ] **Step 3: Run the focused tests and confirm expected failures**
+- [x] **Step 3: Run the focused tests and confirm expected failures**
 
   Run focused tests with `conda run -n test python -m unittest discover -s backend/tests -p '<test_file>.py' -v` for `test_settings.py`, `test_db.py`, `test_app_factory.py`, `test_auth_api.py`, and `test_auth_flow.py`.
 
   Expected: existing Identity Foundation tests continue to pass; new Credential settings and schema assertions fail because the fields, version-2 migration, and readiness checks are not implemented.
 
-- [ ] **Step 4: Implement strict settings and migration**
+- [x] **Step 4: Implement strict settings and migration**
 
   Extend `AppSettings` with parsed keyring material and upstream limits; keep all raw keyring configuration out of `Flask.config`. Add `0002_credentials.sql`, update the readiness column/table contract, and preserve explicit migration/checksum behavior. Keep SQL DDL and the new migration file limited to this Task's schema.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
   Run the same five `unittest discover` commands from Step 3.
 
   Expected: all existing identity tests and new schema/settings tests pass with temporary databases and synthetic config only.
 
-- [ ] **Step 6: Commit the complete configuration/schema unit**
+- [x] **Step 6: Commit the complete configuration/schema unit**
 
   Stage the exact settings, keyring parser, app-factory, DB/readiness, migration, test settings helper, the named test files, and this plan update. Commit as `feat: add credential schema and settings`.
 
@@ -169,31 +169,31 @@
 - `token_fingerprint(token: str, keyring: CredentialKeyring) -> VersionedFingerprint` uses `credential-token-v1`; `account_fingerprint(identity_bytes: bytes, keyring: CredentialKeyring) -> VersionedFingerprint` uses `upstream-account-v1`. Account identity input is exact UTF-8 bytes with unambiguous length/domain framing; never normalize it.
 - `CredentialTokenCipher.encrypt(plaintext: bytes, *, user_id: str, credential_id: str, revision_id: str, key_id: str) -> EncryptedTokenEnvelope` and `.decrypt(envelope, same_context) -> bytes` use AES-256-GCM, a fresh 12-byte nonce, 16-byte tag, and AAD binding all row IDs plus key ID.
 
-- [ ] **Step 1: Write failing JWT and fingerprint tests**
+- [x] **Step 1: Write failing JWT and fingerprint tests**
 
   Cover valid `exp`, missing/malformed JWT, bool, NaN/Infinity, numeric range and millisecond conversion boundaries, expiry-at-now, exact 604800-second `expiring_soon` window boundary, exact-byte identity input, domain separation, deterministic fingerprints, and key-version metadata. Service-level current-token comparison behavior is tested in Task 5.
 
-- [ ] **Step 2: Write failing AES-GCM envelope tests**
+- [x] **Step 2: Write failing AES-GCM envelope tests**
 
   Cover round-trip, nonce uniqueness, exact 12-byte nonce/16-byte tag, changed user/Credential/revision/key context, ciphertext/tag tampering, unavailable encryption key, and no plaintext/payload in dataclass repr or errors.
 
-- [ ] **Step 3: Run the focused tests and confirm expected failures**
+- [x] **Step 3: Run the focused tests and confirm expected failures**
 
   Run: `conda run -n test python -m unittest discover -s backend/tests -p 'test_credential_tokens.py' -v`, then repeat with `test_credential_crypto.py`.
 
   Expected: the new module/interface assertions fail because the Credential token primitives do not exist yet.
 
-- [ ] **Step 4: Implement token primitives and cipher**
+- [x] **Step 4: Implement token primitives and cipher**
 
   Use Python standard-library JSON/base64/hashlib/hmac plus the existing PyCryptodome AES dependency. Do not implement a custom cipher, unkeyed account hash, printable-byte entropy heuristic, or second fingerprint keyring.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
   Run the same two `unittest discover` commands from Step 3.
 
   Expected: all synthetic token, malformed-exp, fingerprint, and encryption tests pass without reading environment secrets.
 
-- [ ] **Step 6: Commit the Token primitives**
+- [x] **Step 6: Commit the Token primitives**
 
   Commit only `backend/credentials/tokens.py`, `backend/credentials/crypto.py`, and the two tests as `feat: add credential token cryptography`; `__init__.py` and `keyring.py` were committed in Task 1.
 
@@ -213,27 +213,27 @@
 - Transport streams the body, enforces `upstream_max_response_bytes`, uses finite connect/read timeouts, checks `time.monotonic()` between chunks/before new reads, and closes after total deadline. One active blocking read may overrun by at most its configured read timeout plus scheduling overhead.
 - HTTP status plus the exact observed JSON envelope and success/message/resultData combination determines Token validity. Unknown response codes/shapes, unexpected HTTP status, redirects, TLS errors, and transport failures fail closed. A Token-success response with unavailable/unapproved account identity may return valid Token outcome with no identity; it cannot establish a fingerprint.
 
-- [ ] **Step 1: Write failing fake-transport contract tests**
+- [x] **Step 1: Write failing fake-transport contract tests**
 
   Use synthetic responses only. Assert method/path/header/body shape without asserting a real Token, TLS verification, redirect disabled, finite timeout tuple, streaming, maximum response bytes, deadline stop/close behavior, exact success envelope, unknown message/schema failure, identity-field absence handling, and that no raw body/header/free-text enters the result or logs.
 
-- [ ] **Step 2: Run the fake-transport tests and confirm expected failures**
+- [x] **Step 2: Run the fake-transport tests and confirm expected failures**
 
   Run: `conda run -n test python -m unittest discover -s backend/tests -p 'test_credential_upstream.py' -v`.
 
   Expected: contract and transport assertions fail because the adapter does not exist; all tests must use fakes and make zero network requests.
 
-- [ ] **Step 3: Implement bounded transport and contract parsing**
+- [x] **Step 3: Implement bounded transport and contract parsing**
 
   Use existing `requests`; disable redirects and keep TLS verification on. Stream response bytes and check the monotonic deadline between chunks. Do not add a thread pool/custom socket layer to promise exact interruption of an already-blocked read.
 
-- [ ] **Step 4: Run focused adapter tests**
+- [x] **Step 4: Run focused adapter tests**
 
   Run the same focused discover command from Step 2.
 
   Expected: all tests use a fake Session/transport and perform zero network access.
 
-- [ ] **Step 5: Commit the adapter**
+- [x] **Step 5: Commit the adapter**
 
   Commit the adapter, contract type, and tests as `feat: add bounded getUserInfo adapter`. The current `requests` dependency is already declared; do not change `requirements.txt` unless implementation demonstrates a concrete missing dependency, then include that exact change in this commit.
 
@@ -259,11 +259,11 @@
 - Lease expiry is `start + total_deadline + safety_margin`, with safety margin at least one configured read timeout plus cleanup allowance. Persist the original `active_started_at_utc_ms`; lease reclaim uses it when appending the old attempt's stale observation before incrementing epoch.
 - Retry-After accepts delta-seconds; HTTP-date is enabled only if Task 0 evidence requires it. Invalid/negative/overflow values use configured fallback. All delays clamp to `max_upstream_backoff_seconds`.
 
-- [ ] **Step 1: Write failing rolling gate/concurrency tests**
+- [x] **Step 1: Write failing rolling gate/concurrency tests**
 
   Cover request-order attempt IDs for permit, rate denial, expired-token and unconfigured preflight denial; prove preflight races are rechecked inside the gate transaction; one service-wide lease across user IDs; minimum interval; backoff monotonic max; delta-seconds/date/fallback/malformed/negative/overflow/max-clamp cases; persisted start time used for stale lease-reclaim observation; lease expiry/margin; stale owner/epoch release; late completion; and SQLite serialization using temporary databases.
 
-- [ ] **Step 2: Run gate tests and confirm expected failures**
+- [x] **Step 2: Run gate tests and confirm expected failures**
 
   Run `conda run -n test python -m unittest discover -s backend/tests -p 'test_credential_request_gate.py' -v`, then repeat with `test_db.py` and `test_app_factory.py`.
 
@@ -273,27 +273,27 @@
 
   Added `active_started_at_utc_ms` to the Gate's persisted active request context and specified that Credential snapshot preflight is re-read inside the same acquisition transaction. Preserved the already-approved gate, ordering, timeout, and retry semantics. Committed as `afd01a9`.
 
-- [ ] **Step 4: Implement migration 0003 and schema-v3 readiness**
+- [x] **Step 4: Implement migration 0003 and schema-v3 readiness**
 
   Add only `active_started_at_utc_ms` and coherence triggers in a new migration. Update schema readiness and existing migration-upgrade/app-factory tests to require schema version 3 while preserving the immutability/checksum of 0001 and 0002.
 
-- [ ] **Step 5: Run the migration/readiness regression tests and confirm green**
+- [x] **Step 5: Run the migration/readiness regression tests and confirm green**
 
   Run the same `test_db.py` and `test_app_factory.py` commands from Step 2.
 
   Expected: migration 0003 applies atomically, the existing schema-v2 and identity data remain intact, and app startup fails on schema 2 without applying migration 0003.
 
-- [ ] **Step 6: Implement the gate with explicit transactions**
+- [x] **Step 6: Implement the gate with explicit transactions**
 
   Use short SQLite `BEGIN IMMEDIATE` transactions for acquire/complete/reclaim; never hold a write transaction while HTTP is in progress. Gate rows contain only internal IDs and safe metadata, not Token, fingerprints, user profile, or raw headers.
 
-- [ ] **Step 7: Run gate tests**
+- [x] **Step 7: Run gate tests**
 
   Run the same focused `test_credential_request_gate.py` command from Step 2.
 
   Expected: concurrent attempts produce one permit and stable request-order IDs; no test performs HTTP.
 
-- [ ] **Step 8: Commit the shared gate and migration**
+- [x] **Step 8: Commit the shared gate and migration**
 
   Commit `request_gate.py`, migration 0003, schema/readiness updates, migration/app-factory test updates, and gate tests as `feat: add shared upstream validation gate`.
 
@@ -506,7 +506,7 @@
 
   Recheck whether local `main` advanced. If yes, rebase the feature branch and repeat all full verification. If not, retain the linear history.
 
-- [ ] **Step 4: Merge and tag only after verification**
+- [x] **Step 4: Merge and tag only after verification**
 
   From the primary checkout on `main`, merge with `git merge --ff-only feature/02-credential-token-lifecycle`. Verify the resulting `main` tree and tests, create tag `v1-credential-token-lifecycle` on that verified commit, then remove the feature branch/worktree. Preserve the primary checkout's unrelated untracked files throughout.
 
