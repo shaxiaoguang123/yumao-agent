@@ -106,7 +106,7 @@ class MigrationTests(unittest.TestCase):
                         "SELECT version FROM schema_migrations ORDER BY version"
                     )
                 ]
-                self.assertEqual(versions, [1, 2])
+                self.assertEqual(versions, [1, 2, 3])
                 self.assertEqual(
                     conn.execute(
                         "SELECT username FROM users WHERE user_id=?", ("user-a",)
@@ -139,6 +139,68 @@ class MigrationTests(unittest.TestCase):
                 self.assertIsNone(conn.execute("PRAGMA foreign_key_check").fetchone())
             finally:
                 conn.close()
+
+    def test_gate_start_timestamp_is_added_by_schema_v3_and_coherent_with_lease_state(self) -> None:
+        migrate_database = _module("backend.migrate").migrate_database
+        db = _module("backend.db")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "gate-start.sqlite3"
+            migrate_database(database_path, BUSY_TIMEOUT_MS)
+            conn = db.connect_database(database_path, BUSY_TIMEOUT_MS)
+            try:
+                columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(upstream_request_gate)")
+                }
+                self.assertIn("active_started_at_utc_ms", columns)
+                row = conn.execute(
+                    "SELECT active_started_at_utc_ms FROM upstream_request_gate WHERE endpoint_key='getUserInfo'"
+                ).fetchone()
+                self.assertIsNone(row[0])
+                with self.assertRaises(sqlite3.IntegrityError):
+                    conn.execute(
+                        "UPDATE upstream_request_gate SET active_started_at_utc_ms=? WHERE endpoint_key='getUserInfo'",
+                        (1234,),
+                    )
+                conn.rollback()
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT active_started_at_utc_ms FROM upstream_request_gate WHERE endpoint_key='getUserInfo'"
+                    ).fetchone()[0],
+                    None,
+                )
+            finally:
+                conn.close()
+
+    def test_schema_v2_remains_readable_without_schema_v3_gate_start_column(self) -> None:
+        db = _module("backend.db")
+        migrate_database = _module("backend.migrate").migrate_database
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            migrations = root / "schema-v2-migrations"
+            migrations.mkdir()
+            shutil.copyfile(REPO_MIGRATIONS / "0001_identity.sql", migrations / "0001_identity.sql")
+            shutil.copyfile(REPO_MIGRATIONS / "0002_credentials.sql", migrations / "0002_credentials.sql")
+            database_path = root / "schema-v2.sqlite3"
+            migrate_database(database_path, BUSY_TIMEOUT_MS, migrations)
+
+            conn = db.connect_database(database_path, BUSY_TIMEOUT_MS)
+            try:
+                columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(upstream_request_gate)")
+                }
+                self.assertNotIn("active_started_at_utc_ms", columns)
+            finally:
+                conn.close()
+
+            self.assertIsNone(db.check_schema_ready(database_path, BUSY_TIMEOUT_MS, 2, migrations))
+            conn = db.connect_database(database_path, BUSY_TIMEOUT_MS)
+            try:
+                conn.execute("DELETE FROM upstream_request_gate WHERE endpoint_key='getUserInfo'")
+                conn.commit()
+            finally:
+                conn.close()
+            with self.assertRaises(db.SchemaNotReadyError):
+                db.check_schema_ready(database_path, BUSY_TIMEOUT_MS, 2, migrations)
 
     def test_credential_binding_state_is_database_constrained(self) -> None:
         migrate_database = _module("backend.migrate").migrate_database
@@ -483,7 +545,7 @@ class SchemaReadinessTests(unittest.TestCase):
                 db.check_schema_ready(database_path, BUSY_TIMEOUT_MS, 1, migrations)
             )
 
-    def test_schema_v2_readiness_requires_single_get_user_info_gate_row(self) -> None:
+    def test_schema_v3_readiness_requires_single_get_user_info_gate_row(self) -> None:
         db = _module("backend.db")
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -504,7 +566,7 @@ class SchemaReadinessTests(unittest.TestCase):
                 conn.close()
 
             with self.assertRaises(db.SchemaNotReadyError):
-                db.check_schema_ready(database_path, BUSY_TIMEOUT_MS, 2, migrations)
+                db.check_schema_ready(database_path, BUSY_TIMEOUT_MS, 3, migrations)
 
             conn = db.connect_database(database_path, BUSY_TIMEOUT_MS)
             try:

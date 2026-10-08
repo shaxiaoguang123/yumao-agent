@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 _MIGRATION_NAME_RE = re.compile(r"\A(?P<version>[0-9]{4})_[a-z0-9_]+\.sql\Z")
 
 _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
@@ -58,6 +58,7 @@ _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
     }),
     "upstream_request_gate": frozenset({
         "endpoint_key", "lease_owner_id", "lease_epoch", "lease_expires_at_utc_ms",
+        "active_started_at_utc_ms",
         "next_validation_attempt_id", "active_validation_attempt_id", "active_user_id",
         "active_credential_id", "active_operation_kind", "active_credential_version_snapshot",
         "active_token_revision_snapshot_id", "next_allowed_at_utc_ms",
@@ -213,6 +214,10 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
             "upstream_request_gate",
         }
     }
+    if schema_version == 2:
+        required_contract["upstream_request_gate"] = (
+            _REQUIRED_COLUMNS["upstream_request_gate"] - {"active_started_at_utc_ms"}
+        )
     for table_name, required_columns in required_contract.items():
         if table_name not in tables:
             raise SchemaNotReadyError(f"required table is missing: {table_name}")
@@ -297,11 +302,40 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
         for table_name, parent_table, column_map in composite_foreign_keys:
             if not _has_composite_foreign_key(connection, table_name, parent_table, column_map):
                 raise SchemaNotReadyError(f"required tenant-bound foreign key is missing from {table_name}")
-        gate_rows = connection.execute(
+    if schema_version >= 2:
+        gate_count = connection.execute(
             "SELECT COUNT(*) FROM upstream_request_gate WHERE endpoint_key='getUserInfo'"
         ).fetchone()[0]
-        if gate_rows != 1:
+        if gate_count != 1:
             raise SchemaNotReadyError("the shared getUserInfo request-gate row is missing or duplicated")
+
+    if schema_version >= 3:
+        gate_rows = connection.execute(
+            "SELECT lease_owner_id, lease_expires_at_utc_ms, active_started_at_utc_ms, "
+            "active_validation_attempt_id, active_user_id, active_credential_id, "
+            "active_operation_kind, active_credential_version_snapshot, "
+            "active_token_revision_snapshot_id FROM upstream_request_gate "
+            "WHERE endpoint_key='getUserInfo'"
+        ).fetchall()
+        if len(gate_rows) != 1:
+            raise SchemaNotReadyError("the shared getUserInfo request-gate row is missing or duplicated")
+        row = gate_rows[0]
+        active_columns = (
+            "lease_expires_at_utc_ms", "active_started_at_utc_ms",
+            "active_validation_attempt_id", "active_user_id", "active_credential_id",
+            "active_operation_kind", "active_credential_version_snapshot",
+            "active_token_revision_snapshot_id",
+        )
+        if row["lease_owner_id"] is None:
+            if any(row[name] is not None for name in active_columns):
+                raise SchemaNotReadyError("the shared request-gate lease state is incoherent")
+        elif any(row[name] is None for name in (
+            "lease_expires_at_utc_ms", "active_started_at_utc_ms",
+            "active_validation_attempt_id", "active_user_id", "active_operation_kind",
+        )):
+            raise SchemaNotReadyError("the shared request-gate lease state is incoherent")
+        elif row["active_started_at_utc_ms"] > row["lease_expires_at_utc_ms"]:
+            raise SchemaNotReadyError("the shared request-gate lease timestamps are incoherent")
 
 
 def _verify_applied_checksums(

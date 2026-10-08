@@ -97,20 +97,19 @@ class AppFactoryTests(unittest.TestCase):
         with self.assertRaises(db.SchemaNotReadyError):
             _create_app(database_path)
 
-    def test_app_factory_requires_schema_v2_without_running_migrations(self) -> None:
+    def test_app_factory_requires_schema_v3_without_running_migrations(self) -> None:
         db = _module("backend.db")
         migrate_database = _module("backend.migrate").migrate_database
         root = Path(_TEST_ROOT.name)
         database_path = root / "legacy-schema.sqlite3"
-        legacy_migrations = root / "legacy-migrations"
-        legacy_migrations.mkdir()
-        shutil.copyfile(
-            Path(__file__).resolve().parents[1] / "migrations" / "0001_identity.sql",
-            legacy_migrations / "0001_identity.sql",
-        )
-        migrate_database(database_path, 5000, legacy_migrations)
+        schema_v2_migrations = root / "schema-v2-migrations"
+        schema_v2_migrations.mkdir()
+        migration_dir = Path(__file__).resolve().parents[1] / "migrations"
+        for name in ("0001_identity.sql", "0002_credentials.sql"):
+            shutil.copyfile(migration_dir / name, schema_v2_migrations / name)
+        migrate_database(database_path, 5000, schema_v2_migrations)
 
-        self.assertEqual(db.CURRENT_SCHEMA_VERSION, 2)
+        self.assertEqual(db.CURRENT_SCHEMA_VERSION, 3)
         with self.assertRaises(db.SchemaNotReadyError):
             _create_app(database_path)
 
@@ -121,7 +120,7 @@ class AppFactoryTests(unittest.TestCase):
                     "SELECT version FROM schema_migrations ORDER BY version"
                 )
             ]
-            self.assertEqual(versions, [1])
+            self.assertEqual(versions, [1, 2])
         finally:
             conn.close()
 
