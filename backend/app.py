@@ -18,6 +18,15 @@ from backend.db import CURRENT_SCHEMA_VERSION, check_schema_ready
 from backend.settings import load_settings
 
 
+_SECRET_CONFIG_KEYS = {
+    "CSRF_HMAC_SECRET",
+    "APP_CREDENTIAL_ENCRYPTION_KEYS",
+    "APP_CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID",
+    "APP_UPSTREAM_FINGERPRINT_KEYS",
+    "APP_UPSTREAM_FINGERPRINT_ACTIVE_KEY_ID",
+}
+
+
 def create_app(config: Mapping[str, object] | None = None) -> Flask:
     if config is None:
         settings = load_settings()
@@ -28,7 +37,7 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         flask_overrides = {
             key: value
             for key, value in config.items()
-            if key not in {"CSRF_HMAC_SECRET"}
+            if key not in _SECRET_CONFIG_KEYS
         }
 
     migrations_dir = Path(__file__).resolve().parent / "migrations"

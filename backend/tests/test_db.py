@@ -81,6 +81,133 @@ class SQLiteConnectionTests(unittest.TestCase):
 
 
 class MigrationTests(unittest.TestCase):
+    def test_credential_migration_adds_schema_v2_and_preserves_existing_users(self) -> None:
+        db = _module("backend.db")
+        migrate_database = _module("backend.migrate").migrate_database
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            legacy_migrations = root / "legacy-migrations"
+            _copy_identity_migration(legacy_migrations)
+            database_path = root / "upgrade.sqlite3"
+            migrate_database(database_path, BUSY_TIMEOUT_MS, legacy_migrations)
+
+            conn = db.connect_database(database_path, BUSY_TIMEOUT_MS)
+            try:
+                _insert_user(conn)
+                conn.commit()
+            finally:
+                conn.close()
+
+            migrate_database(database_path, BUSY_TIMEOUT_MS, REPO_MIGRATIONS)
+            conn = db.connect_database(database_path, BUSY_TIMEOUT_MS)
+            try:
+                versions = [
+                    row[0] for row in conn.execute(
+                        "SELECT version FROM schema_migrations ORDER BY version"
+                    )
+                ]
+                self.assertEqual(versions, [1, 2])
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT username FROM users WHERE user_id=?", ("user-a",)
+                    ).fetchone()[0],
+                    "Alice",
+                )
+                tables = {
+                    row[0] for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+                self.assertTrue({
+                    "credentials",
+                    "credential_token_revisions",
+                    "credential_validation_observations",
+                    "credential_lifecycle_audits",
+                    "upstream_request_gate",
+                } <= tables)
+                credential_columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(credentials)")
+                }
+                self.assertTrue({
+                    "current_token_revision_id",
+                    "account_binding_state",
+                    "last_confirmed_validation_state",
+                    "last_successful_validation_at_utc_ms",
+                    "requires_revalidation",
+                    "credential_version",
+                } <= credential_columns)
+                self.assertIsNone(conn.execute("PRAGMA foreign_key_check").fetchone())
+            finally:
+                conn.close()
+
+    def test_credential_binding_state_is_database_constrained(self) -> None:
+        migrate_database = _module("backend.migrate").migrate_database
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "binding-state.sqlite3"
+            migrate_database(database_path, BUSY_TIMEOUT_MS)
+            conn = _module("backend.db").connect_database(database_path, BUSY_TIMEOUT_MS)
+            try:
+                _insert_user(conn)
+                with self.assertRaises(sqlite3.IntegrityError):
+                    conn.execute(
+                        """INSERT INTO credentials
+                           (credential_id, user_id, label, credential_version, enabled,
+                            account_binding_state, last_confirmed_validation_state,
+                            requires_revalidation, created_at_utc_ms, updated_at_utc_ms)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        ("credential-a", "user-a", "synthetic", 1, 1, "unknown", "never_confirmed", 0, 1, 1),
+                    )
+                conn.rollback()
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM credentials").fetchone()[0],
+                    0,
+                )
+            finally:
+                conn.close()
+
+    def test_credential_revision_foreign_keys_and_revision_number_are_tenant_bound(self) -> None:
+        migrate_database = _module("backend.migrate").migrate_database
+        db = _module("backend.db")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "credential-fk.sqlite3"
+            migrate_database(database_path, BUSY_TIMEOUT_MS)
+            conn = db.connect_database(database_path, BUSY_TIMEOUT_MS)
+            try:
+                revision_fks = conn.execute(
+                    "PRAGMA foreign_key_list(credential_token_revisions)"
+                ).fetchall()
+                credential_fks = conn.execute(
+                    "PRAGMA foreign_key_list(credentials)"
+                ).fetchall()
+                self.assertTrue(any(
+                    row["from"] == "user_id" and row["table"] == "credentials" and row["to"] == "user_id"
+                    for row in revision_fks
+                ))
+                self.assertTrue(any(
+                    row["from"] == "credential_id" and row["table"] == "credentials" and row["to"] == "credential_id"
+                    for row in revision_fks
+                ))
+                self.assertTrue(any(
+                    row["from"] == "current_token_revision_id"
+                    and row["table"] == "credential_token_revisions"
+                    and row["to"] == "revision_id"
+                    for row in credential_fks
+                ))
+                unique_indexes = [
+                    row["name"] for row in conn.execute(
+                        "PRAGMA index_list(credential_token_revisions)"
+                    ) if row["unique"]
+                ]
+                unique_column_sets = {
+                    tuple(row["name"] for row in conn.execute(
+                        f"PRAGMA index_info({index_name})"
+                    ))
+                    for index_name in unique_indexes
+                }
+                self.assertIn(("user_id", "credential_id", "revision_number"), unique_column_sets)
+            finally:
+                conn.close()
+
     def test_migration_records_checksum_and_is_repeatable(self) -> None:
         db = _module("backend.db")
         migrate_database = _module("backend.migrate").migrate_database

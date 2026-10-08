@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 _MIGRATION_NAME_RE = re.compile(r"\A(?P<version>[0-9]{4})_[a-z0-9_]+\.sql\Z")
 
 _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
@@ -26,6 +26,42 @@ _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
     }),
     "auth_attempts": frozenset({
         "attempt_id", "event_type", "bucket_type", "bucket_key", "attempted_at_utc_ms",
+    }),
+    "credentials": frozenset({
+        "credential_id", "user_id", "label", "credential_version", "enabled",
+        "deleted_at_utc_ms", "current_token_revision_id", "account_binding_state",
+        "upstream_account_fingerprint", "fingerprint_key_version",
+        "account_identity_contract_version", "account_fingerprint_cleared_at_utc_ms",
+        "last_successful_validation_at_utc_ms", "last_confirmed_validation_state",
+        "requires_revalidation", "created_at_utc_ms", "updated_at_utc_ms",
+    }),
+    "credential_token_revisions": frozenset({
+        "revision_id", "user_id", "credential_id", "revision_number",
+        "token_fingerprint", "token_fingerprint_key_version", "token_expires_at_utc_ms",
+        "initial_account_fingerprint_key_version", "initial_account_identity_contract_version",
+        "initial_validation_result", "initial_validation_at_utc_ms", "created_by_user_id",
+        "secret_material_active", "ciphertext", "nonce", "tag", "encryption_key_version",
+        "ciphertext_cleared_at_utc_ms",
+    }),
+    "credential_validation_observations": frozenset({
+        "validation_attempt_id", "user_id", "credential_id", "operation_kind",
+        "credential_version_snapshot", "current_token_revision_snapshot_id", "token_revision_id",
+        "started_at_utc_ms", "completed_at_utc_ms", "attempt_result",
+        "account_binding_outcome", "http_status_class", "gate_owner_id", "gate_epoch",
+        "apply_state",
+    }),
+    "credential_lifecycle_audits": frozenset({
+        "audit_id", "user_id", "credential_id", "revision_id", "actor_user_id",
+        "operation_code", "old_key_version", "new_key_version",
+        "old_identity_contract_version", "new_identity_contract_version",
+        "occurred_at_utc_ms", "outcome",
+    }),
+    "upstream_request_gate": frozenset({
+        "endpoint_key", "lease_owner_id", "lease_epoch", "lease_expires_at_utc_ms",
+        "next_validation_attempt_id", "active_validation_attempt_id", "active_user_id",
+        "active_credential_id", "active_operation_kind", "active_credential_version_snapshot",
+        "active_token_revision_snapshot_id", "next_allowed_at_utc_ms",
+        "upstream_backoff_until_utc_ms",
     }),
 }
 
@@ -108,6 +144,23 @@ def _has_unique_single_column(
     return False
 
 
+def _has_unique_columns(
+    connection: sqlite3.Connection,
+    table_name: str,
+    column_names: tuple[str, ...],
+) -> bool:
+    for index in connection.execute(f"PRAGMA index_list({table_name})").fetchall():
+        if not index["unique"]:
+            continue
+        indexed_columns = tuple(
+            row["name"]
+            for row in connection.execute(f"PRAGMA index_info({index['name']})").fetchall()
+        )
+        if indexed_columns == column_names:
+            return True
+    return False
+
+
 def _has_foreign_key(
     connection: sqlite3.Connection,
     table_name: str,
@@ -123,14 +176,44 @@ def _has_foreign_key(
     )
 
 
-def _validate_schema_contract(connection: sqlite3.Connection) -> None:
+def _has_composite_foreign_key(
+    connection: sqlite3.Connection,
+    table_name: str,
+    parent_table: str,
+    column_map: tuple[tuple[str, str], ...],
+) -> bool:
+    rows = connection.execute(f"PRAGMA foreign_key_list({table_name})").fetchall()
+    grouped: dict[int, list[sqlite3.Row]] = {}
+    for row in rows:
+        if row["table"] == parent_table:
+            grouped.setdefault(row["id"], []).append(row)
+    wanted = set(column_map)
+    return any(
+        {(row["from"], row["to"]) for row in group} == wanted
+        and len(group) == len(column_map)
+        for group in grouped.values()
+    )
+
+
+def _validate_schema_contract(connection: sqlite3.Connection, schema_version: int) -> None:
     tables = {
         row["name"]
         for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     }
-    for table_name, required_columns in _REQUIRED_COLUMNS.items():
+    required_contract = {
+        name: columns
+        for name, columns in _REQUIRED_COLUMNS.items()
+        if schema_version >= 2 or name not in {
+            "credentials",
+            "credential_token_revisions",
+            "credential_validation_observations",
+            "credential_lifecycle_audits",
+            "upstream_request_gate",
+        }
+    }
+    for table_name, required_columns in required_contract.items():
         if table_name not in tables:
             raise SchemaNotReadyError(f"required table is missing: {table_name}")
         missing = required_columns - _column_names(connection, table_name)
@@ -146,13 +229,74 @@ def _validate_schema_contract(connection: sqlite3.Connection) -> None:
         if not _has_unique_single_column(connection, table_name, column_name):
             raise SchemaNotReadyError(f"required uniqueness constraint is missing from {table_name}")
 
+    if schema_version >= 2:
+        required_composite_uniques = (
+            ("credentials", ("user_id", "credential_id")),
+            ("credential_token_revisions", ("user_id", "credential_id", "revision_id")),
+            ("credential_token_revisions", ("user_id", "credential_id", "revision_number")),
+        )
+        for table_name, columns in required_composite_uniques:
+            if not _has_unique_columns(connection, table_name, columns):
+                raise SchemaNotReadyError(f"required composite uniqueness is missing from {table_name}")
+
     foreign_keys = (
         ("sessions", "user_id", "users", "user_id"),
         ("invitations", "created_by_user_id", "users", "user_id"),
     )
+    if schema_version >= 2:
+        foreign_keys += (
+            ("credentials", "user_id", "users", "user_id"),
+            ("credential_token_revisions", "created_by_user_id", "users", "user_id"),
+            ("credential_lifecycle_audits", "actor_user_id", "users", "user_id"),
+        )
     for table_name, column_name, parent_table, parent_column in foreign_keys:
         if not _has_foreign_key(connection, table_name, column_name, parent_table, parent_column):
             raise SchemaNotReadyError(f"required foreign key is missing from {table_name}")
+
+    if schema_version >= 2:
+        composite_foreign_keys = (
+            (
+                "credentials",
+                "credential_token_revisions",
+                (("user_id", "user_id"), ("credential_id", "credential_id"),
+                 ("current_token_revision_id", "revision_id")),
+            ),
+            (
+                "credential_token_revisions",
+                "credentials",
+                (("user_id", "user_id"), ("credential_id", "credential_id")),
+            ),
+            (
+                "credential_validation_observations",
+                "credentials",
+                (("user_id", "user_id"), ("credential_id", "credential_id")),
+            ),
+            (
+                "credential_validation_observations",
+                "credential_token_revisions",
+                (("user_id", "user_id"), ("credential_id", "credential_id"),
+                 ("token_revision_id", "revision_id")),
+            ),
+            (
+                "credential_lifecycle_audits",
+                "credentials",
+                (("user_id", "user_id"), ("credential_id", "credential_id")),
+            ),
+            (
+                "credential_lifecycle_audits",
+                "credential_token_revisions",
+                (("user_id", "user_id"), ("credential_id", "credential_id"),
+                 ("revision_id", "revision_id")),
+            ),
+            (
+                "upstream_request_gate",
+                "credentials",
+                (("active_user_id", "user_id"), ("active_credential_id", "credential_id")),
+            ),
+        )
+        for table_name, parent_table, column_map in composite_foreign_keys:
+            if not _has_composite_foreign_key(connection, table_name, parent_table, column_map):
+                raise SchemaNotReadyError(f"required tenant-bound foreign key is missing from {table_name}")
 
 
 def _verify_applied_checksums(
@@ -217,7 +361,7 @@ def check_schema_ready(
             raise SchemaNotReadyError("schema migration history is not contiguous")
 
         _verify_applied_checksums(rows, manifest)
-        _validate_schema_contract(connection)
+        _validate_schema_contract(connection, current_version)
         if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
             raise SchemaNotReadyError("database contains foreign-key violations")
     except SchemaNotReadyError:

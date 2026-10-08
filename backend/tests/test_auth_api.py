@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import contextlib
 import hashlib
 import importlib
@@ -17,10 +16,11 @@ from pathlib import Path
 from threading import Barrier
 from unittest.mock import patch
 
+from support import credential_test_settings
+
 
 BUSY_TIMEOUT_MS = 5000
 ORIGIN = "http://localhost:5173"
-CSRF_SECRET = base64.urlsafe_b64encode(bytes(range(32))).rstrip(b"=").decode("ascii")
 
 
 def _module(name: str):
@@ -40,9 +40,8 @@ class AuthApiTests(unittest.TestCase):
         self.database_path = Path(temp_dir.name) / "identity.sqlite3"
         _module("backend.migrate").migrate_database(self.database_path, BUSY_TIMEOUT_MS)
         self.config = {
+            **credential_test_settings(self.database_path),
             "TESTING": True,
-            "DATABASE_PATH": str(self.database_path),
-            "CSRF_HMAC_SECRET": CSRF_SECRET,
             "APP_ALLOWED_ORIGINS": ORIGIN,
             "SESSION_TTL_SECONDS": 3600,
         }

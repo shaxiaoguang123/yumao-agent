@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import tempfile
 import time
 import unittest
@@ -12,11 +11,11 @@ from backend.auth.types import UserSummary
 from backend.cli import create_first_admin
 from backend.db import connect_database
 from backend.migrate import migrate_database
+from support import credential_test_settings
 
 
 BUSY_TIMEOUT_MS = 5000
 ORIGIN = "http://localhost:5173"
-CSRF_SECRET = base64.urlsafe_b64encode(bytes(range(32))).rstrip(b"=").decode("ascii")
 
 
 class AuthFlowTests(unittest.TestCase):
@@ -26,9 +25,8 @@ class AuthFlowTests(unittest.TestCase):
         self.database_path = Path(self.temp_dir.name) / "flow.sqlite3"
         migrate_database(self.database_path, BUSY_TIMEOUT_MS)
         self.app = create_app({
+            **credential_test_settings(self.database_path),
             "TESTING": True,
-            "DATABASE_PATH": str(self.database_path),
-            "CSRF_HMAC_SECRET": CSRF_SECRET,
             "APP_ALLOWED_ORIGINS": ORIGIN,
         })
         self.admin: UserSummary = create_first_admin(

@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-import base64
 import importlib
 import importlib.util
 import logging
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from support import credential_test_settings
 
 
 # Importing the recovered legacy app at the red phase must not inspect the
@@ -24,10 +26,6 @@ def _module(name: str):
     return importlib.import_module(name)
 
 
-def _valid_secret() -> str:
-    return base64.urlsafe_b64encode(bytes(range(32))).rstrip(b"=").decode("ascii")
-
-
 def _migrate_database(database_path: Path) -> None:
     if importlib.util.find_spec("backend.migrate") is None:
         raise AssertionError("backend.migrate must be available to prepare the test database")
@@ -39,11 +37,7 @@ def _create_app(database_path: Path):
     factory = getattr(module, "create_app", None)
     if not callable(factory):
         raise AssertionError("backend.app must expose create_app")
-    return factory({
-        "TESTING": True,
-        "DATABASE_PATH": str(database_path),
-        "CSRF_HMAC_SECRET": _valid_secret(),
-    })
+    return factory({"TESTING": True, **credential_test_settings(database_path)})
 
 
 class AppFactoryTests(unittest.TestCase):
@@ -68,6 +62,25 @@ class AppFactoryTests(unittest.TestCase):
         self.assertNotIn("/api/run", routes)
         self.assertNotIn("/api/save_plan", routes)
 
+    def test_app_factory_does_not_copy_raw_credential_keyrings_into_flask_config(self) -> None:
+        database_path = Path(_TEST_ROOT.name) / "credential-config.sqlite3"
+        _migrate_database(database_path)
+        app = _create_app(database_path)
+
+        for name in (
+            "APP_CREDENTIAL_ENCRYPTION_KEYS",
+            "APP_CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID",
+            "APP_UPSTREAM_FINGERPRINT_KEYS",
+            "APP_UPSTREAM_FINGERPRINT_ACTIVE_KEY_ID",
+        ):
+            self.assertNotIn(name, app.config, f"raw setting {name} entered Flask config")
+        self.assertNotIn(
+            "enc-v1", repr(app.config), "encryption key ID entered Flask config"
+        )
+        self.assertNotIn(
+            "fp-v1", repr(app.config), "fingerprint key ID entered Flask config"
+        )
+
     def test_app_factory_rejects_unready_database_without_creating_it(self) -> None:
         db = _module("backend.db")
         database_path = Path(_TEST_ROOT.name) / "must-not-be-created.sqlite3"
@@ -83,6 +96,34 @@ class AppFactoryTests(unittest.TestCase):
         conn.close()
         with self.assertRaises(db.SchemaNotReadyError):
             _create_app(database_path)
+
+    def test_app_factory_requires_schema_v2_without_running_migrations(self) -> None:
+        db = _module("backend.db")
+        migrate_database = _module("backend.migrate").migrate_database
+        root = Path(_TEST_ROOT.name)
+        database_path = root / "legacy-schema.sqlite3"
+        legacy_migrations = root / "legacy-migrations"
+        legacy_migrations.mkdir()
+        shutil.copyfile(
+            Path(__file__).resolve().parents[1] / "migrations" / "0001_identity.sql",
+            legacy_migrations / "0001_identity.sql",
+        )
+        migrate_database(database_path, 5000, legacy_migrations)
+
+        self.assertEqual(db.CURRENT_SCHEMA_VERSION, 2)
+        with self.assertRaises(db.SchemaNotReadyError):
+            _create_app(database_path)
+
+        conn = db.connect_database(database_path, 5000)
+        try:
+            versions = [
+                row[0] for row in conn.execute(
+                    "SELECT version FROM schema_migrations ORDER BY version"
+                )
+            ]
+            self.assertEqual(versions, [1])
+        finally:
+            conn.close()
 
 
 def tearDownModule() -> None:
