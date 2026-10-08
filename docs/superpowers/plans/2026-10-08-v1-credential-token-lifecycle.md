@@ -30,6 +30,7 @@
 - Use AES-256-GCM with 96-bit nonce, 128-bit tag, and row-bound AAD. Token revisions are immutable except authenticated ciphertext rewrap and secret clearing. Do not persist JWT payloads or raw upstream identity fields.
 - All SQLite connections use explicit `busy_timeout_ms`; all Credential SQL queries bind the current `user_id`. Migrations are numbered and immutable. Startup readiness and key-dependency checks are read-only and fail closed.
 - Upstream validation uses only the `getUserInfo` read-only contract established by Task 0. Require a fixed allow-listed origin, TLS verification, redirects disabled, finite connect/read timeouts, a monotonic total deadline, streaming, and a strict response-byte limit. The total deadline does not claim to interrupt an already-blocking socket read at an exact instant; its overrun is bounded by one read-timeout interval plus normal scheduling overhead.
+- Each upstream validation gets a fresh Requests Session and disables `trust_env`; cookies, netrc auth, and environment proxy settings must not be shared implicitly across users/Credentials. No proxy setting is added in this phase.
 - All `getUserInfo` calls share one SQLite-backed gate across every user and Credential. If the evidence-based minimum interval is not configured, validation returns `503 validation_not_configured` and does not persist a submitted Token. Never infer the `getUserInfo` interval from the unrelated approximately 668 ms observation.
 - Parse `Retry-After` delta-seconds; parse HTTP-date only if Task 0 evidence requires it and use a standard-library parser. Malformed, negative, overflowing, or unparseable values use the configured fallback; clamp all values to `MAX_UPSTREAM_BACKOFF_SECONDS` and update deadlines with a monotonic maximum.
 - Validation follows snapshot → gate/network → conditional write. Do not hold SQLite write transactions across HTTP. Stale/late responses cannot update Credential summaries, bindings, revisions, or a newer gate lease.
@@ -206,7 +207,7 @@
 
 **Interfaces:**
 
-- `UpstreamHttpTransport` is constructed with an injected Requests-compatible session and monotonic clock; tests supply fakes. `AdapterValidationResult` contains safe Token outcome, optional short-lived identity bytes marked `repr=False`, identity-contract version/capability outcome, HTTP status class, and a bounded Retry-After input. It never contains the raw body or response object.
+- `UpstreamHttpTransport` is constructed with an injected `session_factory: Callable[[], requests.Session]` and monotonic clock; it creates, configures (`trust_env=False`), and closes one fresh Session per request. Tests supply fakes. `AdapterValidationResult` contains safe Token outcome, optional short-lived identity bytes marked `repr=False`, identity-contract version/capability outcome, HTTP status class, and a bounded Retry-After input. It never contains the raw body or response object.
 - `UpstreamContractAdapter.validate_token(token: str) -> AdapterValidationResult` performs only the evidenced read-only `getUserInfo` request. It is reachable only through `CredentialService`, which acquires the shared gate before calling it.
 - The fixed HTTPS origin is configured as `UPSTREAM_ORIGIN` and must exactly match the Task 0 allow-listed host; the path is the code-pinned `/service/appointment/appointment/userAddress/getUserInfo`. No user/provider URL is accepted. The request uses POST JSON `{}`, the evidenced `token` auth header, TLS verification, and `allow_redirects=False`.
 - Transport streams the body, enforces `upstream_max_response_bytes`, uses finite connect/read timeouts, checks `time.monotonic()` between chunks/before new reads, and closes after total deadline. One active blocking read may overrun by at most its configured read timeout plus scheduling overhead.
@@ -304,6 +305,7 @@
 - Create: `backend/credentials/service.py`
 - Create: `backend/credentials/key_dependencies.py`
 - Modify: `backend/app.py` to initialize one adapter, gate, cipher, and CredentialService with explicit settings.
+- Modify: `backend/credentials/upstream.py` and `backend/tests/test_credential_upstream.py` so each validation receives a fresh HTTP Session with `trust_env=False` and no cookie/netrc/proxy state shared across attempts.
 - Test: `backend/tests/test_credential_service.py`
 - Test: `backend/tests/test_credential_key_dependencies.py`
 
