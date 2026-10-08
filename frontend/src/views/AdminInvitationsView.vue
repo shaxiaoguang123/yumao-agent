@@ -8,6 +8,7 @@ const expiresAtUtcMs = ref(null);
 const submitting = ref(false);
 const errorMessage = ref('');
 const statusMessage = ref('');
+let isMounted = true;
 
 const expiryIso = computed(() => (
   expiresAtUtcMs.value === null
@@ -54,12 +55,14 @@ async function createInvitation() {
   statusMessage.value = '';
   try {
     const result = await invitationApi.create();
+    if (!isMounted) return;
     invitationCode.value = result.invitation_code;
     expiresAtUtcMs.value = result.expires_at_utc_ms;
   } catch (error) {
+    if (!isMounted) return;
     errorMessage.value = safeErrorMessage(error);
   } finally {
-    submitting.value = false;
+    if (isMounted) submitting.value = false;
   }
 }
 
@@ -78,11 +81,15 @@ async function copyInvitation() {
 function dismissInvitation() {
   invitationCode.value = '';
   expiresAtUtcMs.value = null;
+  submitting.value = false;
   statusMessage.value = '';
   errorMessage.value = '';
 }
 
-onBeforeUnmount(dismissInvitation);
+onBeforeUnmount(() => {
+  isMounted = false;
+  dismissInvitation();
+});
 </script>
 
 <template>

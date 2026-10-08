@@ -40,7 +40,7 @@ async function mountView(api) {
     },
   );
   await flushPromises();
-  return { wrapper, router };
+  return { wrapper, router, AdminInvitationsView };
 }
 
 function submitCreation(wrapper) {
@@ -145,6 +145,29 @@ describe('admin invitation management view', () => {
     expect(document.body.textContent).not.toContain(code);
     expect(window.localStorage.getItem(code)).toBeNull();
     expect(window.sessionStorage.getItem(code)).toBeNull();
+  });
+
+  it('does not restore invitation state when a pending request resolves after unmount', async () => {
+    let resolveCreate;
+    const create = vi.fn(() => new Promise((resolve) => { resolveCreate = resolve; }));
+    const { wrapper, AdminInvitationsView } = await mountView(invitationApi(create));
+    const page = wrapper.findComponent(AdminInvitationsView);
+    const setupState = page.vm.$.setupState;
+
+    await submitCreation(wrapper);
+    expect(create).toHaveBeenCalledOnce();
+    wrapper.unmount();
+    expect(setupState.invitationCode).toBe('');
+    expect(setupState.expiresAtUtcMs).toBeNull();
+
+    resolveCreate({
+      invitation_code: 'synthetic-late-response-code',
+      expires_at_utc_ms: Date.UTC(2027, 0, 2),
+    });
+    await flushPromises();
+
+    expect(setupState.invitationCode).toBe('');
+    expect(setupState.expiresAtUtcMs).toBeNull();
   });
 
   it('ignores a second submission while the first creation request is pending', async () => {
