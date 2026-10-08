@@ -106,21 +106,25 @@
 - Create: `backend/migrations/0002_credentials.sql`
 - Create: `backend/credentials/__init__.py`
 - Create: `backend/credentials/keyring.py`
+- Create: `backend/tests/support.py`
 - Test: `backend/tests/test_settings.py`
 - Test: `backend/tests/test_db.py`
 - Test: `backend/tests/test_app_factory.py`
+- Modify: `backend/tests/test_auth_api.py` to use synthetic Credential settings.
+- Modify: `backend/tests/test_auth_flow.py` to use synthetic Credential settings.
 
 **Interfaces:**
 
 - `CredentialKeyring` and strict JSON/base64url parsing live in `backend/credentials/keyring.py`; `AppSettings` exposes two parsed keyrings. Load them from `APP_CREDENTIAL_ENCRYPTION_KEYS`, `APP_CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID`, `APP_UPSTREAM_FINGERPRINT_KEYS`, and `APP_UPSTREAM_FINGERPRINT_ACTIVE_KEY_ID`. Key material is bytes and excluded from repr. Encryption and fingerprint rings are independent.
 - `AppSettings` exposes fixed `upstream_origin` from `UPSTREAM_ORIGIN`, optional `upstream_get_user_info_min_interval_ms` from `UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS`, `upstream_connect_timeout_seconds` from `UPSTREAM_CONNECT_TIMEOUT_SECONDS`, `upstream_read_timeout_seconds` from `UPSTREAM_READ_TIMEOUT_SECONDS`, `upstream_total_deadline_seconds` from `UPSTREAM_TOTAL_DEADLINE_SECONDS`, `upstream_max_response_bytes` from `UPSTREAM_MAX_RESPONSE_BYTES`, `upstream_retry_after_fallback_seconds` from `UPSTREAM_RETRY_AFTER_FALLBACK_SECONDS`, `max_upstream_backoff_seconds` from `MAX_UPSTREAM_BACKOFF_SECONDS`, and `upstream_lease_safety_margin_seconds` from `UPSTREAM_LEASE_SAFETY_MARGIN_SECONDS`. Require `connect < total`, `read < total`, a positive response limit, a positive safety margin, and fallback no greater than max. Missing endpoint interval means validation is unconfigured; no default interval is invented.
+- `backend/tests/support.py` provides `credential_test_settings(database_path: Path) -> dict[str, object]` with deterministic, distinct synthetic 32-byte encryption/fingerprint keys and explicit synthetic transport values. It never reads `.env` or the process environment.
 - `0002_credentials.sql` adds `credentials`, `credential_token_revisions`, `credential_validation_observations`, `credential_lifecycle_audits`, and singleton `upstream_request_gate` tables. Store Credential `current_token_revision_id`, three-state `account_binding_state`, nullable fingerprint/key/identity-contract fields, `last_confirmed_validation_state`, `last_successful_validation_at_utc_ms`, `requires_revalidation`, and `credential_version`; do not add `validation_summary_revision_id`.
 - Token revision rows hold immutable version/exp/fingerprint/initial-validation facts and encrypted envelope metadata. Observation rows hold only safe result enums, status class, attempt order/times, gate owner/epoch, and snapshot/apply state. Neither rows nor indexes contain raw identity or Token data.
 - Composite foreign keys include `user_id`. Indexes support user-scoped list/current-revision lookups, same-user fingerprint checks across retained key versions, and gate lease state. There is no cross-user account-fingerprint UNIQUE constraint.
 
 - [ ] **Step 1: Write failing keyring settings tests**
 
-  Add tests for valid canonical 32-byte keys, malformed/noncanonical base64url, wrong decoded lengths, duplicate IDs rejected before mapping creation, empty keyring, missing active ID, active ID absent, key-ID validation, cross-ring material reuse, repr/Flask-config redaction, and accepted printable bytes (no entropy heuristic). Add tests for timeout ordering, response-size bounds, Retry-After fallback/max, optional interval parsing, and invalid settings.
+  Add a test-only `credential_test_settings` helper and update the existing auth API/flow app fixtures to use synthetic keyrings. Add tests for valid canonical 32-byte keys, malformed/noncanonical base64url, wrong decoded lengths, duplicate IDs rejected before mapping creation, empty keyring, missing active ID, active ID absent, key-ID validation, cross-ring material reuse, repr/Flask-config redaction, and accepted printable bytes (no entropy heuristic). Add tests for timeout ordering, response-size bounds, Retry-After fallback/max, optional interval parsing, and invalid settings.
 
 - [ ] **Step 2: Write failing schema-v2 migration/readiness tests**
 
@@ -128,7 +132,7 @@
 
 - [ ] **Step 3: Run the focused tests and confirm expected failures**
 
-  Run: `conda run -n test python -m unittest discover -s backend/tests -p 'test_settings.py' -v`, then repeat with `test_db.py` and `test_app_factory.py`.
+  Run focused tests with `conda run -n test python -m unittest discover -s backend/tests -p '<test_file>.py' -v` for `test_settings.py`, `test_db.py`, `test_app_factory.py`, `test_auth_api.py`, and `test_auth_flow.py`.
 
   Expected: existing Identity Foundation tests continue to pass; new Credential settings and schema assertions fail because the fields, version-2 migration, and readiness checks are not implemented.
 
@@ -138,13 +142,13 @@
 
 - [ ] **Step 5: Run focused tests**
 
-  Run the same three `unittest discover` commands from Step 3.
+  Run the same five `unittest discover` commands from Step 3.
 
   Expected: all existing identity tests and new schema/settings tests pass with temporary databases and synthetic config only.
 
 - [ ] **Step 6: Commit the complete configuration/schema unit**
 
-  Stage the exact settings, app-factory, DB/readiness, migration, and corresponding tests. Commit as `feat: add credential schema and settings`.
+  Stage the exact settings, keyring parser, app-factory, DB/readiness, migration, test settings helper, and the five named test files. Commit as `feat: add credential schema and settings`.
 
 ## Task 2: Implement Token Parsing, Fingerprints, and AES-256-GCM
 
