@@ -490,19 +490,19 @@
 
 **Interfaces:**
 
-- Schema version 3 startup is read-only; explicit migrations are the only schema upgrade path.
+- Schema version 4 startup is read-only; explicit migrations are the only schema upgrade path.
 - Local test commands are `conda run -n test python -m unittest discover -s backend/tests -v`, `cd frontend && npm test -- --run`, and `cd frontend && npm run build`.
 - No real upstream requests are run. No raw `req/`, `.env`, DB, logs, Tokens, or generated frontend assets are committed.
 
-- [ ] **Step 1: Review the full branch diff and changed-file allowlist**
+- [x] **Step 1: Review the full branch diff and changed-file allowlist**
 
   Confirm only the plan, evidence note, schema/config/service/API/UI/tests/local docs changed; verify `.env`, `req/`, DB/logs, `node_modules`, and `dist` are not staged or tracked.
 
-- [ ] **Step 2: Run complete offline verification**
+- [x] **Step 2: Run complete offline verification**
 
   Run all backend tests in Conda `test`, all Vitest tests, the production build, `git diff --check`, migration readiness/checksum tests, and secret-file status checks. Confirm no test contacted the real upstream.
 
-- [ ] **Step 3: Review branch history and synchronize with `main`**
+- [x] **Step 3: Review branch history and synchronize with `main`**
 
   Recheck whether local `main` advanced. If yes, rebase the feature branch and repeat all full verification. If not, retain the linear history.
 
