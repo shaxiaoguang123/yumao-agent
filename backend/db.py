@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 _MIGRATION_NAME_RE = re.compile(r"\A(?P<version>[0-9]{4})_[a-z0-9_]+\.sql\Z")
 
 _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
@@ -54,6 +54,7 @@ _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
         "audit_id", "user_id", "credential_id", "revision_id", "actor_user_id",
         "operation_code", "old_key_version", "new_key_version",
         "old_identity_contract_version", "new_identity_contract_version",
+        "old_account_binding_state",
         "occurred_at_utc_ms", "outcome",
     }),
     "upstream_request_gate": frozenset({
@@ -217,6 +218,10 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
     if schema_version == 2:
         required_contract["upstream_request_gate"] = (
             _REQUIRED_COLUMNS["upstream_request_gate"] - {"active_started_at_utc_ms"}
+        )
+    if 2 <= schema_version < 4:
+        required_contract["credential_lifecycle_audits"] = (
+            _REQUIRED_COLUMNS["credential_lifecycle_audits"] - {"old_account_binding_state"}
         )
     for table_name, required_columns in required_contract.items():
         if table_name not in tables:

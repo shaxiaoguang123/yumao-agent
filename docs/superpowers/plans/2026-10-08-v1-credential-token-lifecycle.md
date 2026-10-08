@@ -301,51 +301,55 @@
 
 **Files:**
 
+- Modify: `backend/db.py` and add immutable `backend/migrations/0004_credential_audit_binding_state.sql` so soft-delete lifecycle audits preserve the prior binding enum required by the design; schema readiness advances to version 4.
 - Create: `backend/credentials/types.py`
 - Create: `backend/credentials/service.py`
 - Create: `backend/credentials/key_dependencies.py`
 - Modify: `backend/app.py` to initialize one adapter, gate, cipher, and CredentialService with explicit settings.
-- Modify: `backend/credentials/upstream.py` and `backend/tests/test_credential_upstream.py` so each validation receives a fresh HTTP Session with `trust_env=False` and no cookie/netrc/proxy state shared across attempts.
+- Modify: `backend/credentials/contracts.py`, `backend/credentials/upstream.py`, and `backend/tests/test_credential_upstream.py` so each validation receives a fresh HTTP Session with `trust_env=False` and no cookie/netrc/proxy state shared across attempts, and reports whether the HTTP exchange completed or remains uncertain for gate lease handling.
 - Test: `backend/tests/test_credential_service.py`
 - Test: `backend/tests/test_credential_key_dependencies.py`
+- Test: `backend/tests/test_db.py` for schema v4 and the additive audit column.
+- Test: `backend/tests/test_app_factory.py` for one shared service/gate wiring and read-only startup key-dependency failure.
 
 **Interfaces:**
 
 - `CredentialService.list_for_user(user_id) -> list[CredentialDTO]` and `.get_for_user(user_id, credential_id) -> CredentialDTO | None` are SQL-scoped by `user_id`.
 - `.create(user_id, label, token, now_utc_ms) -> CredentialDTO` validates input and checks same-user unmatchable-row/capability gates before dispatch. It does not persist a candidate token until read-only validation succeeds. When continuity is unavailable and user has no non-deleted Credential, it creates only `unresolved`; when approved identity is returned, it compares against all same-user confirmed bindings under retained key versions and rejects matches. If a Token-success response lacks a usable identity, create `unresolved` only when the user has no other non-deleted Credential; otherwise return `credential_account_binding_unresolved` without persisting the candidate.
 - `.validate(user_id, credential_id, expected_credential_version, expected_revision_id, now_utc_ms) -> CredentialOperationResult` and `.rotate_token(...)` follow snapshot → gate/network → conditional `BEGIN IMMEDIATE` write. In the final transaction, Credential summary/binding updates, `CredentialValidationObservation` append, gate completion/backoff update, and lease release are atomic. Uncertain reads append a safe result but retain the lease until expiry. Results arriving after disable/delete/rotation/keyring epoch/lease expiry are stale.
+- `AdapterValidationResult.dispatch_state` is an internal transport boundary: `complete` means a complete HTTP exchange can complete the gate; `uncertain` retains the lease until expiry; a success outcome paired with anything other than `complete` is downgraded to safe unknown and cannot create or rotate a Credential.
 - `.set_enabled(...)` leaves account-binding state unchanged; enabling sets `requires_revalidation=true`. `.soft_delete(...)` blocks new use, clears active revision ciphertext and account fingerprint in this Credential-only phase, clears key/contract dependencies, records a safe tombstone/audit event, and does not claim physical SQLite/WAL erasure.
 - `needs_reconfirmation` only recovers on successful current-Token validation under the current approved identity contract and constant-time continuity match. Current-Token mismatch preserves the old fingerprint and changes binding to `needs_reconfirmation`; candidate rotation mismatch rejects only the candidate.
 - `latest_requested_validation_attempt` is projected by allocated attempt ID; `last_successful_validation_at_utc_ms` remains a separate Credential summary belonging to `current_token_revision_id`. There is no validation-summary revision pointer.
 - Startup performs a read-only key-dependency scan. Encryption keys are required for active ciphertext; fingerprint HMAC keys are required only for live account fingerprints and current Token fingerprints still used for equality checks.
 
-- [ ] **Step 1: Write failing service tests using fake adapter and gate**
+- [x] **Step 1: Write failing service tests using fake adapter and gate**
 
   Cover create label/token length/control-character boundaries, create success/unresolved/confirmed, no persistence on denied gate/invalid candidate/unknown response, same-user confirmed duplicate conflict including disabled rows, create blocking on same-user unresolved/reconfirmation rows, no continuity capability allowing only one non-deleted row, Token-success with missing identity creating unresolved only for an otherwise empty user, missing-identity conflict when another Credential exists, and confirmed Token-success with missing identity preserving the existing binding. Cover disable/enable orthogonality, Token expiry, rotation same/different/missing identity, same-current-Token `token_already_current` without dispatch/revision, permitted historical Token reuse, unresolved promotion, reconfirmation, current-token mismatch, transient failure non-downgrade, same-transaction summary/pointer changes, latest-requested attempt projection, delete clearing, two-user isolation, and snapshot races.
 
-- [ ] **Step 2: Write failing key-dependency and startup tests**
+- [x] **Step 2: Write failing key-dependency and startup tests**
 
   Cover missing keys referenced by active ciphertext/current Token/account fingerprints, retained disabled/`needs_reconfirmation` dependencies, inert historical revision/tombstone keys, v1→v2 lazy account-fingerprint rebind on a continuity match, mismatch preservation, current Token comparison under its original key version, and read-only startup failure without database mutation.
 
-- [ ] **Step 3: Run service and key-dependency tests and confirm expected failures**
+- [x] **Step 3: Run service and key-dependency tests and confirm expected failures**
 
   Run: `conda run -n test python -m unittest discover -s backend/tests -p 'test_credential_service.py' -v`, then repeat with `test_credential_key_dependencies.py`.
 
   Expected: the new service/state/ownership/key-dependency assertions fail because the service is not implemented.
 
-- [ ] **Step 4: Implement CredentialService and dependency checks**
+- [x] **Step 4: Implement CredentialService and dependency checks**
 
   Pass explicit user ID, settings, adapter, gate, and clock time. Do not access Flask request globals from the service. Keep network I/O outside SQLite write transactions. Save only fingerprints/safe enums; never save raw identity or adapter response.
 
-- [ ] **Step 5: Run service and dependency tests**
+- [x] **Step 5: Run service and dependency tests**
 
   Run the same two focused discover commands from Step 3.
 
   Expected: all tests use temp SQLite, synthetic Tokens and fake upstream outcomes only.
 
-- [ ] **Step 6: Commit the Credential service**
+- [x] **Step 6: Commit the Credential service**
 
-  Commit only service/types/dependency/app wiring and owned tests as `feat: implement credential token lifecycle service`.
+  Commit only the schema-v4 migration/readiness change, service/types/dependency/app wiring, Adapter dispatch/session boundary, Task 5 plan update, and owned tests as `feat: implement credential token lifecycle service`.
 
 ## Task 6: Expose User-Scoped Credential APIs
 

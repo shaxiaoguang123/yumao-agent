@@ -81,6 +81,30 @@ class SQLiteConnectionTests(unittest.TestCase):
 
 
 class MigrationTests(unittest.TestCase):
+    def test_schema_v4_preserves_old_account_binding_state_for_soft_delete_audits(self) -> None:
+        db = _module("backend.db")
+        migrate_database = _module("backend.migrate").migrate_database
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "binding-audit.sqlite3"
+            migrate_database(database_path, BUSY_TIMEOUT_MS)
+
+            self.assertEqual(db.CURRENT_SCHEMA_VERSION, 4)
+            conn = db.connect_database(database_path, BUSY_TIMEOUT_MS)
+            try:
+                columns = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(credential_lifecycle_audits)")
+                }
+                self.assertIn("old_account_binding_state", columns)
+                self.assertEqual(
+                    [row[0] for row in conn.execute(
+                        "SELECT version FROM schema_migrations ORDER BY version"
+                    )],
+                    [1, 2, 3, 4],
+                )
+            finally:
+                conn.close()
+
     def test_credential_migration_adds_schema_v2_and_preserves_existing_users(self) -> None:
         db = _module("backend.db")
         migrate_database = _module("backend.migrate").migrate_database
@@ -106,7 +130,7 @@ class MigrationTests(unittest.TestCase):
                         "SELECT version FROM schema_migrations ORDER BY version"
                     )
                 ]
-                self.assertEqual(versions, [1, 2, 3])
+                self.assertEqual(versions, [1, 2, 3, 4])
                 self.assertEqual(
                     conn.execute(
                         "SELECT username FROM users WHERE user_id=?", ("user-a",)
@@ -545,7 +569,7 @@ class SchemaReadinessTests(unittest.TestCase):
                 db.check_schema_ready(database_path, BUSY_TIMEOUT_MS, 1, migrations)
             )
 
-    def test_schema_v3_readiness_requires_single_get_user_info_gate_row(self) -> None:
+    def test_schema_v4_readiness_requires_single_get_user_info_gate_row(self) -> None:
         db = _module("backend.db")
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -566,7 +590,7 @@ class SchemaReadinessTests(unittest.TestCase):
                 conn.close()
 
             with self.assertRaises(db.SchemaNotReadyError):
-                db.check_schema_ready(database_path, BUSY_TIMEOUT_MS, 3, migrations)
+                db.check_schema_ready(database_path, BUSY_TIMEOUT_MS, 4, migrations)
 
             conn = db.connect_database(database_path, BUSY_TIMEOUT_MS)
             try:

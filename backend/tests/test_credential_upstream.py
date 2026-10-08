@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import inspect
 import unittest
+import requests
 
 from backend.credentials.contracts import AdapterValidationResult
 from backend.credentials.upstream import (
@@ -43,6 +45,11 @@ class FakeSession:
         self.response = response
         self.error = error
         self.calls = []
+        self.trust_env = True
+        self.cookies = {}
+        self.auth = None
+        self.proxies = {}
+        self.closed = False
 
     def post(self, url, **kwargs):
         self.calls.append((url, kwargs))
@@ -50,10 +57,13 @@ class FakeSession:
             raise self.error
         return self.response
 
+    def close(self):
+        self.closed = True
+
 
 def _transport(session, *, clock=None, max_response_bytes=65536, total_deadline=10):
     return UpstreamHttpTransport(
-        session=session,
+        session_factory=lambda: session,
         connect_timeout_seconds=3,
         read_timeout_seconds=5,
         total_deadline_seconds=total_deadline,
@@ -64,7 +74,12 @@ def _transport(session, *, clock=None, max_response_bytes=65536, total_deadline=
 
 def _adapter(session, **kwargs):
     return UpstreamContractAdapter(
-        transport=_transport(session, **kwargs),
+        transport=_transport(
+            session,
+            clock=kwargs.get("clock"),
+            max_response_bytes=kwargs.get("max_response_bytes", 65536),
+            total_deadline=kwargs.get("total_deadline", 10),
+        ),
         upstream_origin=UPSTREAM_GET_USER_INFO_ORIGIN,
         account_continuity_capability=True,
     )
@@ -100,6 +115,65 @@ class UpstreamContractAdapterTests(unittest.TestCase):
         self.assertTrue(options["verify"])
         self.assertTrue(options["stream"])
         self.assertEqual(options["timeout"], (3.0, 5.0))
+        self.assertEqual(getattr(result, "dispatch_state", None), "complete")
+
+    def test_each_validation_uses_a_fresh_non_environment_session(self) -> None:
+        self.assertIn("session_factory", inspect.signature(UpstreamHttpTransport).parameters)
+        sessions = []
+
+        def make_session():
+            session = FakeSession(FakeResponse(200, [_success_body()]))
+            sessions.append(session)
+            return session
+
+        transport = UpstreamHttpTransport(
+            session_factory=make_session,
+            connect_timeout_seconds=3,
+            read_timeout_seconds=5,
+            total_deadline_seconds=10,
+            max_response_bytes=65536,
+        )
+        adapter = UpstreamContractAdapter(
+            transport=transport,
+            upstream_origin=UPSTREAM_GET_USER_INFO_ORIGIN,
+            account_continuity_capability=True,
+        )
+
+        adapter.validate_token("synthetic.one")
+        adapter.validate_token("synthetic.two")
+
+        self.assertEqual(len(sessions), 2)
+        self.assertIsNot(sessions[0], sessions[1])
+        for session in sessions:
+            self.assertFalse(session.trust_env)
+            self.assertFalse(session.cookies)
+            self.assertIsNone(session.auth)
+            self.assertEqual(session.proxies, {})
+            self.assertTrue(session.closed)
+
+    def test_incomplete_response_is_uncertain_and_does_not_claim_dispatch_completion(self) -> None:
+        self.assertIn("session_factory", inspect.signature(UpstreamHttpTransport).parameters)
+        class IncompleteResponse(FakeResponse):
+            def iter_content(self, chunk_size: int):
+                yield b'{"success":'
+                raise requests.ConnectionError("synthetic disconnect")
+
+        session = FakeSession(IncompleteResponse(200, []))
+        transport = UpstreamHttpTransport(
+            session_factory=lambda: session,
+            connect_timeout_seconds=3,
+            read_timeout_seconds=5,
+            total_deadline_seconds=10,
+            max_response_bytes=65536,
+        )
+        result = UpstreamContractAdapter(
+            transport=transport,
+            upstream_origin=UPSTREAM_GET_USER_INFO_ORIGIN,
+            account_continuity_capability=True,
+        ).validate_token("synthetic.jwt")
+
+        self.assertEqual(result.token_outcome, "network_error")
+        self.assertEqual(result.dispatch_state, "uncertain")
 
     def test_missing_identity_keeps_token_valid_but_does_not_create_identity(self) -> None:
         adapter = _adapter(FakeSession(FakeResponse(200, [_success_body(identity=None)])))
@@ -166,6 +240,7 @@ class UpstreamContractAdapterTests(unittest.TestCase):
             result = adapter.validate_token("synthetic.jwt.token")
 
             self.assertEqual(result.token_outcome, outcome)
+            self.assertEqual(getattr(result, "http_status_code", None), status)
             self.assertEqual(result.retry_after_header, retry_after)
             self.assertIsNone(result.identity_bytes)
             self.assertNotIn("untrusted upstream", repr(result))

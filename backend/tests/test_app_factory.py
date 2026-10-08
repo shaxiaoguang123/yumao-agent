@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import base64
+import json
 import logging
 import os
 import shutil
@@ -41,6 +43,65 @@ def _create_app(database_path: Path):
 
 
 class AppFactoryTests(unittest.TestCase):
+    def test_app_factory_wires_one_credential_service_and_shared_gate(self) -> None:
+        database_path = Path(_TEST_ROOT.name) / "credential-services.sqlite3"
+        _migrate_database(database_path)
+        app = _create_app(database_path)
+
+        self.assertIn("credential_service", app.extensions)
+        self.assertIn("credential_upstream_adapter", app.extensions)
+        self.assertIn("upstream_request_gate", app.extensions)
+        self.assertIn("credential_token_cipher", app.extensions)
+        self.assertIsNone(app.extensions["upstream_request_gate"].minimum_interval_ms)
+        self.assertIs(app.extensions["credential_service"].adapter, app.extensions["credential_upstream_adapter"])
+        self.assertIs(app.extensions["credential_service"].gate, app.extensions["upstream_request_gate"])
+        self.assertIs(app.extensions["credential_service"].cipher, app.extensions["credential_token_cipher"])
+
+    def test_app_factory_fails_fast_when_a_live_ciphertext_key_is_missing(self) -> None:
+        db = _module("backend.db")
+        database_path = Path(_TEST_ROOT.name) / "missing-live-key.sqlite3"
+        _migrate_database(database_path)
+        conn = db.connect_database(database_path, 5000)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """INSERT INTO users
+                   (user_id, username, normalized_username, password_hash, role, status,
+                    created_at_utc_ms, updated_at_utc_ms)
+                   VALUES ('user-a', 'a', 'a', 'synthetic-hash', 'user', 'active', 1, 1)"""
+            )
+            conn.execute(
+                """INSERT INTO credentials
+                   (credential_id, user_id, label, credential_version, enabled,
+                    current_token_revision_id, account_binding_state,
+                    last_confirmed_validation_state, requires_revalidation,
+                    created_at_utc_ms, updated_at_utc_ms)
+                   VALUES ('credential-a', 'user-a', 'A', 1, 1, 'revision-a',
+                           'unresolved', 'confirmed_valid', 0, 1, 1)"""
+            )
+            conn.execute(
+                """INSERT INTO credential_token_revisions
+                   (revision_id, user_id, credential_id, revision_number,
+                    token_fingerprint, token_fingerprint_key_version,
+                    initial_validation_result, initial_validation_at_utc_ms,
+                    created_by_user_id, secret_material_active, ciphertext, nonce,
+                    tag, encryption_key_version)
+                   VALUES ('revision-a', 'user-a', 'credential-a', 1, ?, 'fp-v1',
+                           'success', 1, 'user-a', 1, ?, ?, ?, 'enc-v1')""",
+                ("0" * 64, b"synthetic-ciphertext", b"n" * 12, b"t" * 16),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        settings = credential_test_settings(database_path)
+        settings["APP_CREDENTIAL_ENCRYPTION_KEYS"] = json.dumps(
+            {"enc-v2": base64.urlsafe_b64encode(b"z" * 32).rstrip(b"=").decode("ascii")}
+        )
+        settings["APP_CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID"] = "enc-v2"
+        with self.assertRaises(_module("backend.credentials.key_dependencies").CredentialKeyDependencyError):
+            importlib.import_module("backend.app").create_app({"TESTING": True, **settings})
+
     def test_create_app_uses_injected_database_path(self) -> None:
         database_path = Path(_TEST_ROOT.name) / "identity-test.sqlite3"
         _migrate_database(database_path)
@@ -97,7 +158,7 @@ class AppFactoryTests(unittest.TestCase):
         with self.assertRaises(db.SchemaNotReadyError):
             _create_app(database_path)
 
-    def test_app_factory_requires_schema_v3_without_running_migrations(self) -> None:
+    def test_app_factory_requires_schema_v4_without_running_migrations(self) -> None:
         db = _module("backend.db")
         migrate_database = _module("backend.migrate").migrate_database
         root = Path(_TEST_ROOT.name)
@@ -105,11 +166,15 @@ class AppFactoryTests(unittest.TestCase):
         schema_v2_migrations = root / "schema-v2-migrations"
         schema_v2_migrations.mkdir()
         migration_dir = Path(__file__).resolve().parents[1] / "migrations"
-        for name in ("0001_identity.sql", "0002_credentials.sql"):
+        for name in (
+            "0001_identity.sql",
+            "0002_credentials.sql",
+            "0003_upstream_gate_started_at.sql",
+        ):
             shutil.copyfile(migration_dir / name, schema_v2_migrations / name)
         migrate_database(database_path, 5000, schema_v2_migrations)
 
-        self.assertEqual(db.CURRENT_SCHEMA_VERSION, 3)
+        self.assertEqual(db.CURRENT_SCHEMA_VERSION, 4)
         with self.assertRaises(db.SchemaNotReadyError):
             _create_app(database_path)
 
@@ -120,7 +185,7 @@ class AppFactoryTests(unittest.TestCase):
                     "SELECT version FROM schema_migrations ORDER BY version"
                 )
             ]
-            self.assertEqual(versions, [1, 2])
+            self.assertEqual(versions, [1, 2, 3])
         finally:
             conn.close()
 

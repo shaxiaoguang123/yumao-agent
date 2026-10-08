@@ -13,6 +13,7 @@ TokenValidationOutcome = Literal[
     "validation_unknown",
 ]
 HttpStatusClass = Literal["1xx", "2xx", "3xx", "4xx", "5xx"]
+DispatchState = Literal["not_dispatched", "complete", "uncertain"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,3 +24,5 @@ class AdapterValidationResult:
     identity_contract_version: str | None
     http_status_class: HttpStatusClass | None
     retry_after_header: str | None = field(repr=False)
+    dispatch_state: DispatchState = "not_dispatched"
+    http_status_code: int | None = None

@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import requests
 from flask import Flask
 
 from backend.api.admin import admin_bp
@@ -14,6 +15,11 @@ from backend.auth.invitations import InvitationService
 from backend.auth.passwords import create_dummy_password_hash
 from backend.auth.rate_limit import RateLimitService
 from backend.auth.sessions import SessionService
+from backend.credentials.key_dependencies import check_credential_key_dependencies
+from backend.credentials.keyring import CredentialKeyring
+from backend.credentials.request_gate import UpstreamRequestGate
+from backend.credentials.service import CredentialService
+from backend.credentials.upstream import UpstreamContractAdapter, UpstreamHttpTransport
 from backend.db import CURRENT_SCHEMA_VERSION, check_schema_ready
 from backend.settings import load_settings
 
@@ -47,6 +53,53 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         CURRENT_SCHEMA_VERSION,
         migrations_dir,
     )
+    encryption_keyring = CredentialKeyring(
+        settings.credential_encryption_keys,
+        settings.credential_encryption_active_key_id,
+    )
+    fingerprint_keyring = CredentialKeyring(
+        settings.upstream_fingerprint_keys,
+        settings.upstream_fingerprint_active_key_id,
+    )
+    check_credential_key_dependencies(
+        settings.database_path,
+        settings.sqlite_busy_timeout_ms,
+        encryption_keyring=encryption_keyring,
+        fingerprint_keyring=fingerprint_keyring,
+    )
+    gate = UpstreamRequestGate(
+        database_path=settings.database_path,
+        busy_timeout_ms=settings.sqlite_busy_timeout_ms,
+        minimum_interval_ms=settings.upstream_get_user_info_min_interval_ms,
+        total_deadline_seconds=settings.upstream_total_deadline_seconds,
+        read_timeout_seconds=settings.upstream_read_timeout_seconds,
+        lease_safety_margin_seconds=settings.upstream_lease_safety_margin_seconds,
+        retry_after_fallback_seconds=settings.upstream_retry_after_fallback_seconds,
+        max_upstream_backoff_seconds=settings.max_upstream_backoff_seconds,
+    )
+    transport = UpstreamHttpTransport(
+        session_factory=requests.Session,
+        connect_timeout_seconds=settings.upstream_connect_timeout_seconds,
+        read_timeout_seconds=settings.upstream_read_timeout_seconds,
+        total_deadline_seconds=settings.upstream_total_deadline_seconds,
+        max_response_bytes=settings.upstream_max_response_bytes,
+    )
+    adapter = UpstreamContractAdapter(
+        transport=transport,
+        upstream_origin=settings.upstream_origin,
+        account_continuity_capability=True,
+    )
+    credential_service = CredentialService(
+        database_path=settings.database_path,
+        busy_timeout_ms=settings.sqlite_busy_timeout_ms,
+        encryption_keyring=encryption_keyring,
+        fingerprint_keyring=fingerprint_keyring,
+        adapter=adapter,
+        gate=gate,
+        account_continuity_capability=True,
+        token_expiring_soon_window_seconds=settings.token_expiring_soon_window_seconds,
+    )
+    cipher = credential_service.cipher
 
     app = Flask(__name__)
     app.config.update(flask_overrides)
@@ -73,6 +126,10 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         settings.database_path,
         settings.sqlite_busy_timeout_ms,
     )
+    app.extensions["credential_token_cipher"] = cipher
+    app.extensions["credential_upstream_adapter"] = adapter
+    app.extensions["upstream_request_gate"] = gate
+    app.extensions["credential_service"] = credential_service
     app.extensions["dummy_password_hash"] = create_dummy_password_hash()
     init_security(app)
     app.register_blueprint(health_bp)
