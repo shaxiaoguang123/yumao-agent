@@ -10,6 +10,7 @@ from datetime import datetime
 from ipaddress import ip_address
 from pathlib import Path
 import time as _time
+from urllib.parse import urlsplit
 
 from flask import Flask, current_app, jsonify, request, send_from_directory
 
@@ -31,6 +32,11 @@ LEGACY_SINGLE_USER_RUNTIME_ENABLED = (
     os.environ.get("YUMAO_ENABLE_LEGACY_SINGLE_USER_APP", "") == "1"
 )
 app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = LEGACY_SINGLE_USER_RUNTIME_ENABLED
+_LEGACY_ALLOWED_ORIGINS = {
+    "http://127.0.0.1:5175",
+    "http://localhost:5175",
+    "http://[::1]:5175",
+}
 PLAN_PATH = ROOT_DIR / "booking_plan.json"
 LOG_DIR = ROOT_DIR / "backend" / "logs"
 RUN_LOG_NAME = "run_flow"
@@ -45,6 +51,41 @@ LOG_SOURCES = {
     "api_server": "api_server",
     "frontend": "frontend",
 }
+
+
+def _legacy_origin(value: str, *, allow_path: bool) -> str | None:
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+    except (TypeError, ValueError):
+        return None
+    if (
+        parsed.scheme.lower() != "http"
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or (not allow_path and (parsed.path or parsed.query))
+    ):
+        return None
+    return f"http://{parsed.netloc.lower()}"
+
+
+def _legacy_request_origin_is_allowed() -> bool:
+    origins: list[str] = []
+    origin = request.headers.get("Origin")
+    referer = request.headers.get("Referer")
+    if origin is not None:
+        parsed_origin = _legacy_origin(origin, allow_path=False)
+        if parsed_origin is None:
+            return False
+        origins.append(parsed_origin)
+    if referer is not None:
+        parsed_referer = _legacy_origin(referer, allow_path=True)
+        if parsed_referer is None:
+            return False
+        origins.append(parsed_referer)
+    return bool(origins) and len(set(origins)) == 1 and origins[0] in _LEGACY_ALLOWED_ORIGINS
 
 
 @app.before_request
@@ -62,6 +103,8 @@ def require_legacy_runtime_opt_in():
         remote_address = None
     if remote_address is None or not remote_address.is_loopback:
         return jsonify({"error": "legacy_app_loopback_only"}), 403
+    if request.path.startswith("/api/") and not _legacy_request_origin_is_allowed():
+        return jsonify({"error": "legacy_origin_not_allowed"}), 403
     return None
 
 
@@ -77,14 +120,6 @@ def _log_request(response):
         response.status_code,
         elapsed,
     )
-    return response
-
-
-@app.after_request
-def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET,POST,DELETE,OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return response
 
 

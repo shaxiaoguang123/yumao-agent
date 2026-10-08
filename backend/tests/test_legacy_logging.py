@@ -80,6 +80,50 @@ class LegacyLoggingTests(unittest.TestCase):
         self.assertEqual(response.get_json(), {"error": "legacy_app_loopback_only"})
         run_plan.assert_not_called()
 
+    def test_opted_in_legacy_runtime_rejects_cross_origin_execution(self) -> None:
+        legacy_module.app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = True
+        client = legacy_module.app.test_client()
+        try:
+            with patch.object(
+                legacy_module,
+                "run_plan",
+                return_value=flow_module.FlowResult(True, "synthetic", {}),
+            ) as run_plan:
+                response = client.post(
+                    "/api/run",
+                    json={"autoRun": True},
+                    base_url="http://localhost:5175",
+                    headers={"Origin": "https://attacker.invalid"},
+                )
+        finally:
+            legacy_module.app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = False
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json(), {"error": "legacy_origin_not_allowed"})
+        run_plan.assert_not_called()
+
+    def test_opted_in_legacy_runtime_allows_same_origin_without_wildcard_cors(self) -> None:
+        legacy_module.app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = True
+        client = legacy_module.app.test_client()
+        try:
+            with patch.object(
+                legacy_module,
+                "run_plan",
+                return_value=flow_module.FlowResult(True, "synthetic", {}),
+            ) as run_plan:
+                response = client.post(
+                    "/api/run",
+                    json={"autoRun": True},
+                    base_url="http://localhost:5175",
+                    headers={"Origin": "http://localhost:5175"},
+                )
+        finally:
+            legacy_module.app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = False
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.headers.get("Access-Control-Allow-Origin"))
+        run_plan.assert_called_once()
+
     def test_http_success_logs_omit_request_payload_and_upstream_response(self) -> None:
         token = "synthetic-token-that-must-not-be-logged"
         identity = "synthetic-idserial-that-must-not-be-logged"
@@ -153,6 +197,8 @@ class LegacyLoggingTests(unittest.TestCase):
                 response = client.post(
                     f"/api/save_plan?token={query_secret}",
                     json={"token": body_secret},
+                    base_url="http://localhost:5175",
+                    headers={"Origin": "http://localhost:5175"},
                 )
 
             self.assertIn(response.status_code, (400, 500))
@@ -165,6 +211,8 @@ class LegacyLoggingTests(unittest.TestCase):
                 client.post(
                     "/api/frontend-log",
                     json={"level": "info", "action": "save-plan", "detail": detail_secret},
+                    base_url="http://localhost:5175",
+                    headers={"Origin": "http://localhost:5175"},
                 )
 
             self.assertNotIn(detail_secret, repr(frontend_log.call_args_list))
