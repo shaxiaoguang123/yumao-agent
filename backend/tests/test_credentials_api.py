@@ -172,6 +172,34 @@ class CredentialApiTests(unittest.TestCase):
         self.assertEqual(self._body(response)["error"], "invalid_request")
         self.assertEqual(self.adapter.calls, [])
 
+    def test_create_maps_json_integer_and_nesting_parser_limits_to_invalid_request(self) -> None:
+        oversized_integer = (
+            '{"label":"Home","token":"synthetic-token","extra":'
+            + ("9" * 5000)
+            + "}"
+        )
+        deeply_nested = (
+            '{"label":"Home","token":"synthetic-token","extra":'
+            + ("{" * 1400)
+            + '"end":true'
+            + ("}" * 1400)
+            + "}"
+        )
+        calls_before = len(self.adapter.calls)
+
+        for body in (oversized_integer, deeply_nested):
+            with self.subTest(body_bytes=len(body)):
+                response = self.client_a.post(
+                    "/api/credentials",
+                    data=body,
+                    content_type="application/json",
+                    headers=self._headers(self.csrf_a),
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(self._body(response), {"error": "invalid_request"})
+
+        self.assertEqual(len(self.adapter.calls), calls_before)
+
     def test_create_returns_exact_safe_dto_and_never_echoes_token_or_identity(self) -> None:
         token = _token("never-echo-this")
 
