@@ -264,9 +264,9 @@
 
 - [ ] **Step 2: Run gate tests and confirm expected failures**
 
-  Run: `conda run -n test python -m unittest discover -s backend/tests -p 'test_credential_request_gate.py' -v`.
+  Run `conda run -n test python -m unittest discover -s backend/tests -p 'test_credential_request_gate.py' -v`, then repeat with `test_db.py` and `test_app_factory.py`.
 
-  Expected: new permit, concurrency, backoff, and fencing assertions fail because the gate repository is absent.
+  Expected: gate assertions fail because the gate module is absent; schema-v3 assertions fail because migration 0003/readiness are absent and the app still requires schema 2. Existing unrelated identity assertions continue to pass.
 
 - [x] **Step 3: Update the design and plan with the resolved gate fields**
 
@@ -278,7 +278,7 @@
 
 - [ ] **Step 5: Run the migration/readiness regression tests and confirm green**
 
-  Run: `conda run -n test python -m unittest discover -s backend/tests -p 'test_db.py' -v`, then repeat with `test_app_factory.py`.
+  Run the same `test_db.py` and `test_app_factory.py` commands from Step 2.
 
   Expected: migration 0003 applies atomically, the existing schema-v2 and identity data remain intact, and app startup fails on schema 2 without applying migration 0003.
 
@@ -288,7 +288,7 @@
 
 - [ ] **Step 7: Run gate tests**
 
-  Run the same focused discover command from Step 2.
+  Run the same focused `test_credential_request_gate.py` command from Step 2.
 
   Expected: concurrent attempts produce one permit and stable request-order IDs; no test performs HTTP.
 
