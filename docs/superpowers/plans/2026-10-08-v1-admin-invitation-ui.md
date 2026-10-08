@@ -19,6 +19,7 @@ The current source on `main` (`bd12ac8`, `v1-credential-token-lifecycle`) alread
 - `POST /api/admin/invitations` in `backend/api/admin.py`. It requires a valid Session, server-side `require_admin`, and CSRF. It accepts no expiry option and sets expiry to exactly 24 hours after creation.
 - Success is HTTP 201 with `{invitation_code, expires_at_utc_ms}`. The plaintext code is returned only by this creation response.
 - `InvitationService.create` generates a high-entropy one-time code, rechecks that the creator is an active administrator inside a SQLite `BEGIN IMMEDIATE` transaction, and persists only the SHA-256 hash.
+- If that service-level active-admin check loses a race with account disable after request Session validation, it raises before inserting; the route does not map that exception and may return a generic 500. This fails closed. The UI treats 5xx as an uncertain result and never retries automatically; no backend change is required for this UI completion.
 - The backend already tests admin creation, ordinary-user 403, single-use/hash-only storage, missing/invalid CSRF, and origin rejection in `backend/tests/test_auth_api.py`.
 - `GET /api/auth/session` and login already return `user.role`; `createSessionStore` retains it in memory.
 - The current frontend declares `@vue/test-utils`, `jsdom`, and `vitest` in `package.json`/lockfile, and `frontend/vitest.config.js` already selects the `jsdom` environment. Component-test infrastructure is present; no dependency/config change is planned.
