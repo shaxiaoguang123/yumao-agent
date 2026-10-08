@@ -63,6 +63,18 @@ class LegacyLoggingTests(unittest.TestCase):
         self.assertNotIn(token, rendered_logs)
         self.assertNotIn(identity, rendered_logs)
 
+    def test_http_logs_omit_query_parameters_from_endpoint_path(self) -> None:
+        query_secret = "synthetic-query-token"
+        response = _FakeResponse(200, {"success": True})
+
+        with patch.object(client_module.requests, "Session", return_value=_FakeSession(response)):
+            with patch.object(client_module.HTTP_LOG, "info") as log_info:
+                client_module.ApiClient("https://example.invalid").post_json(
+                    f"/getUserInfo?token={query_secret}", {}, {}
+                )
+
+        self.assertNotIn(query_secret, repr(log_info.call_args_list))
+
     def test_http_error_logs_and_safe_error_omit_upstream_body(self) -> None:
         sensitive_value = "synthetic-private-upstream-detail"
         response = _FakeResponse(500, {"message": sensitive_value})

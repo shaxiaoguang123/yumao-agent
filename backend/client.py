@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from typing import Any, Dict
+from urllib.parse import urlsplit
 
 import requests
 
@@ -24,14 +25,15 @@ class ApiClient:
         timeout: int = 20,
     ) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
-        HTTP_LOG.info(">>> POST %s", path)
+        safe_path = urlsplit(path).path
+        HTTP_LOG.info(">>> POST %s", safe_path)
 
         t0 = time.perf_counter()
         try:
             response = self.session.post(url, headers=headers, json=payload, timeout=timeout)
         except requests.RequestException:
             elapsed = (time.perf_counter() - t0) * 1000
-            HTTP_LOG.error("<<< POST %s  NETWORK_ERROR  %.0fms", path, elapsed)
+            HTTP_LOG.error("<<< POST %s  NETWORK_ERROR  %.0fms", safe_path, elapsed)
             raise RuntimeError("网络请求失败") from None
 
         elapsed = (time.perf_counter() - t0) * 1000
@@ -39,7 +41,7 @@ class ApiClient:
         if response.status_code >= 400:
             HTTP_LOG.error(
                 "<<< POST %s  HTTP_%d  %.0fms",
-                path, response.status_code, elapsed,
+                safe_path, response.status_code, elapsed,
             )
             raise RuntimeError(f"上游接口 {response.status_code}")
 
@@ -47,7 +49,7 @@ class ApiClient:
         success = bool(result.get("success")) if isinstance(result, dict) else False
         HTTP_LOG.info(
             "<<< POST %s  status=%d  success=%s  %.0fms",
-            path, response.status_code, success, elapsed,
+            safe_path, response.status_code, success, elapsed,
         )
 
         return result
