@@ -454,31 +454,31 @@
 
 **Interfaces:**
 
-- Add `python -m backend.cli rewrap-credential-tokens` as an explicit CLI subcommand for ciphertext key rewrap. It runs in one database transaction, authenticates each active envelope before commit, appends safe lifecycle audit rows, and leaves semantic Token revision fields unchanged. It never logs or prints Token/key material.
+- Add `python -m backend.cli rewrap-credential-tokens --actor-user-id <active-admin-user-id>` as an explicit CLI subcommand for ciphertext key rewrap. It verifies the active admin actor and runs all row rewraps/audits in one database transaction, authenticates each active envelope before commit, and leaves semantic Token revision fields unchanged. It never logs or prints Token/key material.
 - Startup/dependency scans are read-only. Key removal fails while active ciphertext, current Token fingerprint comparisons, or non-deleted confirmed/reconfirmation account fingerprints still depend on the key.
 - Local-run instructions explain generation/injection of independent encryption/fingerprint keyrings, origin/timeouts/backoff settings, the evidence-backed interval, explicit `python -m backend.migrate`, and how missing interval leaves validation disabled. Documentation includes no real secret values.
 
-- [ ] **Step 1: Write failing CLI/rewrap tests**
+- [x] **Step 1: Write failing CLI/rewrap tests**
 
   Cover successful rewrap, wrong old key authentication failure, partial failure rollback, old-key dependency retention/removal rejection, historical inert key metadata, safe CLI output, and `AppSettings.__repr__`/logs not containing values.
 
-- [ ] **Step 2: Run maintenance tests and confirm expected failures**
+- [x] **Step 2: Run maintenance tests and confirm expected failures**
 
   Run: `conda run -n test python -m unittest discover -s backend/tests -p 'test_credential_maintenance.py' -v`.
 
   Expected: maintenance subcommand and safe rewrap assertions fail because the command is not implemented.
 
-- [ ] **Step 3: Implement maintenance command and docs**
+- [x] **Step 3: Implement maintenance command and docs**
 
   Add only explicit administrative maintenance; do not expose key operations to Credential APIs. Document local env injection without printing secrets.
 
-- [ ] **Step 4: Run maintenance tests and documentation checks**
+- [x] **Step 4: Run maintenance tests and documentation checks**
 
   Run the same focused discover command from Step 2 and `git diff --check`.
 
   Expected: rewrap and dependency tests pass on temporary databases; documentation diff has no whitespace errors or real secrets.
 
-- [ ] **Step 5: Commit maintenance and local docs**
+- [x] **Step 5: Commit maintenance and local docs**
 
   Commit the CLI, maintenance module, tests, and local-run documentation as `feat: add credential key maintenance`.
 

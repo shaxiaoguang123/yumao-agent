@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import sys
 import time
 import unicodedata
 import uuid
@@ -10,6 +11,12 @@ from pathlib import Path
 from backend.auth.invitations import normalize_username
 from backend.auth.passwords import hash_password
 from backend.auth.types import UserSummary
+from backend.credentials.key_dependencies import CredentialKeyDependencyError
+from backend.credentials.keyring import CredentialKeyring
+from backend.credentials.maintenance import (
+    CredentialMaintenanceError,
+    rewrap_credential_tokens,
+)
 from backend.db import connect_database, check_schema_ready, CURRENT_SCHEMA_VERSION
 from backend.settings import load_settings
 
@@ -63,10 +70,15 @@ def create_first_admin(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Identity foundation administration tools")
+    parser = argparse.ArgumentParser(description="Identity and Credential administration tools")
     subparsers = parser.add_subparsers(dest="command", required=True)
     create_admin = subparsers.add_parser("create-admin", help="create the first administrator")
     create_admin.add_argument("--username", required=True)
+    rewrap = subparsers.add_parser(
+        "rewrap-credential-tokens",
+        help="rewrap active Credential Token ciphertext with the active encryption key",
+    )
+    rewrap.add_argument("--actor-user-id", required=True)
     args = parser.parse_args(argv)
 
     if args.command == "create-admin":
@@ -91,6 +103,43 @@ def main(argv: list[str] | None = None) -> int:
             time.time_ns() // 1_000_000,
         )
         print(f"Created administrator: {user.username}")
+        return 0
+    if args.command == "rewrap-credential-tokens":
+        settings = load_settings()
+        migrations_dir = Path(__file__).resolve().parent / "migrations"
+        check_schema_ready(
+            settings.database_path,
+            settings.sqlite_busy_timeout_ms,
+            CURRENT_SCHEMA_VERSION,
+            migrations_dir,
+        )
+        encryption_keyring = CredentialKeyring(
+            settings.credential_encryption_keys,
+            settings.credential_encryption_active_key_id,
+        )
+        fingerprint_keyring = CredentialKeyring(
+            settings.upstream_fingerprint_keys,
+            settings.upstream_fingerprint_active_key_id,
+        )
+        try:
+            result = rewrap_credential_tokens(
+                settings.database_path,
+                settings.sqlite_busy_timeout_ms,
+                encryption_keyring=encryption_keyring,
+                fingerprint_keyring=fingerprint_keyring,
+                actor_user_id=args.actor_user_id,
+                now_utc_ms=time.time_ns() // 1_000_000,
+            )
+        except CredentialMaintenanceError as exc:
+            print(f"Credential Token rewrap failed: {exc.code}", file=sys.stderr)
+            return 1
+        except CredentialKeyDependencyError:
+            print("Credential Token rewrap failed: credential_key_dependency_missing", file=sys.stderr)
+            return 1
+        print(
+            f"Rewrapped {result.rewrapped_count} Credential Token envelope(s); "
+            f"{result.unchanged_count} already used the active key."
+        )
         return 0
     return 2
 
