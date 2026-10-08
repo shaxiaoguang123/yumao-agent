@@ -496,7 +496,7 @@
 
 - [x] **Step 1: Review the full branch diff and changed-file allowlist**
 
-  Confirm only the plan, evidence note, schema/config/service/API/UI/tests/local docs changed; verify `.env`, `req/`, DB/logs, `node_modules`, and `dist` are not staged or tracked.
+  Confirm the changed files are limited to the pre-approved Credential/parent design specs, this plan, sanitized Task 0 evidence, and the named schema/config/service/API/UI/tests/local docs; verify `.env`, `req/`, DB/logs, `node_modules`, and `dist` are not staged or tracked.
 
 - [x] **Step 2: Run complete offline verification**
 
