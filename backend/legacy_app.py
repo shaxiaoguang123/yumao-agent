@@ -52,18 +52,12 @@ def _log_request(response):
     if request.path in ("/api/logs", "/api/frontend-log"):
         return response
     elapsed = (_time.perf_counter() - getattr(request, "_start_time", _time.perf_counter())) * 1000
-    body_summary = ""
-    if request.content_type and "json" in request.content_type:
-        raw = request.get_data(as_text=True)
-        body_summary = (raw[:300] + "...") if len(raw) > 300 else raw
     API_LOG.info(
-        "%s %s %s -> %d (%.1fms) body=%s",
+        "%s endpoint=%s -> %d (%.1fms)",
         request.method,
-        request.path,
-        request.query_string.decode("utf-8", errors="replace")[:200],
+        request.endpoint or "unmatched",
         response.status_code,
         elapsed,
-        body_summary or "-",
     )
     return response
 
@@ -278,26 +272,16 @@ def clear_logs():
     return jsonify({"success": True, "message": f"cleared {target.name}"})
 
 
-def _sanitize_log_field(value: str, max_len: int = 500) -> str:
-    """Remove control chars that could forge log lines; cap length."""
-    return value.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")[:max_len]
-
-
 @app.post("/api/frontend-log")
 def frontend_log():
     data = request.get_json(silent=True) or {}
     level = str(data.get("level") or "info").lower()
-    action = _sanitize_log_field(str(data.get("action") or "unknown"), 100)
-    detail = _sanitize_log_field(str(data.get("detail") or ""), 500)
-    ts = _sanitize_log_field(str(data.get("ts") or ""), 40)
-    msg = "[frontend] action=%s ts=%s detail=%s"
-    args = (action, ts, detail or "-")
     if level == "error":
-        FE_LOG.error(msg, *args)
+        FE_LOG.error("[frontend] client event")
     elif level == "warn":
-        FE_LOG.warning(msg, *args)
+        FE_LOG.warning("[frontend] client event")
     else:
-        FE_LOG.info(msg, *args)
+        FE_LOG.info("[frontend] client event")
     return jsonify({"success": True})
 
 
