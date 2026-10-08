@@ -241,18 +241,24 @@
 **Files:**
 
 - Create: `backend/credentials/request_gate.py`
+- Create: `backend/migrations/0003_upstream_gate_started_at.sql`
+- Modify: `backend/db.py` to advance schema version to 3 and require the gate-start timestamp/readiness invariant.
+- Modify: `backend/tests/test_db.py` and `backend/tests/test_app_factory.py` for schema version 3 and migration 0003.
+- Modify: `docs/superpowers/specs/2026-10-07-credential-token-lifecycle-design.md` and this plan to specify persisted original gate start time and transactional preflight fencing.
 - Test: `backend/tests/test_credential_request_gate.py`
 
 **Interfaces:**
 
-- `UpstreamRequestGate.acquire(operation_context, now_utc_ms, preflight_denial=None) -> GateDecision` runs one `BEGIN IMMEDIATE`; it allocates `validation_attempt_id` in request order, checks local dispatch preconditions, the single `getUserInfo` endpoint interval/backoff/in-flight lease, and returns a permit or safe denial with retry seconds. Expired-token, disabled/unconfigured, rate-limited, and other no-dispatch outcomes append a safe observation in the same transaction and never create a permit. Missing evidence-based endpoint interval returns unconfigured; it never creates per-user/per-Credential gates.
+- `0003_upstream_gate_started_at.sql` adds `active_started_at_utc_ms` to the existing shared gate row with triggers requiring it exactly while a lease is active. Do not edit already-applied migrations `0001_identity.sql` or `0002_credentials.sql`.
+- Advance `CURRENT_SCHEMA_VERSION` to 3. Readiness must require the new column and validate gate lease coherence, including exactly one `getUserInfo` row, `lease_owner_id`, `active_validation_attempt_id`, and `active_started_at_utc_ms` present together or all absent.
+- `UpstreamRequestGate.acquire(operation_context, now_utc_ms, preflight_check)` runs one `BEGIN IMMEDIATE`; it allocates `validation_attempt_id` in request order, invokes the service-supplied read-only preflight check on that same SQLite connection, then checks the single `getUserInfo` endpoint interval/backoff/in-flight lease. It returns a permit or safe denial with retry seconds. The callback may only read/compare; it does not write or perform I/O. This makes the final credential enabled/version/revision/expiry/binding check atomic with permit creation. Expired-token, disabled/unconfigured, rate-limited, and other no-dispatch outcomes append a safe observation in the same transaction and never create a permit. Missing evidence-based endpoint interval returns unconfigured; it never creates per-user/per-Credential gates.
 - `complete_in_transaction(connection, permit, safe_observation, now_utc_ms, retry_after_header=None)` appends the final safe observation, updates bounded backoff, and releases only a matching live owner/epoch as part of the Credential service's final `BEGIN IMMEDIATE` transaction. `mark_uncertain_in_transaction(connection, permit, safe_observation, now_utc_ms)` records an uncertain read while retaining the lease until expiry.
-- Lease expiry is `start + total_deadline + safety_margin`, with safety margin at least one configured read timeout plus cleanup allowance. Reclaim marks the old attempt stale before incrementing epoch.
+- Lease expiry is `start + total_deadline + safety_margin`, with safety margin at least one configured read timeout plus cleanup allowance. Persist the original `active_started_at_utc_ms`; lease reclaim uses it when appending the old attempt's stale observation before incrementing epoch.
 - Retry-After accepts delta-seconds; HTTP-date is enabled only if Task 0 evidence requires it. Invalid/negative/overflow values use configured fallback. All delays clamp to `max_upstream_backoff_seconds`.
 
 - [ ] **Step 1: Write failing rolling gate/concurrency tests**
 
-  Cover request-order attempt IDs for permit, rate denial, expired-token and unconfigured preflight denial; one service-wide lease across user IDs; minimum interval; backoff monotonic max; delta-seconds/date/fallback/malformed/negative/overflow/max-clamp cases; lease expiry/margin; stale owner/epoch release; late completion; and SQLite serialization using temporary databases.
+  Cover request-order attempt IDs for permit, rate denial, expired-token and unconfigured preflight denial; prove preflight races are rechecked inside the gate transaction; one service-wide lease across user IDs; minimum interval; backoff monotonic max; delta-seconds/date/fallback/malformed/negative/overflow/max-clamp cases; persisted start time used for stale lease-reclaim observation; lease expiry/margin; stale owner/epoch release; late completion; and SQLite serialization using temporary databases.
 
 - [ ] **Step 2: Run gate tests and confirm expected failures**
 
@@ -260,19 +266,33 @@
 
   Expected: new permit, concurrency, backoff, and fencing assertions fail because the gate repository is absent.
 
-- [ ] **Step 3: Implement the gate with explicit transactions**
+- [ ] **Step 3: Update the design and plan with the resolved gate fields**
+
+  Add `active_started_at_utc_ms` to the Gate's persisted active request context and state that Credential snapshot preflight is re-read inside the same acquisition transaction. Preserve the already-approved gate, ordering, timeout, and retry semantics.
+
+- [ ] **Step 4: Implement migration 0003 and schema-v3 readiness**
+
+  Add only `active_started_at_utc_ms` and coherence triggers in a new migration. Update schema readiness and existing migration-upgrade/app-factory tests to require schema version 3 while preserving the immutability/checksum of 0001 and 0002.
+
+- [ ] **Step 5: Run the migration/readiness regression tests and confirm green**
+
+  Run: `conda run -n test python -m unittest discover -s backend/tests -p 'test_db.py' -v`, then repeat with `test_app_factory.py`.
+
+  Expected: migration 0003 applies atomically, the existing schema-v2 and identity data remain intact, and app startup fails on schema 2 without applying migration 0003.
+
+- [ ] **Step 6: Implement the gate with explicit transactions**
 
   Use short SQLite `BEGIN IMMEDIATE` transactions for acquire/complete/reclaim; never hold a write transaction while HTTP is in progress. Gate rows contain only internal IDs and safe metadata, not Token, fingerprints, user profile, or raw headers.
 
-- [ ] **Step 4: Run gate tests**
+- [ ] **Step 7: Run gate tests**
 
   Run the same focused discover command from Step 2.
 
   Expected: concurrent attempts produce one permit and stable request-order IDs; no test performs HTTP.
 
-- [ ] **Step 5: Commit the shared gate**
+- [ ] **Step 8: Commit the shared gate and migration**
 
-  Commit the gate module and tests as `feat: add shared upstream validation gate`.
+  Commit `request_gate.py`, migration 0003, schema/readiness updates, migration/app-factory test updates, and gate tests as `feat: add shared upstream validation gate`.
 
 ## Task 5: Implement Credential Lifecycle Service and Conditional Writes
 
@@ -459,7 +479,7 @@
 
 **Interfaces:**
 
-- Schema version 2 startup is read-only; explicit migrations are the only schema upgrade path.
+- Schema version 3 startup is read-only; explicit migrations are the only schema upgrade path.
 - Local test commands are `conda run -n test python -m unittest discover -s backend/tests -v`, `cd frontend && npm test -- --run`, and `cd frontend && npm run build`.
 - No real upstream requests are run. No raw `req/`, `.env`, DB, logs, Tokens, or generated frontend assets are committed.
 
