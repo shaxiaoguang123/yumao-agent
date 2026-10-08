@@ -8,6 +8,7 @@ const expiresAtUtcMs = ref(null);
 const submitting = ref(false);
 const errorMessage = ref('');
 const statusMessage = ref('');
+const creationOutcomeUncertain = ref(false);
 let isMounted = true;
 
 const expiryIso = computed(() => (
@@ -47,9 +48,14 @@ function safeErrorMessage(error) {
   return '邀请码创建失败，请检查后重试。';
 }
 
-async function createInvitation() {
-  if (submitting.value || invitationCode.value) return;
+async function createInvitation({ acknowledgeUncertainOutcome = false } = {}) {
+  if (
+    submitting.value
+    || invitationCode.value
+    || (creationOutcomeUncertain.value && !acknowledgeUncertainOutcome)
+  ) return;
 
+  creationOutcomeUncertain.value = false;
   submitting.value = true;
   errorMessage.value = '';
   statusMessage.value = '';
@@ -61,9 +67,23 @@ async function createInvitation() {
   } catch (error) {
     if (!isMounted) return;
     errorMessage.value = safeErrorMessage(error);
+    creationOutcomeUncertain.value = (
+      error?.status >= 500
+      || error?.kind === 'network'
+      || error?.kind === 'timeout'
+    );
   } finally {
     if (isMounted) submitting.value = false;
   }
+}
+
+function createAnotherAfterUncertainOutcome() {
+  if (!creationOutcomeUncertain.value || submitting.value) return;
+  const confirmed = window.confirm(
+    '上次请求可能已经创建邀请码，但当前无法查看结果。继续会再创建一个新邀请码，可能留下未使用的邀请码。仍要继续吗？',
+  );
+  if (!confirmed) return;
+  return createInvitation({ acknowledgeUncertainOutcome: true });
 }
 
 async function copyInvitation() {
@@ -82,6 +102,7 @@ function dismissInvitation() {
   invitationCode.value = '';
   expiresAtUtcMs.value = null;
   submitting.value = false;
+  creationOutcomeUncertain.value = false;
   statusMessage.value = '';
   errorMessage.value = '';
 }
@@ -107,9 +128,21 @@ onBeforeUnmount(() => {
         data-testid="create-invitation"
         class="primary-button"
         type="submit"
-        :disabled="submitting || Boolean(invitationCode) || !invitationApi"
+        :disabled="submitting || Boolean(invitationCode) || creationOutcomeUncertain || !invitationApi"
       >
         {{ submitting ? '正在创建…' : '创建邀请码' }}
+      </button>
+      <p v-if="creationOutcomeUncertain" class="uncertain-create-warning" role="alert">
+        页面不会自动重试。确认上次结果未知、且仍要创建另一个邀请码时，再使用下面的操作。
+      </p>
+      <button
+        v-if="creationOutcomeUncertain"
+        data-testid="confirm-create-after-uncertain"
+        class="secondary-button"
+        type="button"
+        @click="createAnotherAfterUncertainOutcome"
+      >
+        我理解可能已有邀请码，仍要创建另一个
       </button>
     </form>
 
@@ -162,5 +195,6 @@ onBeforeUnmount(() => {
 .expiry-line { margin: 0; color: #334155; font-size: .9rem; }
 .invitation-actions { display: flex; flex-wrap: wrap; gap: .65rem; }
 .copy-status { margin: 0; color: #176348; font-size: .9rem; }
+.uncertain-create-warning { margin: 0; color: #8a4510; font-size: .9rem; }
 .back-link { display: inline-block; margin-top: 1.25rem; }
 </style>

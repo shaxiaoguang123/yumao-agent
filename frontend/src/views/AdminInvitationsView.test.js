@@ -49,6 +49,7 @@ function submitCreation(wrapper) {
 
 describe('admin invitation management view', () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     delete navigator.clipboard;
   });
 
@@ -188,6 +189,40 @@ describe('admin invitation management view', () => {
     await flushPromises();
     expect(wrapper.get('[data-testid="invitation-code"]').text())
       .toBe('synthetic-pending-code');
+  });
+
+  it('requires explicit acknowledgement before creating again after an uncertain result', async () => {
+    const code = 'synthetic-retry-confirmed-code';
+    const create = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('network unavailable'), { kind: 'network' }))
+      .mockResolvedValueOnce({
+        invitation_code: code,
+        expires_at_utc_ms: Date.UTC(2027, 0, 2),
+      });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const { wrapper } = await mountView(invitationApi(create));
+
+    await submitCreation(wrapper);
+    await flushPromises();
+
+    expect(create).toHaveBeenCalledOnce();
+    expect(wrapper.get('[data-testid="create-invitation"]').element.disabled).toBe(true);
+    expect(wrapper.find('[data-testid="confirm-create-after-uncertain"]').exists()).toBe(true);
+
+    await wrapper.get('form').trigger('submit');
+    expect(create).toHaveBeenCalledOnce();
+
+    await wrapper.get('[data-testid="confirm-create-after-uncertain"]').trigger('click');
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(create).toHaveBeenCalledOnce();
+
+    confirm.mockReturnValue(true);
+    await wrapper.get('[data-testid="confirm-create-after-uncertain"]').trigger('click');
+    await flushPromises();
+
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(wrapper.get('[data-testid="invitation-code"]').text()).toBe(code);
   });
 
   it.each([
