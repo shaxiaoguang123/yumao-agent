@@ -62,6 +62,7 @@ describe('admin invitation API helper', () => {
     }
 
     expect(thrown).toBeInstanceOf(Error);
+    expect(thrown.kind).toBe('invalid_response');
     expect(thrown.message).not.toContain(code);
   });
 

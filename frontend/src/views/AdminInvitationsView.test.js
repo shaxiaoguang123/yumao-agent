@@ -231,6 +231,7 @@ describe('admin invitation management view', () => {
     [409, 'http', '创建请求发生冲突'],
     [429, 'http', '操作过于频繁'],
     [503, 'http', '创建结果尚未确认'],
+    [0, 'invalid_response', '创建结果尚未确认'],
     [0, 'network', '创建结果尚未确认'],
     [0, 'timeout', '创建结果尚未确认'],
   ])('maps status %s / %s to a safe message without retrying', async (status, kind, message) => {

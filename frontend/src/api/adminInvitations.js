@@ -16,7 +16,9 @@ export function createAdminInvitationApi(client) {
         || !Number.isSafeInteger(payload.expires_at_utc_ms)
         || payload.expires_at_utc_ms <= 0
       ) {
-        throw new Error('invalid_invitation_response');
+        const error = new Error('invalid_invitation_response');
+        error.kind = 'invalid_response';
+        throw error;
       }
 
       return {

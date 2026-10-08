@@ -42,6 +42,7 @@ function safeErrorMessage(error) {
     error?.status >= 500
     || error?.kind === 'network'
     || error?.kind === 'timeout'
+    || error?.kind === 'invalid_response'
   ) {
     return '创建结果尚未确认，邀请码可能已经生成。请先确认上次请求未成功，再决定是否重新创建。';
   }
@@ -71,6 +72,7 @@ async function createInvitation({ acknowledgeUncertainOutcome = false } = {}) {
       error?.status >= 500
       || error?.kind === 'network'
       || error?.kind === 'timeout'
+      || error?.kind === 'invalid_response'
     );
   } finally {
     if (isMounted) submitting.value = false;
