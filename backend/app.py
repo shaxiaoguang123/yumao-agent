@@ -9,6 +9,7 @@ from flask import Flask
 
 from backend.api.admin import admin_bp
 from backend.api.auth import auth_bp
+from backend.api.credentials import credentials_bp
 from backend.api.health import health_bp
 from backend.api.security import init_security
 from backend.auth.invitations import InvitationService
@@ -134,5 +135,6 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
     init_security(app)
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
+    app.register_blueprint(credentials_bp)
     app.register_blueprint(admin_bp)
     return app

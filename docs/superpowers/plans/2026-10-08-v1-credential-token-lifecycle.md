@@ -369,27 +369,27 @@
 - All mutation endpoints require the existing Session, allowed Origin/Referer, and CSRF checks. Cross-user IDs return same non-disclosing 404 as missing IDs. Upstream invalid Token is never returned as application 401; only explicit evidence-backed invalid mapping may use `422 credential_token_invalid`.
 - Safe errors include `validation_rate_limited` with HTTP/JSON retry seconds, `validation_not_configured`, `validation_stale`, `credential_account_already_configured`, `credential_account_binding_unresolved`, `credential_account_reconfirmation_required`, `credential_token_expired`, and safe upstream contract/unknown errors. Never return upstream free-text.
 
-- [ ] **Step 1: Write failing API tests**
+- [x] **Step 1: Write failing API tests**
 
   Cover login-required, CSRF/Origin rejection, schema body limits/unknown fields, all method/status mappings, exact DTO allowlist, invalid upstream code not clearing app Session, cross-user non-disclosing 404s, owner-scoped list/update/delete, no Token/fingerprint/raw profile in response, and unconfigured gate returning 503 without persistence.
 
-- [ ] **Step 2: Run API tests and confirm expected failures**
+- [x] **Step 2: Run API tests and confirm expected failures**
 
   Run: `conda run -n test python -m unittest discover -s backend/tests -p 'test_credentials_api.py' -v`.
 
   Expected: new Credential route, ownership, CSRF, and safe-error assertions fail because the blueprint is not registered.
 
-- [ ] **Step 3: Implement the Credential blueprint and factory wiring**
+- [x] **Step 3: Implement the Credential blueprint and factory wiring**
 
   Reuse `require_session`, `require_csrf`, and service-layer ownership predicates. Do not expose a route for key rotation, account fingerprint lookup, booking profile, or upstream raw responses.
 
-- [ ] **Step 4: Run API tests**
+- [x] **Step 4: Run API tests**
 
   Run the same focused discover command from Step 2.
 
   Expected: fake upstream/gate tests pass, with no external requests.
 
-- [ ] **Step 5: Commit the API layer**
+- [x] **Step 5: Commit the API layer**
 
   Commit the blueprint, app registration, and API tests as `feat: expose user-scoped credential APIs`.
 
