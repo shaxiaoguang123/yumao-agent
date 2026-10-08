@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **Plan status:** V1 Credential and Token Lifecycle Implementation Plan / Awaiting User Review
+> **Plan status:** V1 Credential and Token Lifecycle Implementation Plan / Ready for Execution
 
 **Goal:** Implement user-owned Credentials and safe Token lifecycle management on the existing Flask/Vue/SQLite identity foundation, including read-only upstream validation, revocable encrypted Token revisions, explicit account binding state, and a shared SQLite request gate.
 
