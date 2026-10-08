@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **Plan status:** V1 Admin Invitation UI Completion / Ready for Review
+> **Plan status:** V1 Admin Invitation UI Completion / Ready for Execution
 
 **Goal:** Give authenticated administrators a safe Vue interface for creating and copying one-time registration invitations through the existing admin API.
 
@@ -21,6 +21,7 @@ The current source on `main` (`bd12ac8`, `v1-credential-token-lifecycle`) alread
 - `InvitationService.create` generates a high-entropy one-time code, rechecks that the creator is an active administrator inside a SQLite `BEGIN IMMEDIATE` transaction, and persists only the SHA-256 hash.
 - The backend already tests admin creation, ordinary-user 403, single-use/hash-only storage, missing/invalid CSRF, and origin rejection in `backend/tests/test_auth_api.py`.
 - `GET /api/auth/session` and login already return `user.role`; `createSessionStore` retains it in memory.
+- The current frontend declares `@vue/test-utils`, `jsdom`, and `vitest` in `package.json`/lockfile, and `frontend/vitest.config.js` already selects the `jsdom` environment. Component-test infrastructure is present; no dependency/config change is planned.
 - The shared HTTP client already sends `credentials: 'include'`, attaches the current CSRF token to mutations, exposes HTTP status/code/kind, clears Session on definitive 401/session-invalid, and preserves the Session on 403/429/5xx/network failures.
 
 The missing behavior is frontend-only: there is no admin invitation API helper, page, route guard, or admin navigation. `App.vue` currently shows the same authenticated navigation to every role; `router.js` has authentication checks but no admin-role guard.
@@ -122,6 +123,8 @@ The architecture document mentions invitation list/status and revoke routes, but
 - On unmount/dismiss, clear the code from component state. Clipboard failure has a separate safe status and does not log or persist the code.
 - Error mapping is status-based: 401 relies on the existing Session invalidation callback; 403 shows access/CSRF failure without clearing Session; 409 and 429 show a safe conflict/rate-limit message without retry; 5xx/network/timeout show a safe uncertain-outcome message. Never render raw error text.
 
+**Preflight gate before Step 1:** The 2026-10-08 repository audit found `@vue/test-utils`, `jsdom`, and `vitest` in package declarations/lockfile and `environment: 'jsdom'` in `vitest.config.js`. Recheck those exact files on the feature branch before writing/running component tests. If any required dependency or DOM setup is missing, stop and add the needed package/config files to Task 2's Files, test, and exact commit list before continuing; do not treat missing infrastructure as a failing product assertion. No dependency change is expected for the audited branch.
+
 - [ ] **Step 1: Write failing route, navigation, and view tests**
 
   Cover admin-only navigation visibility; admin route allowed after an admin Session refresh; normal user redirected; unknown/unavailable role cannot render the page; backend remains responsible for 403; successful creation displays one code and the 24-hour expiry; explicit copy succeeds/fails safely; dismiss/unmount clears memory; no local/session storage or URL use; double submit invokes one request; and 401/403/409/429/5xx/network/timeout behavior.
@@ -166,7 +169,7 @@ The architecture document mentions invitation list/status and revoke routes, but
 
   Run: `cd frontend && npm ci && npm test -- --run && npm run build`
 
-  Run: `git diff --check`. Expected: all suites and production build pass; no test uses a real API.
+  Run: `git diff --check main...HEAD` and `git status --short`. Expected: all suites and production build pass; the branch diff is whitespace-clean and any remaining local changes are visible; no test uses a real API.
 
 - [ ] **Step 3: Independent review and user approval gate**
 
@@ -174,7 +177,7 @@ The architecture document mentions invitation list/status and revoke routes, but
 
 - [ ] **Step 4: Fast-forward integration after approval**
 
-  Recheck the latest local `main`; rebase this branch if needed and repeat full acceptance. With explicit approval, merge using `git merge --ff-only feature/admin-invitations-ui`. Create `v1-admin-invitations-ui` only if the user explicitly approves that tag. Preserve `feature/03-reservation-intent`; after the admin merge, rebase it onto the new `main` before its implementation acceptance.
+  Recheck the latest local `main`; rebase this branch if needed and repeat backend tests, frontend tests, production build, `git diff --check main...HEAD`, and `git status --short`. With explicit approval, merge using `git merge --ff-only feature/admin-invitations-ui`. Create `v1-admin-invitations-ui` only if the user explicitly approves that tag. Preserve `feature/03-reservation-intent`; after the admin merge, rebase it onto the new `main` and rerun its full acceptance before implementation or integration.
 
 ## Follow-On Boundaries
 
