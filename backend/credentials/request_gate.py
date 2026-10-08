@@ -130,6 +130,7 @@ class GateDecision:
 @dataclass(frozen=True, slots=True)
 class GateCompletion:
     state: Literal["completed", "uncertain", "stale"]
+    retry_after_seconds: int | None = None
 
 
 def _status_class(status_code: int | None) -> str | None:
@@ -703,6 +704,9 @@ class UpstreamRequestGate:
         permit: GatePermit,
         safe_observation: GateAttemptObservation,
         now_utc_ms: int,
+        *,
+        upstream_status_code: int | None = None,
+        retry_after_header: str | None = None,
     ) -> GateCompletion:
         if not connection.in_transaction:
             raise ValueError("mark_uncertain_in_transaction requires an active transaction")
@@ -714,4 +718,24 @@ class UpstreamRequestGate:
             self._insert_observation(connection, replace(safe_observation, apply_state="stale"))
             return GateCompletion("stale")
         self._insert_observation(connection, safe_observation)
-        return GateCompletion("uncertain")
+        delay_ms = self._retry_after_delay_ms(
+            retry_after_header,
+            upstream_status_code,
+            now_utc_ms,
+        )
+        self._extend_backoff_in_transaction(connection, now_utc_ms, delay_ms)
+        backoff_deadline = row["upstream_backoff_until_utc_ms"] or 0
+        if delay_ms is not None:
+            backoff_deadline = max(
+                backoff_deadline,
+                min(now_utc_ms + delay_ms, _MAX_SQLITE_INTEGER),
+            )
+        retry_at = max(
+            row["lease_expires_at_utc_ms"] or 0,
+            row["next_allowed_at_utc_ms"] or 0,
+            backoff_deadline,
+        )
+        return GateCompletion(
+            "uncertain",
+            _retry_seconds_until(retry_at, now_utc_ms),
+        )

@@ -88,6 +88,8 @@ class UpstreamHttpTransport:
         started_at = self._clock()
         session = None
         response = None
+        status_code = None
+        retry_after = None
         try:
             session = self._session_factory()
             # A validation attempt must not inherit a cookie, netrc auth, proxy, or
@@ -109,7 +111,7 @@ class UpstreamHttpTransport:
             retry_after = _bounded_retry_after(getattr(response, "headers", None))
             if self._clock() - started_at >= self._total_deadline:
                 return BoundedHttpResponse(
-                    None, None, retry_after, "upstream_total_deadline_exceeded", "uncertain"
+                    status_code, None, retry_after, "upstream_total_deadline_exceeded", "uncertain"
                 )
 
             headers_received = getattr(response, "headers", {})
@@ -157,7 +159,9 @@ class UpstreamHttpTransport:
                 "complete",
             )
         except (requests.RequestException, OSError, TimeoutError, ValueError):
-            return BoundedHttpResponse(None, None, None, "upstream_transport_error", "uncertain")
+            return BoundedHttpResponse(
+                status_code, None, retry_after, "upstream_transport_error", "uncertain"
+            )
         finally:
             if response is not None:
                 try:
@@ -240,12 +244,22 @@ class UpstreamContractAdapter:
         status = response.status_code
         dispatch_state = response.dispatch_state
         if response.error_code is not None:
-            outcome = "contract_drift" if response.error_code in {
-                "upstream_response_too_large",
-                "upstream_invalid_stream",
-            } else "network_error"
+            if status == 429:
+                outcome, safe_code = "rate_limited", "upstream_rate_limited"
+            elif status == 408 or (status is not None and 500 <= status <= 599):
+                outcome, safe_code = "network_error", "upstream_transient_error"
+            elif status is not None and 300 <= status <= 399:
+                outcome, safe_code = "contract_drift", "upstream_redirect_rejected"
+            elif response.error_code in {"upstream_response_too_large", "upstream_invalid_stream"}:
+                outcome, safe_code = "contract_drift", response.error_code
+            else:
+                outcome, safe_code = "network_error", response.error_code
             return self._result(
-                outcome, response.error_code, status_code=status, dispatch_state=dispatch_state
+                outcome,
+                safe_code,
+                status_code=status,
+                retry_after_header=response.retry_after_header,
+                dispatch_state=dispatch_state,
             )
         if status is None:
             return self._result(

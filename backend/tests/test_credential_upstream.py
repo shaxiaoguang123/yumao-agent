@@ -273,6 +273,43 @@ class UpstreamContractAdapterTests(unittest.TestCase):
         self.assertEqual(result.safe_code, "upstream_total_deadline_exceeded")
         self.assertTrue(response.closed)
 
+    def test_uncertain_429_preserves_received_status_and_retry_after(self) -> None:
+        class IncompleteResponse(FakeResponse):
+            def iter_content(self, chunk_size: int):
+                yield b"partial response"
+                raise requests.ConnectionError("synthetic incomplete response")
+
+        def _deadline_clock():
+            values = iter((0.0, 11.0))
+            return lambda: next(values)
+
+        cases = (
+            (
+                FakeResponse(429, [], {"Retry-After": "90"}),
+                _deadline_clock,
+                "rate_limited",
+                429,
+            ),
+            (IncompleteResponse(429, [], {"Retry-After": "91"}), None, "rate_limited", 429),
+            (
+                FakeResponse(503, [], {"Retry-After": "92"}),
+                _deadline_clock,
+                "network_error",
+                503,
+            ),
+            (IncompleteResponse(503, [], {"Retry-After": "93"}), None, "network_error", 503),
+        )
+        for response, clock_factory, expected_outcome, expected_status in cases:
+            with self.subTest(retry_after=response.headers["Retry-After"]):
+                kwargs = {} if clock_factory is None else {"clock": clock_factory()}
+                result = _adapter(FakeSession(response), **kwargs).validate_token("synthetic.jwt.token")
+
+                self.assertEqual(result.token_outcome, expected_outcome)
+                self.assertEqual(result.dispatch_state, "uncertain")
+                self.assertEqual(result.http_status_code, expected_status)
+                self.assertEqual(result.retry_after_header, response.headers["Retry-After"])
+                self.assertTrue(response.closed)
+
     def test_network_errors_are_safe_and_do_not_include_request_material(self) -> None:
         session = FakeSession(error=TimeoutError("synthetic private request data"))
         result = _adapter(session).validate_token("synthetic.jwt.token")

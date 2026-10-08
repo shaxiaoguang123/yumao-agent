@@ -362,6 +362,26 @@ class CredentialApiTests(unittest.TestCase):
         self.assertEqual(response.headers["Retry-After"], str(body["retry_after_seconds"]))
         self.assertEqual(self.service.list_for_user("user-a"), [])
 
+    def test_uncertain_upstream_rate_limit_preserves_longer_retry_after(self) -> None:
+        credential = self._seed_credential()
+        self._clear_gate_spacing()
+        self.adapter.results = [AdapterValidationResult(
+            "rate_limited", "upstream_rate_limited", None, None, "4xx", "120", "uncertain", 429
+        )]
+
+        response = self.client_a.post(
+            f"/api/credentials/{credential.credential_id}/validate",
+            json={"expected_credential_version": credential.credential_version,
+                  "expected_current_token_revision_id": credential.current_token_revision_id},
+            headers=self._headers(self.csrf_a),
+        )
+
+        self.assertEqual(response.status_code, 429)
+        body = self._body(response)
+        self.assertEqual(body["error"], "upstream_rate_limited")
+        self.assertGreaterEqual(body["retry_after_seconds"], 120)
+        self.assertEqual(response.headers["Retry-After"], str(body["retry_after_seconds"]))
+
     def test_unclassified_upstream_error_does_not_become_app_401_or_clear_session(self) -> None:
         self.adapter.results = [AdapterValidationResult(
             "validation_unknown", "safe-unknown", None, None, "4xx", None, "complete", 401

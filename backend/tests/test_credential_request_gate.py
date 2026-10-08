@@ -325,6 +325,40 @@ class UpstreamRequestGateTests(unittest.TestCase):
         self.assertFalse(blocked.allowed)
         self.assertEqual(blocked.retry_after_seconds, 16)
 
+    def test_uncertain_retry_after_extends_shared_backoff_and_returns_remaining_delay(self) -> None:
+        permit = self.gate.acquire(_context(), 90_000, _allow).permit
+        conn = connect_database(self.database_path, BUSY_TIMEOUT_MS)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            result = self.gate.mark_uncertain_in_transaction(
+                conn,
+                permit,
+                _observation(permit, 90_100, result="rate_limited", apply_state="applied", status="4xx"),
+                90_100,
+                upstream_status_code=429,
+                retry_after_header="120",
+            )
+            conn.execute("COMMIT")
+        finally:
+            conn.close()
+
+        self.assertEqual(result.state, "uncertain")
+        self.assertEqual(result.retry_after_seconds, 60)
+        conn = connect_database(self.database_path, BUSY_TIMEOUT_MS)
+        try:
+            state = conn.execute(
+                "SELECT lease_owner_id, upstream_backoff_until_utc_ms "
+                "FROM upstream_request_gate WHERE endpoint_key='getUserInfo'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(state["lease_owner_id"], permit.owner_id)
+        self.assertEqual(state["upstream_backoff_until_utc_ms"], 150_100)
+
+        denied = self.gate.acquire(_context("user-b"), 90_200, _allow)
+        self.assertFalse(denied.allowed)
+        self.assertEqual(denied.retry_after_seconds, 60)
+
     def test_retry_after_delta_seconds_and_missing_header_backoff_are_shared(self) -> None:
         permit = self.gate.acquire(_context(), 70_000, _allow).permit
         self._complete(permit, 70_010, status=429, result="rate_limited", retry_after="17")

@@ -664,7 +664,12 @@ class CredentialService:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 completion = self.gate.mark_uncertain_in_transaction(
-                    connection, permit, observation, completed_at
+                    connection,
+                    permit,
+                    observation,
+                    completed_at,
+                    upstream_status_code=upstream_result.http_status_code,
+                    retry_after_header=upstream_result.retry_after_header,
                 )
                 connection.execute("COMMIT")
             except BaseException:
@@ -676,7 +681,7 @@ class CredentialService:
             if completion.state == "stale":
                 raise CredentialOperationError("validation_stale", 409)
             code, status = self._upstream_failure(upstream_result)
-            raise CredentialOperationError(code, status)
+            raise CredentialOperationError(code, status, completion.retry_after_seconds)
 
         if upstream_result.token_outcome != "success":
             observation = self._observation(
@@ -946,14 +951,21 @@ class CredentialService:
             if upstream_result.dispatch_state == "uncertain":
                 observation = self._observation(permit, upstream_result, completed_at)
                 completion = self.gate.mark_uncertain_in_transaction(
-                    connection, permit, observation, completed_at
+                    connection,
+                    permit,
+                    observation,
+                    completed_at,
+                    upstream_status_code=upstream_result.http_status_code,
+                    retry_after_header=upstream_result.retry_after_header,
                 )
                 dto = self._dto_from_id(connection, user_id, credential_id, completed_at)
                 connection.execute("COMMIT")
                 if completion.state == "stale":
                     return CredentialOperationResult("validation_stale", 409, dto)
                 code, status = self._upstream_failure(upstream_result)
-                return CredentialOperationResult(code, status, dto)
+                return CredentialOperationResult(
+                    code, status, dto, completion.retry_after_seconds
+                )
 
             if upstream_result.token_outcome not in {"success", "explicit_invalid"}:
                 code, status = self._upstream_failure(upstream_result)
@@ -1302,13 +1314,18 @@ class CredentialService:
             if upstream_result.dispatch_state == "uncertain":
                 observation = self._observation(permit, upstream_result, completed_at)
                 completion = self.gate.mark_uncertain_in_transaction(
-                    connection, permit, observation, completed_at
+                    connection,
+                    permit,
+                    observation,
+                    completed_at,
+                    upstream_status_code=upstream_result.http_status_code,
+                    retry_after_header=upstream_result.retry_after_header,
                 )
                 connection.execute("COMMIT")
                 if completion.state == "stale":
                     raise CredentialOperationError("validation_stale", 409)
                 code, status = self._upstream_failure(upstream_result)
-                raise CredentialOperationError(code, status)
+                raise CredentialOperationError(code, status, completion.retry_after_seconds)
 
             if failure is not None:
                 observation = self._observation(

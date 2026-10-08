@@ -426,6 +426,36 @@ class CredentialServiceTests(unittest.TestCase):
             ).fetchone()
         self.assertIsNotNone(gate_row["lease_owner_id"])
 
+    def test_uncertain_upstream_rate_limit_extends_gate_and_returns_retry_delay(self) -> None:
+        service = self._require_service()
+        dto = self._create()
+        self.adapter.results = [AdapterResult(
+            token_outcome="rate_limited",
+            safe_code="upstream_rate_limited",
+            identity_bytes=None,
+            identity_contract_version=None,
+            http_status_class="4xx",
+            retry_after_header="120",
+            dispatch_state="uncertain",
+            http_status_code=429,
+        )]
+
+        result = service.validate(
+            "user-a", dto.credential_id, dto.credential_version,
+            dto.current_token_revision_id, self._next_time(),
+        )
+
+        self.assertEqual(result.code, "upstream_rate_limited")
+        self.assertEqual(result.http_status, 429)
+        self.assertEqual(result.retry_after_seconds, 120)
+        with closing(connect_database(self.database_path, BUSY_TIMEOUT_MS)) as connection:
+            gate = connection.execute(
+                "SELECT lease_owner_id, upstream_backoff_until_utc_ms "
+                "FROM upstream_request_gate WHERE endpoint_key='getUserInfo'"
+            ).fetchone()
+        self.assertIsNotNone(gate["lease_owner_id"])
+        self.assertGreater(gate["upstream_backoff_until_utc_ms"], NOW)
+
     def test_confirmed_identity_mismatch_preserves_fingerprint_and_requires_reconfirmation(self) -> None:
         service = self._require_service()
         dto = self._create()
