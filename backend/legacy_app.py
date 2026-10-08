@@ -105,6 +105,8 @@ def require_legacy_runtime_opt_in():
         return jsonify({"error": "legacy_app_loopback_only"}), 403
     if request.path.startswith("/api/") and not _legacy_request_origin_is_allowed():
         return jsonify({"error": "legacy_origin_not_allowed"}), 403
+    if request.path == "/api/logs":
+        return jsonify({"error": "legacy_log_access_disabled"}), 410
     return None
 
 

@@ -124,6 +124,35 @@ class LegacyLoggingTests(unittest.TestCase):
         self.assertIsNone(response.headers.get("Access-Control-Allow-Origin"))
         run_plan.assert_called_once()
 
+    def test_legacy_log_endpoints_never_expose_or_clear_historical_logs(self) -> None:
+        legacy_module.app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = True
+        client = legacy_module.app.test_client()
+        log_path = legacy_module.LOG_DIR / "run_flow.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        historical_log = b"synthetic-historical-token-value\n"
+        log_path.write_bytes(historical_log)
+        headers = {"Origin": "http://localhost:5175"}
+
+        try:
+            with patch.object(legacy_module.API_LOG, "info"):
+                listed = client.get(
+                    "/api/logs?source=run_flow",
+                    base_url="http://localhost:5175",
+                    headers=headers,
+                )
+                cleared = client.delete(
+                    "/api/logs?source=run_flow",
+                    base_url="http://localhost:5175",
+                    headers=headers,
+                )
+        finally:
+            legacy_module.app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = False
+
+        self.assertEqual(listed.status_code, 410)
+        self.assertEqual(cleared.status_code, 410)
+        self.assertNotIn("synthetic-historical-token-value", listed.get_data(as_text=True))
+        self.assertEqual(log_path.read_bytes(), historical_log)
+
     def test_http_success_logs_omit_request_payload_and_upstream_response(self) -> None:
         token = "synthetic-token-that-must-not-be-logged"
         identity = "synthetic-idserial-that-must-not-be-logged"
