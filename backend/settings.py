@@ -15,6 +15,7 @@ from backend.credentials.keyring import parse_credential_keyring
 
 _BASE64URL_RE = re.compile(r"\A[A-Za-z0-9_-]+\Z")
 _PLACEHOLDER_SECRETS = {"changeme", "change-me", "password", "secret", "default"}
+_MAX_RATE_LIMIT_WINDOW_SECONDS = 86_400
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +63,13 @@ def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
         raise ValueError(f"{name} must be a positive integer") from exc
     if value <= 0:
         raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _rate_limit_window_seconds(env: Mapping[str, str], name: str, default: int) -> int:
+    value = _positive_int(env, name, default)
+    if value > _MAX_RATE_LIMIT_WINDOW_SECONDS:
+        raise ValueError(f"{name} must not exceed {_MAX_RATE_LIMIT_WINDOW_SECONDS} seconds")
     return value
 
 
@@ -222,23 +230,31 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         session_ttl_seconds=_positive_int(source, "SESSION_TTL_SECONDS", 86400),
         sqlite_busy_timeout_ms=_positive_int(source, "SQLITE_BUSY_TIMEOUT_MS", 5000),
         login_username_attempt_limit=_positive_int(source, "LOGIN_USERNAME_ATTEMPT_LIMIT", 10),
-        login_username_window_seconds=_positive_int(source, "LOGIN_USERNAME_WINDOW_SECONDS", 900),
+        login_username_window_seconds=_rate_limit_window_seconds(
+            source, "LOGIN_USERNAME_WINDOW_SECONDS", 900
+        ),
         login_ip_attempt_limit=_positive_int(source, "LOGIN_IP_ATTEMPT_LIMIT", 60),
-        login_ip_window_seconds=_positive_int(source, "LOGIN_IP_WINDOW_SECONDS", 900),
+        login_ip_window_seconds=_rate_limit_window_seconds(
+            source, "LOGIN_IP_WINDOW_SECONDS", 900
+        ),
         login_pair_attempt_limit=_nonnegative_int(source, "LOGIN_PAIR_ATTEMPT_LIMIT", 10),
-        login_pair_window_seconds=_positive_int(source, "LOGIN_PAIR_WINDOW_SECONDS", 900),
+        login_pair_window_seconds=_rate_limit_window_seconds(
+            source, "LOGIN_PAIR_WINDOW_SECONDS", 900
+        ),
         register_ip_attempt_limit=_positive_int(source, "REGISTER_IP_ATTEMPT_LIMIT", 10),
-        register_ip_window_seconds=_positive_int(source, "REGISTER_IP_WINDOW_SECONDS", 3600),
+        register_ip_window_seconds=_rate_limit_window_seconds(
+            source, "REGISTER_IP_WINDOW_SECONDS", 3600
+        ),
         password_change_user_attempt_limit=_positive_int(
             source, "PASSWORD_CHANGE_USER_ATTEMPT_LIMIT", 5
         ),
-        password_change_user_window_seconds=_positive_int(
+        password_change_user_window_seconds=_rate_limit_window_seconds(
             source, "PASSWORD_CHANGE_USER_WINDOW_SECONDS", 900
         ),
         password_change_ip_attempt_limit=_positive_int(
             source, "PASSWORD_CHANGE_IP_ATTEMPT_LIMIT", 30
         ),
-        password_change_ip_window_seconds=_positive_int(
+        password_change_ip_window_seconds=_rate_limit_window_seconds(
             source, "PASSWORD_CHANGE_IP_WINDOW_SECONDS", 900
         ),
     )

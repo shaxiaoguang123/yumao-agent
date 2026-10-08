@@ -251,6 +251,22 @@ class AppSettingsTests(unittest.TestCase):
         settings = load_settings(env)
         self.assertEqual(settings.login_pair_attempt_limit, 0)
 
+    def test_rate_limit_windows_cannot_exceed_rate_limit_service_maximum(self) -> None:
+        names = (
+            "LOGIN_USERNAME_WINDOW_SECONDS",
+            "LOGIN_IP_WINDOW_SECONDS",
+            "LOGIN_PAIR_WINDOW_SECONDS",
+            "REGISTER_IP_WINDOW_SECONDS",
+            "PASSWORD_CHANGE_USER_WINDOW_SECONDS",
+            "PASSWORD_CHANGE_IP_WINDOW_SECONDS",
+        )
+        for name in names:
+            with self.subTest(setting=name):
+                env = _settings_input()
+                env[name] = "86401"
+                with self.assertRaisesRegex(ValueError, name):
+                    load_settings(env)
+
     def test_missing_upstream_transport_settings_fail_fast(self) -> None:
         required = (
             "UPSTREAM_ORIGIN",
