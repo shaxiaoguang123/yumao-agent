@@ -36,6 +36,7 @@ class AppSettings:
     upstream_retry_after_fallback_seconds: int
     max_upstream_backoff_seconds: int
     upstream_lease_safety_margin_seconds: float
+    token_expiring_soon_window_seconds: int = 604800
     session_cookie_name: str = "yumao_session"
     session_ttl_seconds: int = 86400
     sqlite_busy_timeout_ms: int = 5000
@@ -210,6 +211,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         upstream_retry_after_fallback_seconds=retry_after_fallback,
         max_upstream_backoff_seconds=max_backoff,
         upstream_lease_safety_margin_seconds=lease_safety_margin,
+        token_expiring_soon_window_seconds=_positive_int(
+            source, "TOKEN_EXPIRING_SOON_WINDOW_SECONDS", 604800
+        ),
         session_cookie_name=source.get("SESSION_COOKIE_NAME", "yumao_session"),
         session_ttl_seconds=_positive_int(source, "SESSION_TTL_SECONDS", 86400),
         sqlite_busy_timeout_ms=_positive_int(source, "SQLITE_BUSY_TIMEOUT_MS", 5000),

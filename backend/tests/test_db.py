@@ -483,6 +483,38 @@ class SchemaReadinessTests(unittest.TestCase):
                 db.check_schema_ready(database_path, BUSY_TIMEOUT_MS, 1, migrations)
             )
 
+    def test_schema_v2_readiness_requires_single_get_user_info_gate_row(self) -> None:
+        db = _module("backend.db")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            migrations = REPO_MIGRATIONS
+            database_path = root / "credential-schema.sqlite3"
+            _module("backend.migrate").migrate_database(database_path, BUSY_TIMEOUT_MS)
+            conn = db.connect_database(database_path, BUSY_TIMEOUT_MS)
+            try:
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM upstream_request_gate WHERE endpoint_key='getUserInfo'"
+                    ).fetchone()[0],
+                    1,
+                )
+                conn.execute("DELETE FROM upstream_request_gate")
+                conn.commit()
+            finally:
+                conn.close()
+
+            with self.assertRaises(db.SchemaNotReadyError):
+                db.check_schema_ready(database_path, BUSY_TIMEOUT_MS, 2, migrations)
+
+            conn = db.connect_database(database_path, BUSY_TIMEOUT_MS)
+            try:
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM upstream_request_gate").fetchone()[0],
+                    0,
+                )
+            finally:
+                conn.close()
+
     def test_modified_applied_migration_fails_readiness_and_migration_without_changes(self) -> None:
         db = _module("backend.db")
         migrate_database = _module("backend.migrate").migrate_database

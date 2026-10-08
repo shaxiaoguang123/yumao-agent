@@ -107,6 +107,7 @@
 - Create: `backend/credentials/__init__.py`
 - Create: `backend/credentials/keyring.py`
 - Create: `backend/tests/support.py`
+- Modify: `docs/superpowers/plans/2026-10-08-v1-credential-token-lifecycle.md` to include the specification's 7-day expiry reminder setting and schema-v2 singleton gate readiness assertion.
 - Test: `backend/tests/test_settings.py`
 - Test: `backend/tests/test_db.py`
 - Test: `backend/tests/test_app_factory.py`
@@ -116,7 +117,7 @@
 **Interfaces:**
 
 - `CredentialKeyring` and strict JSON/base64url parsing live in `backend/credentials/keyring.py`; `AppSettings` exposes two parsed keyrings. Load them from `APP_CREDENTIAL_ENCRYPTION_KEYS`, `APP_CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID`, `APP_UPSTREAM_FINGERPRINT_KEYS`, and `APP_UPSTREAM_FINGERPRINT_ACTIVE_KEY_ID`. Key material is bytes and excluded from repr. Encryption and fingerprint rings are independent.
-- `AppSettings` exposes fixed `upstream_origin` from `UPSTREAM_ORIGIN`, optional `upstream_get_user_info_min_interval_ms` from `UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS`, `upstream_connect_timeout_seconds` from `UPSTREAM_CONNECT_TIMEOUT_SECONDS`, `upstream_read_timeout_seconds` from `UPSTREAM_READ_TIMEOUT_SECONDS`, `upstream_total_deadline_seconds` from `UPSTREAM_TOTAL_DEADLINE_SECONDS`, `upstream_max_response_bytes` from `UPSTREAM_MAX_RESPONSE_BYTES`, `upstream_retry_after_fallback_seconds` from `UPSTREAM_RETRY_AFTER_FALLBACK_SECONDS`, `max_upstream_backoff_seconds` from `MAX_UPSTREAM_BACKOFF_SECONDS`, and `upstream_lease_safety_margin_seconds` from `UPSTREAM_LEASE_SAFETY_MARGIN_SECONDS`. Require `connect < total`, `read < total`, a positive response limit, a positive safety margin, and fallback no greater than max. Missing endpoint interval means validation is unconfigured; no default interval is invented.
+- `AppSettings` exposes `token_expiring_soon_window_seconds` from optional `TOKEN_EXPIRING_SOON_WINDOW_SECONDS`, defaulting to exactly 604800 seconds (7 days). It also exposes fixed `upstream_origin` from `UPSTREAM_ORIGIN`, optional `upstream_get_user_info_min_interval_ms` from `UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS`, `upstream_connect_timeout_seconds` from `UPSTREAM_CONNECT_TIMEOUT_SECONDS`, `upstream_read_timeout_seconds` from `UPSTREAM_READ_TIMEOUT_SECONDS`, `upstream_total_deadline_seconds` from `UPSTREAM_TOTAL_DEADLINE_SECONDS`, `upstream_max_response_bytes` from `UPSTREAM_MAX_RESPONSE_BYTES`, `upstream_retry_after_fallback_seconds` from `UPSTREAM_RETRY_AFTER_FALLBACK_SECONDS`, `max_upstream_backoff_seconds` from `MAX_UPSTREAM_BACKOFF_SECONDS`, and `upstream_lease_safety_margin_seconds` from `UPSTREAM_LEASE_SAFETY_MARGIN_SECONDS`. Require `connect < total`, `read < total`, a positive response limit, a positive safety margin, and fallback no greater than max. Missing endpoint interval means validation is unconfigured; no default interval is invented.
 - `backend/tests/support.py` provides `credential_test_settings(database_path: Path) -> dict[str, object]` with deterministic, distinct synthetic 32-byte encryption/fingerprint keys and explicit synthetic transport values. It never reads `.env` or the process environment.
 - `0002_credentials.sql` adds `credentials`, `credential_token_revisions`, `credential_validation_observations`, `credential_lifecycle_audits`, and singleton `upstream_request_gate` tables. Store Credential `current_token_revision_id`, three-state `account_binding_state`, nullable fingerprint/key/identity-contract fields, `last_confirmed_validation_state`, `last_successful_validation_at_utc_ms`, `requires_revalidation`, and `credential_version`; do not add `validation_summary_revision_id`.
 - Token revision rows hold immutable version/exp/fingerprint/initial-validation facts and encrypted envelope metadata. Observation rows hold only safe result enums, status class, attempt order/times, gate owner/epoch, and snapshot/apply state. Neither rows nor indexes contain raw identity or Token data.
@@ -124,11 +125,11 @@
 
 - [ ] **Step 1: Write failing keyring settings tests**
 
-  Add a test-only `credential_test_settings` helper and update the existing auth API/flow app fixtures to use synthetic keyrings. Add tests for valid canonical 32-byte keys, malformed/noncanonical base64url, wrong decoded lengths, duplicate IDs rejected before mapping creation, empty keyring, missing active ID, active ID absent, key-ID validation, cross-ring material reuse, repr/Flask-config redaction, and accepted printable bytes (no entropy heuristic). Add tests for timeout ordering, response-size bounds, Retry-After fallback/max, optional interval parsing, and invalid settings.
+  Add a test-only `credential_test_settings` helper and update the existing auth API/flow app fixtures to use synthetic keyrings. Add tests for valid canonical 32-byte keys, malformed/noncanonical base64url, wrong decoded lengths, duplicate IDs rejected before mapping creation, empty keyring, missing active ID, active ID absent, key-ID validation, cross-ring material reuse, repr/Flask-config redaction, and accepted printable bytes (no entropy heuristic). Add tests for timeout ordering, response-size bounds, Retry-After fallback/max, optional upstream interval parsing, the 604800-second default/positive configured Token reminder window, and invalid settings.
 
 - [ ] **Step 2: Write failing schema-v2 migration/readiness tests**
 
-  Test all required Credential columns/tables, state CHECK constraints, same-user composite foreign keys, revision uniqueness, `foreign_key_check`, and `CURRENT_SCHEMA_VERSION=2`. Confirm the existing `0001_identity.sql` remains byte-for-byte unchanged and old identity data survives migration. Key-dependency startup tests are owned by Task 5, after the dependency checker exists.
+  Test all required Credential columns/tables, state CHECK constraints, same-user composite foreign keys, revision uniqueness, the single seeded `getUserInfo` gate row required for readiness, `foreign_key_check`, and `CURRENT_SCHEMA_VERSION=2`. Confirm the existing `0001_identity.sql` remains byte-for-byte unchanged and old identity data survives migration. Key-dependency startup tests are owned by Task 5, after the dependency checker exists.
 
 - [ ] **Step 3: Run the focused tests and confirm expected failures**
 
@@ -148,7 +149,7 @@
 
 - [ ] **Step 6: Commit the complete configuration/schema unit**
 
-  Stage the exact settings, keyring parser, app-factory, DB/readiness, migration, test settings helper, and the five named test files. Commit as `feat: add credential schema and settings`.
+  Stage the exact settings, keyring parser, app-factory, DB/readiness, migration, test settings helper, the named test files, and this plan update. Commit as `feat: add credential schema and settings`.
 
 ## Task 2: Implement Token Parsing, Fingerprints, and AES-256-GCM
 
@@ -163,13 +164,13 @@
 **Interfaces:**
 
 - `CredentialKeyring` is immutable and contains key-ID→bytes mapping plus active key ID. Parsing itself does not expose key bytes in repr/errors. Database key-dependency checks are owned by Task 5.
-- `parse_token_exp(token: str, now_utc_ms: int) -> TokenExpiry` inspects only the JWT `exp` value; it never validates a signature or stores the full payload. It rejects bool/NaN/Infinity/out-of-range/overflow/non-exact millisecond values as `expiry_unknown`; valid expired tokens are blocked before dispatch.
+- `parse_token_exp(token: str, now_utc_ms: int, expiring_soon_window_seconds: int = 604800) -> TokenExpiry` inspects only the JWT `exp` value; it never validates a signature or stores the full payload. It rejects bool/NaN/Infinity/out-of-range/overflow/non-exact millisecond values as `expiry_unknown`; valid expired tokens are blocked before dispatch. `exp` within 604800 seconds is `expiring_soon` by default; exact-window boundary behavior is tested.
 - `token_fingerprint(token: str, keyring: CredentialKeyring) -> VersionedFingerprint` uses `credential-token-v1`; `account_fingerprint(identity_bytes: bytes, keyring: CredentialKeyring) -> VersionedFingerprint` uses `upstream-account-v1`. Account identity input is exact UTF-8 bytes with unambiguous length/domain framing; never normalize it.
 - `CredentialTokenCipher.encrypt(plaintext: bytes, *, user_id: str, credential_id: str, revision_id: str, key_id: str) -> EncryptedTokenEnvelope` and `.decrypt(envelope, same_context) -> bytes` use AES-256-GCM, a fresh 12-byte nonce, 16-byte tag, and AAD binding all row IDs plus key ID.
 
 - [ ] **Step 1: Write failing JWT and fingerprint tests**
 
-  Cover valid `exp`, missing/malformed JWT, bool, NaN/Infinity, numeric range and millisecond conversion boundaries, expiry-at-now, exact-byte identity input, domain separation, deterministic fingerprints, and key-version metadata. Service-level current-token comparison behavior is tested in Task 5.
+  Cover valid `exp`, missing/malformed JWT, bool, NaN/Infinity, numeric range and millisecond conversion boundaries, expiry-at-now, exact 604800-second `expiring_soon` window boundary, exact-byte identity input, domain separation, deterministic fingerprints, and key-version metadata. Service-level current-token comparison behavior is tested in Task 5.
 
 - [ ] **Step 2: Write failing AES-GCM envelope tests**
 

@@ -29,6 +29,7 @@ def credential_test_settings(database_path: Path | None = None) -> dict[str, str
         "UPSTREAM_RETRY_AFTER_FALLBACK_SECONDS": "30",
         "MAX_UPSTREAM_BACKOFF_SECONDS": "900",
         "UPSTREAM_LEASE_SAFETY_MARGIN_SECONDS": "6",
+        "TOKEN_EXPIRING_SOON_WINDOW_SECONDS": "604800",
     }
     if database_path is not None:
         settings["DATABASE_PATH"] = str(database_path)

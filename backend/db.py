@@ -297,6 +297,11 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
         for table_name, parent_table, column_map in composite_foreign_keys:
             if not _has_composite_foreign_key(connection, table_name, parent_table, column_map):
                 raise SchemaNotReadyError(f"required tenant-bound foreign key is missing from {table_name}")
+        gate_rows = connection.execute(
+            "SELECT COUNT(*) FROM upstream_request_gate WHERE endpoint_key='getUserInfo'"
+        ).fetchone()[0]
+        if gate_rows != 1:
+            raise SchemaNotReadyError("the shared getUserInfo request-gate row is missing or duplicated")
 
 
 def _verify_applied_checksums(

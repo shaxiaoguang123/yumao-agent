@@ -184,6 +184,19 @@ class AppSettingsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_settings(env)
 
+    def test_token_expiring_soon_window_defaults_to_seven_days_and_requires_positive_value(self) -> None:
+        env = _settings_input()
+        env.pop("TOKEN_EXPIRING_SOON_WINDOW_SECONDS")
+        settings = load_settings(env)
+        self.assertEqual(settings.token_expiring_soon_window_seconds, 604800)
+
+        env["TOKEN_EXPIRING_SOON_WINDOW_SECONDS"] = "86400"
+        self.assertEqual(load_settings(env).token_expiring_soon_window_seconds, 86400)
+
+        env["TOKEN_EXPIRING_SOON_WINDOW_SECONDS"] = "0"
+        with self.assertRaises(ValueError):
+            load_settings(env)
+
     def test_upstream_origin_must_be_an_https_origin_without_path_or_userinfo(self) -> None:
         for origin in (
             "http://bdtyg.cugb.edu.cn",
@@ -229,6 +242,24 @@ class AppSettingsTests(unittest.TestCase):
         env = {**_settings_input(), "LOGIN_PAIR_ATTEMPT_LIMIT": "0"}
         settings = load_settings(env)
         self.assertEqual(settings.login_pair_attempt_limit, 0)
+
+    def test_missing_upstream_transport_settings_fail_fast(self) -> None:
+        required = (
+            "UPSTREAM_ORIGIN",
+            "UPSTREAM_CONNECT_TIMEOUT_SECONDS",
+            "UPSTREAM_READ_TIMEOUT_SECONDS",
+            "UPSTREAM_TOTAL_DEADLINE_SECONDS",
+            "UPSTREAM_MAX_RESPONSE_BYTES",
+            "UPSTREAM_RETRY_AFTER_FALLBACK_SECONDS",
+            "MAX_UPSTREAM_BACKOFF_SECONDS",
+            "UPSTREAM_LEASE_SAFETY_MARGIN_SECONDS",
+        )
+        for name in required:
+            with self.subTest(setting=name):
+                env = _settings_input()
+                env.pop(name)
+                with self.assertRaises(ValueError):
+                    load_settings(env)
 
 
 if __name__ == "__main__":
