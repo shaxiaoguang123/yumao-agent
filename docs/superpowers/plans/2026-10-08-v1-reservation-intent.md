@@ -26,7 +26,7 @@
   | 4 | `0004_credential_audit_binding_state.sql` | `9618ec410d4a67a3b3ef1bea1ff6d3e60e1689d0215478440083c1c4f38ab8f1` |
 
 - The configured application database file is absent, so there is no persistent application `schema_migrations` history to claim as applied. The isolated temporary preview database contains versions 1–4 with checksums matching the current source manifest; it is not the application's configured database.
-- Before applying any new migration, Task 2 must re-read the branch's `CURRENT_SCHEMA_VERSION`, migration filenames/checksums, and any configured database's `schema_migrations` read-only. Only a verified version-4 base may receive `0005_booking_plans.sql`; any other version or checksum mismatch is a stop condition.
+- Before applying migrations, Task 2 must re-read the branch's `CURRENT_SCHEMA_VERSION`, migration filenames/checksums, configured database's `schema_migrations`, and required structure read-only. An empty DB may use the full ordered chain; a valid older v1–v3 prefix may advance one version at a time to v4; `0005_booking_plans.sql` runs only after v4 is verified. Unknown versions, gaps, checksum mismatches, or structural anomalies stop without repairing or overwriting data.
 
 ## Scope of This Plan
 
@@ -42,7 +42,13 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 - Keep the separate `feature/admin-invitations-ui` iteration out of this branch. If that feature is later approved and merged to `main`, preserve this worktree and rebase `feature/03-reservation-intent` onto the updated `main` before implementation/integration acceptance.
 - Never commit `.env`, `req/`, database/WAL files, preview artifacts, Tokens, real personal data, or generated frontend assets. Read `req/` only for Task 0, in memory, from the primary checkout; do not copy captures into the worktree.
 - No real upstream requests are permitted. All tests use temporary databases and synthetic catalog values.
-- The separate Admin Invitation UI feature is merged first only after its own approval. Then sync this preserved branch with the latest local `main` and rebase if it advanced. After rebase, rerun backend tests, frontend tests, production build, migration/checksum checks, `git diff --check main...HEAD`, and `git status --short`. No Git remote is configured.
+- The separate Admin Invitation UI feature is merged first only after its own approval. Then verify this worktree is clean before rebasing `feature/03-reservation-intent` onto the new `main`. If there are uncommitted changes, stop and preserve them; do not reset or clean. Run the pre-implementation baseline only:
+
+  `conda run -n test python -m unittest discover -s backend/tests -v`
+
+  `cd frontend && npm ci && npm test -- --run && npm run build`
+
+  The backend suite includes current v4 schema-readiness/migration tests on temporary databases. Do not expect ReservationIntent tests or schema v5 to exist yet, and do not migrate the configured application database.
 
 ## Global Constraints
 
@@ -126,7 +132,7 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 - Booking currency is deployment-owned, never user-selected. `BOOKING_CURRENCY_CODE` and `BOOKING_CURRENCY_MINOR_UNIT_EXPONENT` are an all-or-none pair; validate the code as three uppercase ASCII letters and the exponent as an integer from 0 through 4. If absent, plans may omit `price_ceiling_minor`, but a non-null ceiling cannot be entered.
 - `BookingWindowPolicy.business_date_at_utc(now_utc_ms: int) -> date` and `queryable_target_dates(now_utc_ms: int) -> tuple[date, date, date]` always use the currently configured and validated `BOOKING_TIMEZONE`. `describe(target_date: date, now_utc_ms: int, intent_timezone_snapshot: str | None = None) -> BookingWindowState` also computes D, D+1, D+2 only in that active operational timezone. A saved plan cannot choose the operational timezone. If the immutable intent timezone snapshot differs from the active operational timezone, return `can_query=false` with a context-mismatch reason until the user explicitly creates a new plan under the current context or a future explicit migration is approved. Historical target dates/times remain displayed using their saved timezone snapshot.
 - The window state calculates `query_open_at_utc_ms` from T-2 00:00 in the active operational timezone and shows T-2 07:30 as display-only. In this phase `can_book` and `can_pay` are always false; no confirmed-open argument is exposed. Any later validated opening observation is server-internal and outside this plan.
-- `VenueCatalog.list_options(catalog_version, venue_key) -> tuple[VenueOption, ...]` exposes only options belonging to the selected venue and catalog version. `resolve_court(venue_key, semantic_key, catalog_version) -> CourtOption` must resolve exactly one entry under that venue/version. Same labels in different venues are distinct scoped choices; duplicate labels or keys within one venue/version are ambiguous and cannot be selected. Retain older versions referenced by saved plans; never silently remap them. The catalog distinguishes semantic booking type from duration.
+- `VenueCatalog.list_venues(catalog_version) -> tuple[VenueSummary, ...]` returns semantic venue keys/labels for the selected current or retained version. `VenueCatalog.list_options(catalog_version, venue_key) -> VenueOptions` returns only that venue's semantic court options and supported booking_type values. `resolve_court(venue_key, semantic_key, catalog_version) -> CourtOption` must resolve exactly one entry under that venue/version. Same labels in different venues are distinct scoped choices; duplicate labels or keys within one venue/version are ambiguous and cannot be selected. Retain older versions referenced by saved plans; never silently remap them. No DTO includes upstream node IDs, coordinates, or availability; booking type remains distinct from duration.
 
 - [ ] **Step 1: Write failing timezone and catalog tests**
 
@@ -164,14 +170,14 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 - `CURRENT_SCHEMA_VERSION` becomes 5; `check_schema_ready` requires the version-5 booking-plan tables and verifies migration checksums, foreign keys, and required columns. The explicit migration runner remains the only migration path.
 - A truly new empty database is initialized by the existing runner through every migration in order: 0001, 0002, 0003, 0004, then 0005. A verified v4 database receives only 0005. A valid older v1–v3 database advances one contiguous version at a time; the runner must never skip a version.
 - Before any upgrade, verify the applied version/filename/checksum history and the actual required structure. Unknown versions, gaps, checksum mismatches, missing/incompatible structures, or foreign-key violations stop migration without overwriting data or attempting automatic repair. Existing migration files 0001–0004 remain immutable.
-- `booking_plans` stores `plan_id`, `user_id`, `current_revision_id`, integer `version`, and UTC created/updated timestamps. It has `UNIQUE(plan_id, user_id)` for the revision-to-plan foreign key and a deferred composite foreign key `(current_revision_id, plan_id, user_id) REFERENCES booking_plan_revisions(revision_id, plan_id, user_id) DEFERRABLE INITIALLY DEFERRED`; it has no Credential, Job, availability, or payment fields.
-- `booking_plan_revisions` stores `revision_id` as its primary key, `plan_id`, `user_id`, one-based `revision_number`, canonical `intent_json`, SHA-256 `intent_sha256`, `created_by_user_id`, and `created_at_utc_ms`. It has `UNIQUE(revision_id, plan_id, user_id)` exactly matching the plan pointer's referenced parent columns, `UNIQUE(plan_id, user_id, revision_number)`, and a foreign key `(plan_id, user_id) REFERENCES booking_plans(plan_id, user_id)`.
+- `booking_plans` stores `plan_id`, `user_id`, `current_revision_id TEXT NOT NULL`, `version INTEGER NOT NULL CHECK(version > 0)`, and UTC created/updated timestamps. It has `UNIQUE(plan_id, user_id)` for the revision-to-plan foreign key and a deferred composite foreign key `(current_revision_id, plan_id, user_id) REFERENCES booking_plan_revisions(revision_id, plan_id, user_id) DEFERRABLE INITIALLY DEFERRED`; it has no Credential, Job, availability, or payment fields.
+- `booking_plan_revisions` stores `revision_id` as its primary key, `plan_id`, `user_id`, `revision_number INTEGER NOT NULL CHECK(revision_number > 0)`, canonical `intent_json`, SHA-256 `intent_sha256`, `created_by_user_id`, and `created_at_utc_ms`. It has `UNIQUE(revision_id, plan_id, user_id)` exactly matching the plan pointer's referenced parent columns, `UNIQUE(plan_id, user_id, revision_number)`, and a foreign key `(plan_id, user_id) REFERENCES booking_plans(plan_id, user_id)`.
 - Canonical `intent_json` includes the server-resolved `venue_query_nodeid` and a server-owned interpretation snapshot: `BOOKING_TIMEZONE`, nullable currency code and minor-unit exponent, catalog version, and selected venue/court/booking-type display-label snapshots. Hash the intent and interpretation snapshot together. The query ID stays server-side and is never returned in user DTOs. Never update an old snapshot when deployment settings or catalog entries change.
 - Revisions are append-only. The migration adds database guards against revision update/delete; the mutable plan row may only advance its current-revision pointer and version through PlanService. Creating the plan and its first revision must satisfy the deferred pointer constraint before commit.
 
 - [ ] **Step 1: Recheck migration base and write failing migration/readiness tests**
 
-  Re-read the checked-in manifest and any configured database history read-only. Test full fresh initialization through 0001–0005; sequential continuation from valid v1, v2, and v3 prefixes; and v4-to-v5 upgrade. For existing DBs, test unknown version, version gap, checksum mismatch, and incompatible schema fail without changing rows/schema. Test exact required columns, parent uniqueness constraints, and actual inserts: a valid plan plus first revision in one transaction succeeds at COMMIT; cross-plan, cross-user, invalid current revision ID, and mismatched composite reference fail. Also test revision update/delete rejection, immutable interpretation-snapshot storage, and preservation of existing users and Credential rows. Do not assume 0005 is next if the re-read base is not verified v4.
+  Re-read the checked-in manifest and any configured database history read-only. Test full fresh initialization through 0001–0005; sequential continuation from valid v1, v2, and v3 prefixes; and v4-to-v5 upgrade. For existing DBs, test unknown version, version gap, checksum mismatch, and incompatible schema fail without changing rows/schema. Test exact required columns, NOT NULL/CHECK/parent uniqueness constraints, and actual inserts: a valid plan plus first revision in one transaction succeeds at COMMIT; NULL current revision, zero/negative plan version or revision number, cross-plan, cross-user, invalid current revision ID, and mismatched composite reference fail. A failed deferred-FK commit must roll back both plan/revision rows. Also test revision update/delete rejection, immutable interpretation-snapshot storage, and preservation of existing users and Credential rows. Do not assume 0005 is next if the re-read base is not verified v4.
 
 - [ ] **Step 2: Run focused database tests**
 
@@ -248,7 +254,8 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 
 **Interfaces:**
 
-- Register `GET/POST /api/plans`, `GET/PATCH /api/plans/<plan_id>`, `GET /api/plans/<plan_id>/revisions`, and `GET /api/plans/options?catalog_version=...`; the server accepts only current or retained catalog versions and returns semantic choices without upstream identifiers.
+- Register `GET/POST /api/plans`, `GET/PATCH /api/plans/<plan_id>`, and `GET /api/plans/<plan_id>/revisions`.
+- The same `GET /api/plans/options?catalog_version=<optional>&venue_key=<optional>` endpoint has two explicit response modes and echoes the resolved `catalog_version`. Without `venue_key`, it returns the semantic venue list for the active version (default) or a requested retained version. With `venue_key`, it returns only that venue's semantic court options and supported semantic `booking_type` values in the selected version. Unknown venue/version pairs fail safely. Both modes omit upstream node IDs, coordinates, and availability.
 - Register `GET /api/booking-window?target_date=YYYY-MM-DD`; it calls only BookingWindowPolicy and never contacts upstream. It always calculates query eligibility from active operational configuration, reports only current D..D+2, shows 07:30 as estimated, always returns `can_book=false` and `can_pay=false`, and accepts no confirmed-open value from the client. Plan DTOs preserve historical date/time/currency labels from revision snapshots and return a context-mismatch reason with `can_query=false` if the saved timezone differs from active operational timezone.
 - All plan endpoints require a valid application Session; POST/PATCH require CSRF and strict JSON field allowlists. PATCH requires positive `base_version` with exact JSON integer type; bool is rejected.
 - Cross-user and missing IDs both return non-disclosing 404. Invalid intent returns 400; stale version returns 409; unauthenticated and CSRF behavior reuses existing application contracts.
@@ -256,7 +263,7 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 
 - [ ] **Step 1: Write failing route and isolation tests**
 
-  Test unauthenticated 401, mutation CSRF 403, create/list/get/update/revision history, stale 409, unknown fields 400, missing/cross-user identical 404, catalog option projection without node IDs, exact active D..D+2 eligibility, saved-timezone mismatch blocking query eligibility, historical labels/timezone preserved in the DTO, false booking/payment flags, no client-settable confirmed-open field, and absence of any upstream transport call.
+  Test unauthenticated 401, mutation CSRF 403, create/list/get/update/revision history, stale 409, unknown fields 400, missing/cross-user identical 404, two-level options behavior (venue list first, then venue-scoped court/type options), rejected wrong-venue keys, retained catalog-version lookup, no upstream identifiers/coordinates/availability, exact active D..D+2 eligibility, saved-timezone mismatch blocking query eligibility, historical labels/timezone preserved in the DTO, false booking/payment flags, no client-settable confirmed-open field, and absence of any upstream transport call.
 
 - [ ] **Step 2: Run focused API tests**
 
@@ -287,14 +294,15 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 **Interfaces:**
 
 - The authenticated `/plans` route supports create, edit, and immutable revision history using the plan API.
-- Form fields map only to ReservationIntent and follow the exact list/count/type/range constraints above. Booking type and duration remain separate controls. Court fallback is limited to the selected venue; time fallback uses the explicit first preferred time as its baseline.
+- Load semantic venue options first using `GET /api/plans/options` without `venue_key`. After the user selects one, load that venue's court options and supported booking_type using the same endpoint with `venue_key` and the resolved catalog version. Do not retain or expose upstream venue/court node IDs.
+- Form fields map only to ReservationIntent and follow the exact list/count/type/range constraints above. Court preferences and booking type must come from the selected venue/version response; duration remains a separate control. Court fallback is limited to the selected venue; time fallback uses the explicit first preferred time as its baseline.
 - Price entry is a decimal text field converted to minor units with digit-string/BigInt arithmetic; never compute minor units by multiplying a JavaScript float. Show the revision's snapshotted currency/exponent and timezone, not a changed active configuration.
 - Show the server booking-window response. A target outside active-operational D..D+2 is saved as intent but clearly marked non-queryable; saving it does not initiate availability. If the saved timezone differs from active operational timezone, preserve the historical date/time display, show the mismatch, and direct the user to create a new plan under the current context before future querying/execution. Show historical price ceilings with their snapshotted currency/exponent. All plans are intent-only and not availability-verified. Never show a real-open or payment-ready state, stale prices, or coordinates. Do not add a Job/execute button or Agent chat in this slice.
 - Save sends the current `base_version`. A 409 keeps the user's draft, offers a reload of the latest revision, and never silently overwrites it.
 
 - [ ] **Step 1: Write failing API-helper, view, and route tests**
 
-  Test credentials-included requests, CSRF on mutations, semantic-only payloads, no node IDs/coordinates, every max-count/type boundary, add/reorder/remove court preferences, same-venue fallback and time baseline/range validation, exact decimal-to-minor conversion without floating-point multiplication, context snapshot display after active config changes, timezone mismatch warning and non-queryability under active operational timezone, distant-target non-queryability, immutable revision history, version conflict draft retention, and auth/window guard behavior.
+  Test credentials-included requests, CSRF on mutations, two-step venue then venue-scoped option loading, semantic-only payloads, no node IDs/coordinates, every max-count/type boundary, add/reorder/remove court preferences, rejecting a court/type from another venue, same-venue fallback and time baseline/range validation, exact decimal-to-minor conversion without floating-point multiplication, context snapshot display after active config changes, timezone mismatch warning and non-queryability under active operational timezone, distant-target non-queryability, immutable revision history, version conflict draft retention, and auth/window guard behavior.
 
 - [ ] **Step 2: Run focused frontend tests**
 
@@ -323,12 +331,12 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 **Files:**
 
 - Modify only Task-owned files if acceptance reveals a defect; keep each fix in its owning Task commit where practical.
-- Update this plan's task checkboxes and status only after evidence is available.
+- Plan checkbox/status updates are optional. If tracked updates are made, save them in an exact-path documentation-only commit separate from all Task code commits; alternatively track execution in a separate record and leave this plan unchanged. Do not leave plan edits uncommitted before integration.
 
 **Interfaces:**
 
 - Schema version 5 startup remains read-only; migrations run only through the explicit migration command.
-- Before applying migration 0005, recheck the current branch manifest and any configured database history. A non-v4 base or checksum mismatch stops this Task.
+- Before applying migrations, recheck the current branch manifest, configured database history, and required structure. A new empty database uses the full ordered chain; a valid older prefix advances sequentially, with 0005 applied only after verified v4. Unknown versions, gaps, checksum mismatches, or structure anomalies stop without repairs or data changes.
 - All tests use temporary SQLite databases and synthetic catalog/intent values. No test reads `.env` or `req/`, and no real upstream request is made.
 - No BookingJob, AvailabilityService query, Agent, LLM Provider, booking, payment, or Tailscale behavior appears in the result.
 
@@ -346,7 +354,7 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 
 - [ ] **Step 3: Synchronize with local main**
 
-  Recheck `main`. Rebase `feature/03-reservation-intent` onto the latest `main` if it advanced, then repeat all backend tests, frontend tests, production build, migration/checksum validation, `git diff --check main...HEAD`, and `git status --short`.
+  Task 6 runs only after Tasks 0–5 implement the feature. Recheck the latest `main`; if it advanced since the last clean rebase, verify this worktree is clean, rebase `feature/03-reservation-intent` onto it, resolve conflicts without destructive reset, and rerun the complete backend/frontend tests, production build, schema v5 migration/checksum tests, `git diff --check main...HEAD`, and `git status --short`. Do not merge while the primary `main` checkout has conflicting tracked changes; preserve its local-run edit and untracked files.
 
 - [ ] **Step 4: Record acceptance without a feature commit**
 
@@ -354,7 +362,7 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 
 - [ ] **Step 5: Obtain explicit integration approval**
 
-  After implementation review and passing acceptance, present the diff and wait for the user's explicit approval before merging or tagging. Only then may the primary checkout run `git merge --ff-only feature/03-reservation-intent`, verify `main`, create `v1-reservation-intent`, and remove this worktree/branch. No merge or tag occurs before that approval.
+  After Task 6 passes, present the diff and wait for the user's explicit approval before merging or tagging. Only then may the primary checkout run `git merge --ff-only feature/03-reservation-intent`, verify `main`, create `v1-reservation-intent`, and remove this worktree/branch. No merge or tag occurs before that approval.
 
 ## Follow-On Plan Boundaries
 
