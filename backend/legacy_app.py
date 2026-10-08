@@ -7,10 +7,11 @@ import socket
 import sys
 from collections import deque
 from datetime import datetime
+from ipaddress import ip_address
 from pathlib import Path
 import time as _time
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, current_app, jsonify, request, send_from_directory
 
 ROOT_DIR = Path(os.environ.get("APP_ROOT_DIR", "").strip()) if os.environ.get("APP_ROOT_DIR", "").strip() else Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -26,6 +27,10 @@ from backend.time_utils import build_timing_payload, today_str
 from backend.time_utils import normalize_bool
 
 app = Flask(__name__)
+LEGACY_SINGLE_USER_RUNTIME_ENABLED = (
+    os.environ.get("YUMAO_ENABLE_LEGACY_SINGLE_USER_APP", "") == "1"
+)
+app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = LEGACY_SINGLE_USER_RUNTIME_ENABLED
 PLAN_PATH = ROOT_DIR / "booking_plan.json"
 LOG_DIR = ROOT_DIR / "backend" / "logs"
 RUN_LOG_NAME = "run_flow"
@@ -45,6 +50,19 @@ LOG_SOURCES = {
 @app.before_request
 def _log_request_start():
     setattr(request, "_start_time", _time.perf_counter())
+
+
+@app.before_request
+def require_legacy_runtime_opt_in():
+    if not current_app.config.get("LEGACY_SINGLE_USER_RUNTIME_ENABLED", False):
+        return jsonify({"error": "legacy_app_disabled"}), 410
+    try:
+        remote_address = ip_address(request.remote_addr or "")
+    except ValueError:
+        remote_address = None
+    if remote_address is None or not remote_address.is_loopback:
+        return jsonify({"error": "legacy_app_loopback_only"}), 403
+    return None
 
 
 @app.after_request
@@ -347,4 +365,8 @@ def find_free_port(preferred: int | None = None) -> int:
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5175, debug=True)
+    if not LEGACY_SINGLE_USER_RUNTIME_ENABLED:
+        raise SystemExit(
+            "Legacy single-user app is disabled. Set YUMAO_ENABLE_LEGACY_SINGLE_USER_APP=1 only for isolated local use."
+        )
+    app.run(host="127.0.0.1", port=5175, debug=False)

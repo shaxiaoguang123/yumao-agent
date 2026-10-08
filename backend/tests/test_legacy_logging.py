@@ -18,6 +18,7 @@ os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 client_module = importlib.import_module("backend.client")
 flow_module = importlib.import_module("backend.flow")
 legacy_module = importlib.import_module("backend.legacy_app")
+legacy_module.app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = False
 if _PREVIOUS_APP_ROOT is None:
     os.environ.pop("APP_ROOT_DIR", None)
 else:
@@ -45,6 +46,40 @@ class _FakeSession:
 
 
 class LegacyLoggingTests(unittest.TestCase):
+    def test_legacy_http_runtime_is_disabled_by_default(self) -> None:
+        client = legacy_module.app.test_client()
+        with patch.object(
+            legacy_module,
+            "run_plan",
+            return_value=flow_module.FlowResult(False, "synthetic", {}),
+        ) as run_plan:
+            response = client.post("/api/run", json={"autoRun": True})
+
+        self.assertEqual(response.status_code, 410)
+        self.assertEqual(response.get_json(), {"error": "legacy_app_disabled"})
+        run_plan.assert_not_called()
+
+    def test_opted_in_legacy_runtime_rejects_non_loopback_clients(self) -> None:
+        legacy_module.app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = True
+        client = legacy_module.app.test_client()
+        try:
+            with patch.object(
+                legacy_module,
+                "run_plan",
+                return_value=flow_module.FlowResult(False, "synthetic", {}),
+            ) as run_plan:
+                response = client.post(
+                    "/api/run",
+                    json={"autoRun": True},
+                    environ_overrides={"REMOTE_ADDR": "198.51.100.10"},
+                )
+        finally:
+            legacy_module.app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = False
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json(), {"error": "legacy_app_loopback_only"})
+        run_plan.assert_not_called()
+
     def test_http_success_logs_omit_request_payload_and_upstream_response(self) -> None:
         token = "synthetic-token-that-must-not-be-logged"
         identity = "synthetic-idserial-that-must-not-be-logged"
@@ -111,26 +146,30 @@ class LegacyLoggingTests(unittest.TestCase):
         query_secret = "synthetic-query-secret"
         body_secret = "synthetic-body-secret"
         client = legacy_module.app.test_client()
+        legacy_module.app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = True
 
-        with patch.object(legacy_module.API_LOG, "info") as api_log:
-            response = client.post(
-                f"/api/save_plan?token={query_secret}",
-                json={"token": body_secret},
-            )
+        try:
+            with patch.object(legacy_module.API_LOG, "info") as api_log:
+                response = client.post(
+                    f"/api/save_plan?token={query_secret}",
+                    json={"token": body_secret},
+                )
 
-        self.assertIn(response.status_code, (400, 500))
-        logged_request = repr(api_log.call_args_list)
-        self.assertNotIn(query_secret, logged_request)
-        self.assertNotIn(body_secret, logged_request)
+            self.assertIn(response.status_code, (400, 500))
+            logged_request = repr(api_log.call_args_list)
+            self.assertNotIn(query_secret, logged_request)
+            self.assertNotIn(body_secret, logged_request)
 
-        detail_secret = "synthetic-frontend-detail-secret"
-        with patch.object(legacy_module.FE_LOG, "info") as frontend_log:
-            client.post(
-                "/api/frontend-log",
-                json={"level": "info", "action": "save-plan", "detail": detail_secret},
-            )
+            detail_secret = "synthetic-frontend-detail-secret"
+            with patch.object(legacy_module.FE_LOG, "info") as frontend_log:
+                client.post(
+                    "/api/frontend-log",
+                    json={"level": "info", "action": "save-plan", "detail": detail_secret},
+                )
 
-        self.assertNotIn(detail_secret, repr(frontend_log.call_args_list))
+            self.assertNotIn(detail_secret, repr(frontend_log.call_args_list))
+        finally:
+            legacy_module.app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = False
 
 
 def tearDownModule() -> None:
