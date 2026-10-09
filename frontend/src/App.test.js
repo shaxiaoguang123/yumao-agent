@@ -28,7 +28,7 @@ async function mountApp(role) {
       provide: { sessionStore },
     },
   });
-  return { wrapper, router };
+  return { wrapper, router, sessionStore };
 }
 
 describe('application navigation', () => {
@@ -45,5 +45,15 @@ describe('application navigation', () => {
       expect(wrapper.find('[data-testid="admin-invitations-link"]').exists()).toBe(false);
       wrapper.unmount();
     }
+  });
+
+  it('updates role navigation without rebuilding the application when Session is cleared', async () => {
+    const { wrapper, sessionStore } = await mountApp('admin');
+    expect(wrapper.get('nav[aria-label="主导航"]').findAll('a').map((a) => a.text()))
+      .toEqual(['首页', '预约凭据', '邀请码管理', '账户']);
+    sessionStore.user = null;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('nav').findAll('a').map((a) => a.text())).toEqual(['登录']);
+    wrapper.unmount();
   });
 });

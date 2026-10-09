@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { reactive } from 'vue';
 
 async function loadView() {
   const loader = import.meta.glob('./AdminInvitationsView.vue')['./AdminInvitationsView.vue'];
@@ -14,13 +15,17 @@ function invitationApi(create = vi.fn()) {
   return { create };
 }
 
-async function mountView(api) {
+async function mountView(api, sessionStore = reactive({
+  status: 'authenticated',
+  user: { user_id: 'synthetic-admin', role: 'admin' },
+})) {
   const AdminInvitationsView = await loadView();
   const homeView = { template: '<div />' };
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
       { path: '/', name: 'home', component: homeView },
+      { path: '/login', name: 'login', component: homeView },
       {
         path: '/admin/invitations',
         name: 'admin-invitations',
@@ -35,12 +40,12 @@ async function mountView(api) {
     {
       global: {
         plugins: [router],
-        provide: { adminInvitationApi: api },
+        provide: { adminInvitationApi: api, sessionStore },
       },
     },
   );
   await flushPromises();
-  return { wrapper, router, AdminInvitationsView };
+  return { wrapper, router, AdminInvitationsView, sessionStore };
 }
 
 function submitCreation(wrapper) {
@@ -189,6 +194,72 @@ describe('admin invitation management view', () => {
     await flushPromises();
     expect(wrapper.get('[data-testid="invitation-code"]').text())
       .toBe('synthetic-pending-code');
+  });
+
+  it('disables creation after 401 clears the shared Session and guards direct calls', async () => {
+    const sessionStore = reactive({ status: 'authenticated', user: { user_id: 'synthetic-admin', role: 'admin' } });
+    const create = vi.fn(async () => {
+      sessionStore.status = 'unauthenticated';
+      sessionStore.user = null;
+      throw Object.assign(new Error('synthetic-session-detail'), { status: 401, sessionInvalid: true });
+    });
+    const { wrapper, AdminInvitationsView } = await mountView(invitationApi(create), sessionStore);
+    await submitCreation(wrapper);
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="create-invitation"]').element.disabled).toBe(true);
+    expect(wrapper.text()).toContain('登录状态已失效');
+    expect(wrapper.get('a[href="/login"]').text()).toContain('重新登录');
+    await submitCreation(wrapper);
+    await wrapper.findComponent(AdminInvitationsView).vm.$.setupState.createInvitation();
+    expect(create).toHaveBeenCalledOnce();
+    expect(wrapper.find('[data-testid="invitation-code"]').exists()).toBe(false);
+  });
+
+  it('fences late results even if the same administrator signs back in after Session invalidation', async () => {
+    let resolveCreate;
+    const create = vi.fn(() => new Promise((resolve) => { resolveCreate = resolve; }));
+    const { wrapper, sessionStore } = await mountView(invitationApi(create));
+    await submitCreation(wrapper);
+    sessionStore.status = 'unauthenticated';
+    sessionStore.user = null;
+    await flushPromises();
+    sessionStore.user = { user_id: 'synthetic-admin', role: 'admin' };
+    sessionStore.status = 'authenticated';
+    resolveCreate({ invitation_code: 'synthetic-late-code', expires_at_utc_ms: Date.UTC(2027, 0, 2) });
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="invitation-code"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('synthetic-late-code');
+  });
+
+  it('clears displayed plaintext and pending copy feedback when administrator authority is lost', async () => {
+    let resolveCopy;
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: vi.fn(() => new Promise((resolve) => { resolveCopy = resolve; })),
+    } });
+    const create = vi.fn().mockResolvedValue({ invitation_code: 'synthetic-revoked-code', expires_at_utc_ms: Date.UTC(2027, 0, 2) });
+    const { wrapper, sessionStore } = await mountView(invitationApi(create));
+    await submitCreation(wrapper);
+    await flushPromises();
+    await wrapper.get('[data-testid="copy-invitation"]').trigger('click');
+    sessionStore.user.role = 'user';
+    await flushPromises();
+    resolveCopy();
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="invitation-code"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('邀请码已复制');
+    expect(wrapper.get('[data-testid="create-invitation"]').element.disabled).toBe(true);
+  });
+
+  it.each(['unauthenticated', 'unavailable'])('does not create with Session status %s', async (status) => {
+    const create = vi.fn();
+    const { wrapper, AdminInvitationsView } = await mountView(invitationApi(create), reactive({ status, user: null }));
+    await submitCreation(wrapper);
+    await wrapper.findComponent(AdminInvitationsView).vm.$.setupState.createInvitation();
+    expect(create).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-testid="create-invitation"]').element.disabled).toBe(true);
   });
 
   it('requires explicit acknowledgement before creating again after an uncertain result', async () => {

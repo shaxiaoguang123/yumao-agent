@@ -1,10 +1,12 @@
 <script setup>
-import { inject, onMounted, onUnmounted, ref } from 'vue';
+import { computed, inject, onMounted, onUnmounted, ref } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 
 const api = inject('credentialApi');
 const credentials = ref([]);
-const loading = ref(true);
+const listStatus = ref('loading');
+const loading = computed(() => listStatus.value === 'loading');
+let listRequestId = 0;
 const loadingError = ref('');
 const errorMessage = ref('');
 const successMessage = ref('');
@@ -98,19 +100,20 @@ function attemptText(value) {
   return attemptLabels[value] || '验证结果未知';
 }
 
-async function loadCredentials({ quiet = false } = {}) {
-  if (!quiet) {
-    loading.value = true;
-    loadingError.value = '';
-  }
+async function loadCredentials() {
+  const requestId = ++listRequestId;
+  listStatus.value = 'loading';
+  loadingError.value = '';
   try {
     const result = await api.list();
+    if (requestId !== listRequestId) return;
     if (!Array.isArray(result?.credentials)) throw new Error('invalid_response');
     credentials.value = result.credentials;
+    listStatus.value = 'ready';
   } catch (error) {
-    if (!quiet) loadingError.value = safeMessage(error);
-  } finally {
-    if (!quiet) loading.value = false;
+    if (requestId !== listRequestId) return;
+    loadingError.value = safeMessage(error);
+    listStatus.value = 'error';
   }
 }
 
@@ -149,7 +152,7 @@ async function createCredential() {
     await api.create({ label: submittedLabel, token: submittedToken });
     label.value = '';
     successMessage.value = '凭据已添加。';
-    await loadCredentials({ quiet: true });
+    await loadCredentials();
   } catch (error) {
     errorMessage.value = safeMessage(error);
   } finally {
@@ -170,7 +173,7 @@ async function runCredentialAction(credential, action, successText) {
     errorMessage.value = safeMessage(error);
   } finally {
     busyCredentialId.value = '';
-    await loadCredentials({ quiet: true });
+    await loadCredentials();
   }
 }
 
@@ -230,13 +233,16 @@ async function rotateCredential(credential) {
   } finally {
     rotationToken.value = '';
     busyCredentialId.value = '';
-    await loadCredentials({ quiet: true });
+    await loadCredentials();
   }
 }
 
 onMounted(() => loadCredentials());
 onBeforeRouteLeave(() => clearSensitiveInputs());
-onUnmounted(() => clearSensitiveInputs());
+onUnmounted(() => {
+  listRequestId += 1;
+  clearSensitiveInputs();
+});
 </script>
 
 <template>
@@ -258,7 +264,7 @@ onUnmounted(() => clearSensitiveInputs());
       {{ successMessage }}
     </p>
     <p v-if="loadingError" class="credential-message error-message" role="alert">
-      {{ loadingError }}
+      未能读取凭据列表。{{ loadingError }}
       <button class="text-button" type="button" @click="loadCredentials()">重试</button>
     </p>
 
@@ -304,7 +310,7 @@ onUnmounted(() => clearSensitiveInputs());
       </form>
     </section>
 
-    <section class="credential-list" aria-labelledby="credential-list-title">
+    <section class="credential-list" aria-labelledby="credential-list-title" :aria-busy="loading">
       <div class="section-heading">
         <h2 id="credential-list-title">已保存凭据</h2>
         <button class="text-button" type="button" :disabled="loading" @click="loadCredentials()">
@@ -312,10 +318,11 @@ onUnmounted(() => clearSensitiveInputs());
         </button>
       </div>
       <p v-if="loading" class="muted" role="status">正在读取凭据状态…</p>
-      <p v-else-if="credentials.length === 0" class="empty-state">
+      <p v-else-if="listStatus === 'ready' && credentials.length === 0" class="empty-state">
         暂无预约凭据。添加后可查看 Token 状态和账户连续性。
       </p>
 
+      <template v-if="listStatus === 'ready'">
       <article
         v-for="credential in credentials"
         :key="credential.credential_id"
@@ -461,6 +468,7 @@ onUnmounted(() => clearSensitiveInputs());
           </div>
         </form>
       </article>
+      </template>
     </section>
   </section>
 </template>
