@@ -371,6 +371,16 @@ Task 2 through Task 6 remain in their existing order but cannot begin solely bec
 
   Expected: focused tests pass and Vite produces a successful production build.
 
+- [ ] **Step 4a: Run real-browser interaction and visual acceptance**
+
+  After the editor exists, run the actual Vue application in Chrome/Chromium or a working Playwright browser against mocked APIs or an isolated temporary Flask service. Use synthetic users, catalog options, plans, revisions, and errors; never read real `.env`, `req/`, or application databases. Intercept and record every unexpected external request. Reuse existing browser tooling or a repository-external temporary tool environment; do not add project dependencies or CI changes merely to claim browser coverage.
+
+  Check desktop **1440 × 900**, tablet **768 × 1024**, phone **390 × 844**, and narrow phone **320 × 700**. Generate screenshots with the real browser and inspect every captured image. At each viewport, check navigation, alignment, typography, spacing, clipping/overlap, horizontal overflow, clickable/touch controls, keyboard Tab order, and visible focus. Inspect browser console errors, uncaught exceptions, and failed/unexpected network activity; distinguish deliberately simulated API failures from unexpected failures.
+
+  Exercise login and route permissions; plan creation, editing, and immutable revision history; venue-first and venue-scoped court/type loading; preferred times, independent duration, and court priority add/reorder/remove controls; loading, empty, save-success, validation-error, and request-error states. A `base_version` 409 must preserve the draft, explain the conflict, and offer an explicit latest-version refresh without silently replacing unsaved input. Verify a distant target is visibly non-queryable, saved/active timezone and currency-context mismatches are explained without reinterpreting the revision, and estimated 07:30 is labelled as an estimate rather than a confirmed opening. Confirm there is no booking execution or payment action.
+
+  Record **PASS / FAIL / BLOCKED / NOT_APPLICABLE** for each check, with page, viewport, scenario, and screenshot/trace paths. Keep raw screenshots, traces, recordings, and reports outside the public repository; mask synthetic secret-like fields in screenshots and never capture real credentials. A missing browser environment is BLOCKED, not replaced by jsdom output, static HTML, generated pictures, or a successful build. Vitest/jsdom, production build, real-browser interactions, and screenshot review are separate evidence. Resolve or explicitly report browser findings before claiming Task 5 acceptance. This requirement applies only after Task 5 is implemented: Task 1A adds no frontend page, and the current baseline cannot certify the future `/plans` editor.
+
 - [ ] **Step 5: Commit Task 5**
 
   Stage exactly `frontend/src/api/plans.js`, `frontend/src/api/plans.test.js`, `frontend/src/views/PlansView.vue`, `frontend/src/views/PlansView.test.js`, `frontend/src/router.js`, `frontend/src/App.vue`, `frontend/src/views/HomeView.vue`, and `frontend/src/router.test.js`. Commit as `feat: add manual reservation plan editor`.
@@ -401,9 +411,13 @@ Task 2 through Task 6 remain in their existing order but cannot begin solely bec
 
   Also run `git diff --check main...HEAD`, `git status --short`, version-5 migration/checksum readiness tests, and a test-source audit confirming no external upstream call. Do not rely on bare `git diff --check`, which misses committed branch changes when the worktree is clean.
 
+  Repeat the Task 5 real-browser contract in a clean, isolated local acceptance worktree after the feature exists. Cover the implemented `/plans` editor and the existing `/login`, `/register`, `/`, `/credentials`, `/account`, and `/admin/invitations` pages at all four specified viewports. Recheck unauthenticated/user/admin routing, mutation feedback and duplicate-submit protection, Credential confirmation/cancellation, one-time invitation display/copy/cleanup and uncertain-result acknowledgement, plus every plan scenario listed in Step 4a. Use only synthetic data and mocked APIs or temporary Flask databases, with unexpected external traffic blocked. Inspect all screenshots as well as console/JavaScript/network evidence and record per-check statuses and defect severity/reproduction paths outside the repository. If mocked APIs are used, do not claim they independently verify backend authorization; retain the backend isolation/Session/CSRF tests as separate evidence. Component tests and build output do not satisfy this browser gate. Record any missing environment/scenario as BLOCKED and any unresolved visual/interaction defect explicitly; do not mark Task 6 complete merely because automated unit tests passed.
+
 - [ ] **Step 3: Synchronize with local main**
 
   Task 6 runs only after Tasks 0–5 implement the feature. Recheck the latest `main`; if it advanced since the last clean rebase, verify this worktree is clean, rebase `feature/03-reservation-intent` onto it, resolve conflicts without destructive reset, and rerun the complete backend/frontend tests, production build, schema v5 migration/checksum tests, `git diff --check main...HEAD`, and `git status --short`. Do not merge while the primary `main` checkout has conflicting tracked changes; preserve its local-run edit and untracked files.
+
+  After synchronization changes application files, repeat the real-browser acceptance against that final candidate; screenshots from an earlier SHA do not certify the integrated result.
 
 - [ ] **Step 4: Record acceptance without a feature commit**
 
