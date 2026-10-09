@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **Plan status:** V1 Reservation Intent and Plan Management / In Execution — Task 0 PARTIAL; Task 1A authorized; Task 1B BLOCKED.
+> **Plan status:** V1 Reservation Intent and Plan Management / In Execution — Task 0 PARTIAL; Task 1A complete; Task 1B BLOCKED.
 
 **Goal:** Add user-owned manual booking plans with immutable semantic `ReservationIntent` revisions, optimistic locking, and a Vue editor, while keeping all upstream execution outside this phase.
 
@@ -14,7 +14,7 @@
 
 ## Verified Baseline (2026-10-09)
 
-- The implementation base is `origin/main` at `2ca7d2b3ba83fa218dc0924433e05c25e7a8e87b`. The existing `feature/03-reservation-intent` worktree is at `160cfa9f78f8c31b6937e845c4bb1b0528f6ef92`; `origin/main` is an ancestor. Preserve this branch and its plan/evidence history. The remote feature branch remains behind and is not part of this task.
+- Task 1A work started from `feature/03-reservation-intent` at `160cfa9f78f8c31b6937e845c4bb1b0528f6ef92`, with `origin/main` at `2ca7d2b3ba83fa218dc0924433e05c25e7a8e87b` already in its history. Preserve this branch and its plan/evidence history. The remote feature branch remains behind and is not part of this task.
 - The codebase has no ReservationIntent booking-window policy or BookingPlan/PlanRevision implementation. The existing `backend/time_utils.py` remains legacy code and is not the source for the configured business-time policy.
 - Task 0 remains **PARTIAL** in `docs/superpowers/evidence/2026-10-08-booking-plan-catalog.md`. Its venue/query-scope, venue/court, and booking-type gaps continue to block Task 1B; no production catalog or semantic option is confirmed.
 - Source schema is version 4. The checked-in migration manifest is:
@@ -78,7 +78,7 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 ## Current Execution Gate
 
 - Task 0 is still **PARTIAL**; its evidence document is not to be marked complete by the Task 1A implementation.
-- Task 1A is independent of VenueCatalog and is authorized now.
+- Task 1A is complete and remains independent of VenueCatalog.
 - Task 1B remains **BLOCKED** until a new evidence review confirms a visible venue option and its query-scope mapping, venue ownership of court labels, and a supported semantic booking-type mapping. Do not add real venue/type values, production catalog entries, or catalog fixtures before that gate is met.
 - Task 2 through Task 6 retain their existing sequence and do not become authorized merely because Task 1A passes. They remain gated on Task 1B because PlanRevision/API/UI contracts snapshot and expose a catalog version and venue-scoped semantic options.
 
@@ -130,7 +130,7 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 
 ## Task 1A: Business-Time Policy and Independent Settings
 
-**Status:** Authorized and independent of Task 0 catalog evidence.
+**Status:** COMPLETE. Task 1A is independent of Task 0 catalog evidence; this does not unblock Task 1B.
 
 **Files:**
 
@@ -160,27 +160,27 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 - Active timezone mismatch blocks `can_query`; the estimated 07:30 remains display-only and unconfirmed; all returned states have `can_book=false` and `can_pay=false`.
 - No test reads `.env`, `req/`, or a real database. Use synthetic settings and fixed UTC epoch milliseconds.
 
-- [ ] **Step 1: Write failing Task 1A tests**
+- [x] **Step 1: Write failing Task 1A tests**
 
   Add only the settings and pure policy cases above. Do not create `test_plan_catalog.py` in this task.
 
-- [ ] **Step 2: Run focused tests and verify expected failures**
+- [x] **Step 2: Run focused tests and verify expected failures**
 
   Run: `conda run -n test python -m unittest discover -s backend/tests -p 'test_settings.py' -v` and `conda run -n test python -m unittest discover -s backend/tests -p 'test_booking_window.py' -v`.
 
   Expected: missing timezone/currency settings and missing `backend.booking_window` interface fail for the intended reasons.
 
-- [ ] **Step 3: Implement the minimum settings and pure policy**
+- [x] **Step 3: Implement the minimum settings and pure policy**
 
   Modify only `backend/settings.py` and create `backend/booking_window.py`. Do not add routes, catalog files, database changes, or network clients.
 
-- [ ] **Step 4: Run focused, full backend, frontend, and build verification**
+- [x] **Step 4: Run focused, full backend, frontend, and build verification**
 
   Run the focused discovery commands above, then `conda run -n test python -m unittest discover -s backend/tests -v`, `cd frontend && npm test -- --run`, and `cd frontend && npm run build`.
 
-- [ ] **Step 5: Commit Task 1A**
+- [x] **Step 5: Commit Task 1A**
 
-  Stage exactly `backend/settings.py`, `backend/booking_window.py`, `backend/tests/test_settings.py`, and `backend/tests/test_booking_window.py`. Commit as `feat: add independent booking window policy`.
+  Stage exactly `backend/settings.py`, `backend/booking_window.py`, `backend/tests/test_settings.py`, `backend/tests/test_booking_window.py`, and this plan document for the Task 1A execution record. Commit as `feat: add independent booking window policy`.
 
 ## Task 1B: Evidence-Gated VenueCatalog
 
