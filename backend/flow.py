@@ -97,22 +97,15 @@ def _log_step(
     attempt_end: str | None = None,
     elapsed_ms: float | None = None,
 ) -> None:
-    payload = {
-        "ts": _format_ts(),
-        "queue": label,
-        "reserveTime": reserve_time,
-        "step": step,
-        "success": bool(resp.get("success")) if isinstance(resp, dict) else False,
-        "message": resp.get("message") if isinstance(resp, dict) else str(resp),
-        "preselect": preselect,
-    }
-    if attempt_start:
-        payload["attemptStart"] = attempt_start
-    if attempt_end:
-        payload["attemptEnd"] = attempt_end
-    if elapsed_ms is not None:
-        payload["elapsedMs"] = round(elapsed_ms, 2)
-    LOGGER.info("[run_flow] %s", json.dumps(payload, ensure_ascii=False))
+    success = bool(resp.get("success")) if isinstance(resp, dict) else False
+    duration = round(elapsed_ms, 2) if elapsed_ms is not None else None
+    LOGGER.info(
+        "[run_flow] step=%s success=%s slot_count=%d elapsed_ms=%s",
+        step,
+        success,
+        len(reserve_time),
+        duration,
+    )
 
 
 def _parse_coord(coord: str) -> tuple[int, int] | None:
@@ -299,13 +292,7 @@ def _verify_payment_result(
         time.sleep(start_delay_ms / 1000)
 
     for attempt in range(1, max_attempts + 1):
-        LOGGER.info(
-            "[payment_verify] attempt %d/%d orderno=%s reserveDate=%s",
-            attempt,
-            max_attempts,
-            orderno,
-            reserve_date,
-        )
+        LOGGER.info("[payment_verify] attempt %d/%d", attempt, max_attempts)
         try:
             orders_resp = fetch_orders(client, token, page_number=1, page_size=20, order_type=1)
         except Exception as exc:
@@ -317,13 +304,7 @@ def _verify_payment_result(
             bookingno = _safe_str(order.get("bookingno"))
             order_id = _safe_str(order.get("id"))
             order_status = _safe_str(order.get("status"))
-            LOGGER.info(
-                "[payment_verify] found order orderno=%s bookingno=%s id=%s status=%s",
-                orderno,
-                bookingno,
-                order_id,
-                order_status,
-            )
+            LOGGER.info("[payment_verify] matching order found")
             if bookingno and order_id:
                 try:
                     detail_resp = fetch_order_details(client, token, bookingno, order_id)
@@ -333,14 +314,7 @@ def _verify_payment_result(
                 if detail_resp.get("success"):
                     detail = detail_resp.get("resultData") or {}
                     last_detail = detail
-                    detail_status = _safe_str(detail.get("status"))
-                    detail_paytime = _safe_str(detail.get("paytime"))
-                    LOGGER.info(
-                        "[payment_verify] detail status=%s paytime=%s orderno=%s",
-                        detail_status,
-                        detail_paytime or "-",
-                        orderno,
-                    )
+                    LOGGER.info("[payment_verify] order details checked")
                     if _is_paid_order(detail):
                         return {
                             "success": True,
@@ -496,15 +470,15 @@ def run_plan(plan_path: Path, auto_run: bool = False) -> FlowResult:
     try:
         plan = _load_plan(plan_path)
     except FileNotFoundError as exc:
-        LOGGER.error("[run_plan] plan file not found: %s", plan_path)
+        LOGGER.error("[run_plan] plan file not found")
         return FlowResult(False, str(exc), {"errorType": "FileNotFoundError"})
     except PlanValidationError as exc:
-        LOGGER.error("[run_plan] plan validation error: %s", exc)
+        LOGGER.error("[run_plan] plan validation error")
         details = {"errorType": "PlanValidationError"}
         details.update(exc.details)
         return FlowResult(False, str(exc), details)
     except Exception as exc:
-        LOGGER.error("[run_plan] load plan failed: %s", exc)
+        LOGGER.error("[run_plan] load plan failed (%s)", exc.__class__.__name__)
         return FlowResult(False, f"load plan failed: {exc}", {"errorType": exc.__class__.__name__})
 
     reserve_date = str(plan.get("reserveDate") or "")
@@ -528,15 +502,9 @@ def run_plan(plan_path: Path, auto_run: bool = False) -> FlowResult:
     queue_interval_ms = _safe_int(plan.get("autoRunQueueIntervalMs"))
 
     LOGGER.info(
-        "[run_plan] plan loaded: date=%s nodeid=%s 2h=%d 1h=%d bookingDelay=%s/%dms priceDelay=%s/%dms createDelay=%s/%dms payDelay=%s/%dms verifyStart=%s/%dms verifyInterval=%s/%dms queueInterval=%s/%dms",
-        reserve_date, nodeid, len(two_hour_queue), len(one_hour_queue),
-        booking_by_time_delay_enabled, booking_by_time_delay_ms,
-        get_pay_price_delay_enabled, get_pay_price_delay_ms,
-        create_booking_request_delay_enabled, create_booking_request_delay_ms,
-        open_platform_pay_order_delay_enabled, open_platform_pay_order_delay_ms,
-        payment_verify_start_delay_enabled, payment_verify_start_delay_ms,
-        payment_verify_interval_enabled, payment_verify_interval_ms,
-        queue_interval_enabled, queue_interval_ms,
+        "[run_plan] plan loaded: two_hour_entries=%d one_hour_entries=%d",
+        len(two_hour_queue),
+        len(one_hour_queue),
     )
 
     details: dict[str, Any] = {
@@ -571,7 +539,7 @@ def run_plan(plan_path: Path, auto_run: bool = False) -> FlowResult:
         details["userInfo"] = user_info
         return FlowResult(False, "getUserInfo failed", details)
     reservation_person = str((user_info.get("resultData") or {}).get("idserial") or "")
-    LOGGER.info("[run_plan] getUserInfo OK, reservationPerson=%s", reservation_person)
+    LOGGER.info("[run_plan] getUserInfo completed")
     if not reservation_person:
         details["userInfo"] = user_info
         return FlowResult(False, "reservationPerson missing", details)
@@ -583,7 +551,7 @@ def run_plan(plan_path: Path, auto_run: bool = False) -> FlowResult:
         childrennum = "1"
         details["children"] = children_resp
     details["childrennum"] = childrennum
-    LOGGER.info("[run_plan] getChildren: childrennum=%s", childrennum)
+    LOGGER.info("[run_plan] child metadata loaded")
 
     max_rounds = 3
     details["maxRounds"] = max_rounds
@@ -601,7 +569,7 @@ def run_plan(plan_path: Path, auto_run: bool = False) -> FlowResult:
                 preselect = entry["preselect"]
                 attempt_start_ts = _format_ts()
                 attempt_start = time.perf_counter()
-                LOGGER.info("[attempt %d/%d] queue=%s coords=%s preselect=%s", attempt_index, total_attempts, label, reserve_time, preselect)
+                LOGGER.info("[attempt %d/%d] queue=%s", attempt_index, total_attempts, label)
                 _sleep_for_stage(booking_by_time_delay_enabled, booking_by_time_delay_ms, "bookingByTimeDelay")
                 booking = fetch_booking_by_time(client, TOKEN, nodeid, reserve_date)
                 if not booking.get("success"):
@@ -634,7 +602,7 @@ def run_plan(plan_path: Path, auto_run: bool = False) -> FlowResult:
                 booking_data = booking.get("resultData") or {}
                 booking_meta = _extract_booking_meta(booking_data, reserve_date)
                 window_open = booking_window_open(booking_meta, reserve_date)
-                LOGGER.info("[step] bookingByTime OK, window_open=%s for %s", window_open, label)
+                LOGGER.info("[step] bookingByTime completed, window_open=%s", window_open)
                 if not window_open:
                     resp = {
                         "success": False,
@@ -722,7 +690,7 @@ def run_plan(plan_path: Path, auto_run: bool = False) -> FlowResult:
                     )
                     _sleep_between_queue_items(sleep_after_attempt, queue_interval_ms)
                     continue
-                LOGGER.info("[step] availability OK, all %d coords available for %s", len(reserve_time), label)
+                LOGGER.info("[step] availability check succeeded, slot_count=%d", len(reserve_time))
                 slot_context = _build_slot_context(reserve_time, availability)
 
                 pay_payload = {
@@ -780,7 +748,7 @@ def run_plan(plan_path: Path, auto_run: bool = False) -> FlowResult:
                 price_data = pay_price.get("resultData") or {}
                 txamt = str(price_data.get("txamt") or "")
                 is_last_day = bool(booking_data.get("bookingenddate") == reserve_date)
-                LOGGER.info("[step] getPayPrice OK, txamt=%s for %s", txamt, label)
+                LOGGER.info("[step] getPayPrice completed")
 
                 order_payload = {
                     "appointmentDate": reserve_date,
@@ -846,7 +814,7 @@ def run_plan(plan_path: Path, auto_run: bool = False) -> FlowResult:
                     continue
 
                 orderno = str((order.get("resultData") or {}).get("orderno") or "")
-                LOGGER.info("[step] createBookingBytime OK, orderno=%s for %s", orderno, label)
+                LOGGER.info("[step] createBookingBytime completed")
                 details["createdOrder"] = {
                     "queue": label,
                     "reserveTime": reserve_time,
