@@ -55,3 +55,44 @@ jobs:
 
       - name: Build frontend for production
         run: npm run build
+
+  browser:
+    name: Browser E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      BROWSER_QA_OUTPUT: ${{ runner.temp }}/yumao-browser-e2e
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install pinned Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run isolated synthetic browser regression
+        run: npm run test:e2e
+
+      - name: Preserve synthetic browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-e2e-evidence
+          path: |
+            ${{ runner.temp }}/yumao-browser-e2e/results.json
+            ${{ runner.temp }}/yumao-browser-e2e/screenshots/
+            ${{ runner.temp }}/yumao-browser-e2e/traces/
+            ${{ runner.temp }}/yumao-browser-e2e/logs/
+          retention-days: 7
