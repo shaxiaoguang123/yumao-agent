@@ -213,7 +213,8 @@ class CredentialService:
         ):
             return GatePreflightDenial("credential_token_invalid")
         if (
-            row["token_expires_at_utc_ms"] is not None
+            context.operation_kind == "validate_current"
+            and row["token_expires_at_utc_ms"] is not None
             and row["token_expires_at_utc_ms"] <= self._now()
         ):
             return GatePreflightDenial("credential_token_expired")
