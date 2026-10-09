@@ -781,6 +781,27 @@ class CredentialServiceTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "credential_token_expired")
         self.assertEqual(len(self.adapter.calls), calls_before)
 
+    def test_expired_current_token_can_be_replaced_by_a_valid_token(self) -> None:
+        service = self._require_service()
+        current_token = _token(exp_seconds=NOW // 1000 + 10, marker="expiring-current")
+        dto = self._create(token=current_token)
+        self.now = NOW + 20_000
+        replacement = _token(exp_seconds=NOW // 1000 + 30 * 86_400, marker="valid-replacement")
+        self.adapter.results = [AdapterResult(identity_bytes=b"synthetic-account-id")]
+
+        result = service.rotate_token(
+            "user-a",
+            dto.credential_id,
+            dto.credential_version,
+            dto.current_token_revision_id,
+            replacement,
+            NOW + 21_000,
+        )
+
+        self.assertEqual(result.code, "token_rotated")
+        self.assertNotEqual(result.credential.current_token_revision_id, dto.current_token_revision_id)
+        self.assertEqual(result.credential.expiry_state, "expiry_ok")
+
     def test_confirmed_invalid_current_token_requires_rotation_instead_of_revalidation(self) -> None:
         service = self._require_service()
         dto = self._create()
