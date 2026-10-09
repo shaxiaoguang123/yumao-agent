@@ -547,6 +547,27 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(response.headers.get("Access-Control-Allow-Credentials"), "true")
         self.assertIn("X-CSRF-Token", response.headers.get("Access-Control-Allow-Headers", ""))
 
+    def test_credential_mutation_preflight_allows_patch_and_delete(self) -> None:
+        for method in ("PATCH", "DELETE"):
+            with self.subTest(method=method):
+                response = self.client.options(
+                    "/api/credentials/credential-a",
+                    headers={
+                        "Origin": ORIGIN,
+                        "Access-Control-Request-Method": method,
+                        "Access-Control-Request-Headers": "content-type,x-csrf-token",
+                    },
+                )
+
+                self.assertIn(response.status_code, (200, 204))
+                allowed_methods = {
+                    value.strip()
+                    for value in response.headers.get("Access-Control-Allow-Methods", "").split(",")
+                }
+                self.assertIn(method, allowed_methods)
+                self.assertEqual(response.headers.get("Access-Control-Allow-Credentials"), "true")
+                self.assertIn("X-CSRF-Token", response.headers.get("Access-Control-Allow-Headers", ""))
+
     def test_same_user_login_rotation_invalidates_old_session_and_both_cross_pairs(self) -> None:
         self._insert_user("user-1", "Alice", "alice correct test password")
         first = self._login("Alice", "alice correct test password")
