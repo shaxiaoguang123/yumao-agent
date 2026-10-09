@@ -237,6 +237,80 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(wrong.status_code, 401)
         self.assertEqual(wrong.get_json(), unknown.get_json())
 
+    def test_invalid_login_usernames_use_only_a_bounded_rate_limit_key(self) -> None:
+        invalid_usernames = (
+            "x" * 5000,
+            "bad\u0000name",
+            {"username": "Alice"},
+        )
+        with patch("backend.api.auth.verify_password", return_value=False) as verify:
+            responses = [
+                self.client.post(
+                    "/api/auth/login",
+                    json={"username": username, "password": "some strong test password"},
+                    headers=self._origin_headers(),
+                )
+                for username in invalid_usernames
+            ]
+
+        self.assertTrue(all(response.status_code == 401 for response in responses))
+        self.assertTrue(all(
+            response.get_json() == {"error": "invalid_credentials"}
+            for response in responses
+        ))
+        self.assertEqual(verify.call_count, len(invalid_usernames))
+        conn = self.db.connect_database(self.database_path, BUSY_TIMEOUT_MS)
+        try:
+            keys = conn.execute(
+                "SELECT bucket_type, bucket_key FROM auth_attempts WHERE event_type='login'"
+            ).fetchall()
+        finally:
+            conn.close()
+        username_keys = [row["bucket_key"] for row in keys if row["bucket_type"] == "normalized_username"]
+        pair_keys = [row["bucket_key"] for row in keys if row["bucket_type"] == "username_source_ip"]
+        self.assertEqual(username_keys, ["<invalid-username>"] * len(invalid_usernames))
+        self.assertEqual(
+            pair_keys,
+            ["<invalid-username>\x00127.0.0.1"] * len(invalid_usernames),
+        )
+
+    def test_auth_json_body_limit_rejects_oversized_login_before_parsing(self) -> None:
+        response = self.client.post(
+            "/api/auth/login",
+            data='{"username":"' + ("x" * 17_000) + '","password":"some strong test password"}',
+            content_type="application/json",
+            headers=self._origin_headers(),
+        )
+
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.get_json(), {"error": "request_too_large"})
+
+    def test_auth_json_rejects_non_object_body(self) -> None:
+        response = self.client.post(
+            "/api/auth/login",
+            data="[]",
+            content_type="application/json",
+            headers=self._origin_headers(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json(), {"error": "invalid_request"})
+
+    def test_auth_json_reports_parser_limit_errors_as_invalid_request(self) -> None:
+        oversized_integer = '{"username":"Alice","password":"some strong test password","value":' + ("9" * 5000) + "}"
+        deeply_nested = '{"username":"Alice","password":"some strong test password","value":' + ("{" * 1400) + '"end":true' + ("}" * 1400) + "}"
+
+        for body in (oversized_integer, deeply_nested):
+            with self.subTest(body_bytes=len(body)):
+                response = self.client.post(
+                    "/api/auth/login",
+                    data=body,
+                    content_type="application/json",
+                    headers=self._origin_headers(),
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.get_json(), {"error": "invalid_request"})
+
     def test_unknown_user_uses_one_versioned_dummy_hash_verification(self) -> None:
         with patch("backend.api.auth.verify_password", return_value=False) as verify:
             response = self.client.post(
@@ -585,6 +659,44 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "current_password_invalid")
         self.assertTrue(self.client.get("/api/auth/session").get_json()["authenticated"])
+
+    def test_password_change_attempts_are_rate_limited_per_user_before_password_verification(self) -> None:
+        self._insert_user("user-1", "Alice", "alice correct test password")
+        limited_app = _module("backend.app").create_app({
+            **self.config,
+            "PASSWORD_CHANGE_USER_ATTEMPT_LIMIT": 1,
+            "PASSWORD_CHANGE_USER_WINDOW_SECONDS": 900,
+            "PASSWORD_CHANGE_IP_ATTEMPT_LIMIT": 10,
+            "PASSWORD_CHANGE_IP_WINDOW_SECONDS": 900,
+        })
+        client = limited_app.test_client()
+        login = client.post(
+            "/api/auth/login",
+            json={"username": "Alice", "password": "alice correct test password"},
+            headers=self._origin_headers(),
+        )
+        self.assertEqual(login.status_code, 200)
+        csrf = login.get_json()["csrf_token"]
+        body = {
+            "current_password": "wrong current password",
+            "new_password": "alice newer strong password",
+        }
+
+        with patch("backend.api.auth.verify_password", return_value=False) as verify:
+            first = self._post_with_csrf(
+                client, "/api/auth/change-password", csrf, json=body,
+                environ_overrides={"REMOTE_ADDR": "198.51.100.10"},
+            )
+            second = self._post_with_csrf(
+                client, "/api/auth/change-password", csrf, json=body,
+                environ_overrides={"REMOTE_ADDR": "198.51.100.11"},
+            )
+
+        self.assertEqual(first.status_code, 400)
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.get_json()["error"], "rate_limited")
+        self.assertGreaterEqual(int(second.headers["Retry-After"]), 1)
+        verify.assert_called_once()
 
     def test_old_session_and_csrf_pair_cannot_reach_protected_mutation_after_rotation(self) -> None:
         self._insert_user("user-1", "Alice", "alice correct test password")

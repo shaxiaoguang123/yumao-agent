@@ -80,7 +80,7 @@ def _parse_json_body() -> tuple[dict | None, tuple[dict, int] | None]:
         return None, ({"error": "request_too_large"}, 413)
     try:
         value = json.loads(raw.decode("utf-8", errors="strict"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         return None, ({"error": "invalid_request"}, 400)
     if not isinstance(value, dict):
         return None, ({"error": "invalid_request"}, 400)
