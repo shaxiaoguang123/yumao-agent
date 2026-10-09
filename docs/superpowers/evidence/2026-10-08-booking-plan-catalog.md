@@ -63,3 +63,54 @@ Until these items are resolved, the affected venue/court/type options remain blo
 - [ ] Approve any runtime catalog version.
 
 **Outcome:** Task 0 is **PARTIAL**. The evidence is sufficient to describe the query/court response structure and the observed court-label rendering path, but insufficient to authorize a venue catalog or booking-type option. Task 1 remains blocked.
+
+## Task 0B supplemental audit — 2026-10-09
+
+This section records the additional offline check requested after the first audit. It adds evidence and limitations without changing the original findings or authorizing Task 1.
+
+### Venue-list and navigation trace
+
+- In `req/1.js:350`, `getschoolList()` calls the `getSchoolSelect` operation and assigns `response.resultData` to the component's `schoolList` property.
+- Across the reviewed bundle, `schoolList` occurs only at initialization, the `getschoolList()` call, and that assignment. No later read, list iteration, or render binding of `schoolList` was found. This bundle therefore does not show how `schoolList` becomes user-visible venue options.
+- A separate detail-page flow (`req/1.js:48`) receives an encoded navigation `item`, copies its `id` into `param.nodeid`, copies `nodename` into `param.nodename`, and passes `param` into the `bookingByTime` route. The booking page (`req/1.js:98`) reads `item.nodeid` and uses it as the query request's top-level `nodeid`. This proves the field transfer in that flow; it does not prove where the incoming item originated or that it came from `schoolList`.
+- No capture request record could be matched to the source's `getSchoolSelect` operation. The corpus does contain a separate paired `getBookingNode` record whose response has list-like `id` and `nodename` fields. The reviewed bundle contains no `getBookingNode` call. Similar field names and a tree-like shape do not establish that this response is `schoolList` or supplies the detail-page item, so it is not used as venue evidence.
+- Consequently, the code confirms how an already-provided navigation item's `id` reaches `bookingByTime`; it does not confirm a visible venue label-to-item mapping. The `nodename` carried beside it is not evidence that it is a venue label for either `bookingByTime` sample.
+
+### Sample scope and client-version limits
+
+- The two successful `bookingByTime` request/response pairs remain the only matched samples used for court-label observations. Each response has 10 unique string `nodeList[].nodeid` values and 10 unique string `sitename` labels; the label sets match across the two samples.
+- Neither response includes the parent query `nodeid`. The request bodies contain an opaque `item` wrapper, which was not decrypted. The parent scope values therefore cannot be compared with the court identifiers, with each other, or with a venue-list item. The same court-label set does not prove the samples came from the same venue.
+- The two request records have matching browser User-Agent metadata, but no visible application build/version header or safe linkage to the exact `req/1.js` artifact. The bundle contains runtime `appVersion` fields (`req/1.js:196,220`), but the opaque request bodies do not expose them. Matching browser metadata is not proof of a matching client build. Whether the samples and source are from the same client version remains **UNKNOWN**.
+
+### Booking-field static call chain
+
+- `appointmentType` is assigned as a string-valued constant in the `getPayPrice` method (`req/1.js:98`) and is sent in that price-query request object. The captured `getPayPrice` request envelopes expose only an opaque `item` wrapper, so the field/value is not independently verified in the wire payload. The field's exact business meaning is **UNKNOWN**.
+- `booktype` is assigned as a numeric literal while `openPage` builds the booking parameter object (`req/1.js:98`). It is carried into the payment flow; the payment component's `testconfirm` logic branches on it and dispatches among `bookingLaboratoryRoom`, `bookingByTime`, and `payForWhole` handlers (`req/1.js:146`). The by-time handler's static request operation is `createBookingBytime`, but no direct `createBookingBytime` POST record was identified in the local capture corpus.
+- This source proves distinct placement and use: `appointmentType` is a price-query field; `booktype` participates in downstream flow dispatch. The branch behavior is not a complete semantic booking-type contract, and there is no matched wire evidence here to equate either field with a user-facing catalog choice.
+- The frontend passes selected time data separately from these fields (`reserveTime`, `timeList`, and `coordinatesList`; `req/1.js:98`). No reviewed evidence maps a type value to minutes or proves a duration contract. Do not infer duration from either field.
+
+### Task 0B status matrix
+
+| Question | Status | Reason |
+|---|---|---|
+| Venue name ↔ query scope | **PARTIAL** | Source transfers an incoming item's `id` to the query `nodeid`; the visible option's origin/name mapping is not shown. |
+| Venue ↔ returned court list | **UNKNOWN** | The matched requests' scope values are opaque and the responses do not echo the parent scope. |
+| `appointmentType` semantics | **PARTIAL** | Its price-query field and string type are visible in source; its business meaning and captured inner payload are unavailable. |
+| `booktype` semantics | **PARTIAL** | Its numeric field and dispatch role are visible in source; the semantic mapping and matched create-request payload are unavailable. |
+| Duration contract | **PARTIAL** | Time-selection fields are separate; no duration-to-type mapping is established. |
+| Same client version for source and samples | **UNKNOWN** | No app-build identifier links the captures to this bundle. |
+| Versioned VenueCatalog implementation | **BLOCKED** | No verified venue option, venue-to-query mapping, or venue-to-court association is available. |
+
+### Minimum existing offline material needed to unblock
+
+1. A same-build official frontend component or static resource that reads the `getSchoolSelect` result, renders the venue label, and passes the selected item's relevant fields into the detail/booking navigation path.
+2. An existing `getSchoolSelect` request/response pair, or equivalent authoritative source artifact, whose sanitized projection establishes the response item structure and the relationship between its display label and the `id` passed to `bookingByTime`. Keep all identifier values local; the evidence note needs only field paths, types, and a locally computed relationship result.
+3. A safe, pre-existing correlation for the two `bookingByTime` samples that establishes which selected venue each response belongs to, without exposing the parent identifier or court identifiers. Do not derive this by decrypting the opaque `item` during this task.
+4. A client build/version marker or captured asset identity that links the source artifact and the relevant request samples. User-Agent equality alone is insufficient.
+5. Existing official source/capture evidence for the user-facing meaning of the price-query `appointmentType`, the booking `booktype` branch mapping, and duration as a separate time-slot rule. Do not create new captures or infer a mapping from the field names or numeric types.
+
+### Public repository visibility note
+
+The plan's phrase “server-side catalog source” prevents returning query identifiers through client/API DTOs, but it does not hide identifiers committed to this public GitHub repository. A server-only constant in a public repository is still publicly readable and remains in Git history. Treat upstream identifiers as public protocol metadata unless the upstream owner or contract classifies them as restricted; never rely on their secrecy for authorization. If they are restricted, the future design should load them from deployment-managed private configuration outside the public repository and fail closed when the configured catalog version is incomplete. This is a design warning only; Task 0B does not change the catalog storage architecture.
+
+**Task 0B outcome:** Additional source evidence confirms the `item.id → param.nodeid → bookingByTime.nodeid` transfer and clarifies that the local `getBookingNode` response is not a matched `getSchoolSelect` response. It does not establish a visible venue list, a venue-to-court association, a complete booking-type contract, or a common client build. Task 0 remains **PARTIAL** and Task 1 remains **BLOCKED**.
