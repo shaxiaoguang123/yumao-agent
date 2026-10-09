@@ -229,6 +229,20 @@ describe('Credential management view', () => {
     expect(wrapper.get('[data-testid="credential-card-credential-a"]').text()).toContain('需要再次验证当前 Token');
   });
 
+  it('requires confirmation before deleting a Credential and honors cancellation', async () => {
+    const api = makeApi({ credentials: [credential()] });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const { wrapper } = await mountView(api);
+
+    await wrapper.get('[data-testid="credential-delete-credential-a"]').trigger('click');
+    await flushPromises();
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('删除'));
+    expect(api.remove).not.toHaveBeenCalled();
+    expect(wrapper.text()).not.toContain('凭据已删除');
+  });
+
   it('rotates only a confirmed Credential and clears the Token field on cancel or failure', async () => {
     const api = makeApi({
       credentials: [credential()],
@@ -255,6 +269,7 @@ describe('Credential management view', () => {
 
   it('updates, deletes and clears any Token field when navigating away', async () => {
     const api = makeApi({ credentials: [credential()] });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const { wrapper, router } = await mountView(api);
     await wrapper.get('[data-testid="credential-disable-credential-a"]').trigger('click');
     await flushPromises();
@@ -265,6 +280,7 @@ describe('Credential management view', () => {
     await wrapper.get('[data-testid="credential-delete-credential-a"]').trigger('click');
     await flushPromises();
     expect(api.remove).toHaveBeenCalledWith('credential-a', 3);
+    expect(confirm).toHaveBeenCalledOnce();
 
     await wrapper.get('[data-testid="rotate-credential-a"]').trigger('click');
     await wrapper.get('[data-testid="rotation-token"]').setValue('token-before-navigation');

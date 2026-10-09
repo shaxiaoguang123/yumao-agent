@@ -198,6 +198,11 @@ function toggleEnabled(credential) {
 }
 
 function deleteCredential(credential) {
+  const confirmed = window.confirm(
+    `确认删除“${credential.label}”吗？已保存的 Token 会被清除，且此操作无法撤销。`,
+  );
+  if (!confirmed) return;
+
   return runCredentialAction(
     credential,
     () => api.remove(credential.credential_id, credential.credential_version),

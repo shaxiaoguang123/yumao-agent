@@ -7,10 +7,12 @@ import socket
 import sys
 from collections import deque
 from datetime import datetime
+from ipaddress import ip_address
 from pathlib import Path
 import time as _time
+from urllib.parse import urlsplit
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, current_app, jsonify, request, send_from_directory
 
 ROOT_DIR = Path(os.environ.get("APP_ROOT_DIR", "").strip()) if os.environ.get("APP_ROOT_DIR", "").strip() else Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -26,6 +28,15 @@ from backend.time_utils import build_timing_payload, today_str
 from backend.time_utils import normalize_bool
 
 app = Flask(__name__)
+LEGACY_SINGLE_USER_RUNTIME_ENABLED = (
+    os.environ.get("YUMAO_ENABLE_LEGACY_SINGLE_USER_APP", "") == "1"
+)
+app.config["LEGACY_SINGLE_USER_RUNTIME_ENABLED"] = LEGACY_SINGLE_USER_RUNTIME_ENABLED
+_LEGACY_ALLOWED_ORIGINS = {
+    "http://127.0.0.1:5175",
+    "http://localhost:5175",
+    "http://[::1]:5175",
+}
 PLAN_PATH = ROOT_DIR / "booking_plan.json"
 LOG_DIR = ROOT_DIR / "backend" / "logs"
 RUN_LOG_NAME = "run_flow"
@@ -42,9 +53,61 @@ LOG_SOURCES = {
 }
 
 
+def _legacy_origin(value: str, *, allow_path: bool) -> str | None:
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+    except (TypeError, ValueError):
+        return None
+    if (
+        parsed.scheme.lower() != "http"
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or (not allow_path and (parsed.path or parsed.query))
+    ):
+        return None
+    return f"http://{parsed.netloc.lower()}"
+
+
+def _legacy_request_origin_is_allowed() -> bool:
+    origins: list[str] = []
+    origin = request.headers.get("Origin")
+    referer = request.headers.get("Referer")
+    if origin is not None:
+        parsed_origin = _legacy_origin(origin, allow_path=False)
+        if parsed_origin is None:
+            return False
+        origins.append(parsed_origin)
+    if referer is not None:
+        parsed_referer = _legacy_origin(referer, allow_path=True)
+        if parsed_referer is None:
+            return False
+        origins.append(parsed_referer)
+    return bool(origins) and len(set(origins)) == 1 and origins[0] in _LEGACY_ALLOWED_ORIGINS
+
+
 @app.before_request
 def _log_request_start():
     setattr(request, "_start_time", _time.perf_counter())
+
+
+@app.before_request
+def require_legacy_runtime_opt_in():
+    if not current_app.config.get("LEGACY_SINGLE_USER_RUNTIME_ENABLED", False):
+        return jsonify({"error": "legacy_app_disabled"}), 410
+    try:
+        remote_address = ip_address(request.remote_addr or "")
+    except ValueError:
+        remote_address = None
+    if remote_address is None or not remote_address.is_loopback:
+        return jsonify({"error": "legacy_app_loopback_only"}), 403
+    if request.path.startswith("/api/") and not _legacy_request_origin_is_allowed():
+        return jsonify({"error": "legacy_origin_not_allowed"}), 403
+    if request.path == "/api/logs":
+        return jsonify({"error": "legacy_log_access_disabled"}), 410
+    return None
 
 
 @app.after_request
@@ -52,27 +115,13 @@ def _log_request(response):
     if request.path in ("/api/logs", "/api/frontend-log"):
         return response
     elapsed = (_time.perf_counter() - getattr(request, "_start_time", _time.perf_counter())) * 1000
-    body_summary = ""
-    if request.content_type and "json" in request.content_type:
-        raw = request.get_data(as_text=True)
-        body_summary = (raw[:300] + "...") if len(raw) > 300 else raw
     API_LOG.info(
-        "%s %s %s -> %d (%.1fms) body=%s",
+        "%s endpoint=%s -> %d (%.1fms)",
         request.method,
-        request.path,
-        request.query_string.decode("utf-8", errors="replace")[:200],
+        request.endpoint or "unmatched",
         response.status_code,
         elapsed,
-        body_summary or "-",
     )
-    return response
-
-
-@app.after_request
-def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET,POST,DELETE,OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return response
 
 
@@ -278,26 +327,16 @@ def clear_logs():
     return jsonify({"success": True, "message": f"cleared {target.name}"})
 
 
-def _sanitize_log_field(value: str, max_len: int = 500) -> str:
-    """Remove control chars that could forge log lines; cap length."""
-    return value.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")[:max_len]
-
-
 @app.post("/api/frontend-log")
 def frontend_log():
     data = request.get_json(silent=True) or {}
     level = str(data.get("level") or "info").lower()
-    action = _sanitize_log_field(str(data.get("action") or "unknown"), 100)
-    detail = _sanitize_log_field(str(data.get("detail") or ""), 500)
-    ts = _sanitize_log_field(str(data.get("ts") or ""), 40)
-    msg = "[frontend] action=%s ts=%s detail=%s"
-    args = (action, ts, detail or "-")
     if level == "error":
-        FE_LOG.error(msg, *args)
+        FE_LOG.error("[frontend] client event")
     elif level == "warn":
-        FE_LOG.warning(msg, *args)
+        FE_LOG.warning("[frontend] client event")
     else:
-        FE_LOG.info(msg, *args)
+        FE_LOG.info("[frontend] client event")
     return jsonify({"success": True})
 
 
@@ -363,4 +402,8 @@ def find_free_port(preferred: int | None = None) -> int:
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5175, debug=True)
+    if not LEGACY_SINGLE_USER_RUNTIME_ENABLED:
+        raise SystemExit(
+            "Legacy single-user app is disabled. Set YUMAO_ENABLE_LEGACY_SINGLE_USER_APP=1 only for isolated local use."
+        )
+    app.run(host="127.0.0.1", port=5175, debug=False)
