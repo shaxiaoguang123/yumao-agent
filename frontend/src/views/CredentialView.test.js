@@ -116,6 +116,11 @@ describe('Credential management view', () => {
     expect(wrapper.find('[data-testid="credential-card-credential-a"]').exists()).toBe(false);
   });
 
+  it('preserves the complete legal 128-character unbroken name', async () => {
+    const label = 'W'.repeat(128);
+    const { wrapper } = await mountView(makeApi({ credentials: [credential({ label })] }));
+    expect(wrapper.get('.credential-card h3').text()).toBe(label);
+  });
   it('shows expiry, Token validity, account binding, latest request and last success separately', async () => {
     const api = makeApi({ credentials: [credential()] });
     const { wrapper } = await mountView(api);

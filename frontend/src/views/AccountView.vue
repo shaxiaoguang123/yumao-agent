@@ -76,7 +76,7 @@ async function logout() {
       {{ passwordMessage }}
     </p>
     <p v-if="sessionStore.status === 'unauthenticated'" class="muted">
-      登录状态已失效。<RouterLink :to="{ name: 'login' }">重新登录</RouterLink>
+      登录状态已失效。<RouterLink class="action-link" :to="{ name: 'login' }">重新登录</RouterLink>
     </p>
 
     <form v-if="sessionStore.status === 'authenticated'" class="form-stack" :aria-busy="passwordSubmitting" @submit.prevent="changePassword">

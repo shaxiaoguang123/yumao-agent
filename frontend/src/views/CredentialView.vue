@@ -474,18 +474,19 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.credential-page { display: grid; gap: 1.25rem; }
+.credential-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
 .credential-heading h1 { margin: 0 0 .4rem; font-size: clamp(1.6rem, 4vw, 2rem); }
 .eyebrow { margin: 0 0 .25rem; color: #58716c; font-size: .78rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 .credential-add { width: 100%; margin: 0; }
 .credential-add h2, .section-heading h2 { margin: 0; font-size: 1.1rem; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.credential-list { display: grid; gap: .9rem; }
-.credential-card { display: grid; gap: 1rem; padding: 1.2rem; border: 1px solid #e1e7ec; border-radius: .9rem; background: white; }
+.credential-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: .9rem; min-width: 0; }
+.credential-card { display: grid; min-width: 0; gap: 1rem; padding: 1.2rem; border: 1px solid #e1e7ec; border-radius: .9rem; background: white; }
 .credential-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
-.credential-card-heading h3 { margin: 0 0 .2rem; font-size: 1.05rem; }
+.credential-card-heading > div { min-width: 0; }
+.credential-card-heading h3 { margin: 0 0 .2rem; font-size: 1.05rem; overflow-wrap: anywhere; }
 .credential-card-heading p { margin: 0; font-size: .84rem; }
-.state-pill { padding: .25rem .6rem; border-radius: 999px; font-size: .78rem; font-weight: 700; }
+.state-pill { flex-shrink: 0; white-space: nowrap; padding: .25rem .6rem; border-radius: 999px; font-size: .78rem; font-weight: 700; }
 .state-enabled { color: #155a45; background: #e4f3eb; }
 .state-disabled { color: #52606d; background: #edf0f2; }
 .credential-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .8rem 1.25rem; margin: 0; }
@@ -495,7 +496,7 @@ onUnmounted(() => {
 .risk-note { margin: 0; padding: .7rem .85rem; border-left: 3px solid #b98222; border-radius: .35rem; color: #5c461b; background: #fff8e9; line-height: 1.5; }
 .danger-note { border-left-color: #a94343; color: #713333; background: #fff0f0; }
 .credential-actions { display: flex; flex-wrap: wrap; gap: .6rem; }
-.credential-actions .primary-button, .credential-actions .secondary-button, .danger-button { min-height: 2.4rem; padding: .5rem .8rem; }
+.credential-actions .primary-button, .credential-actions .secondary-button, .danger-button { min-width: 2.75rem; min-height: 2.75rem; padding: .65rem .8rem; }
 .danger-button { border: 0; border-radius: .6rem; color: #8f2929; background: #fbe8e8; font: inherit; font-weight: 700; cursor: pointer; }
 .danger-button:disabled { opacity: .6; cursor: wait; }
 .rotation-form { display: grid; gap: .8rem; padding: 1rem; border-radius: .7rem; background: #f4f7f8; }
@@ -503,6 +504,6 @@ onUnmounted(() => {
 .error-message { color: #8f2929; }
 .success-message { color: #176348; }
 .empty-state { margin: 0; padding: 1.2rem; border: 1px dashed #cbd5df; border-radius: .8rem; color: #65717e; background: white; }
-.text-button { padding: .2rem .4rem; border: 0; color: #146c5b; background: transparent; font: inherit; font-weight: 700; cursor: pointer; }
+.text-button { min-width: 2.75rem; min-height: 2.75rem; padding: .5rem .4rem; border: 0; color: #146c5b; background: transparent; font: inherit; font-weight: 700; cursor: pointer; }
 .text-button:disabled { opacity: .6; cursor: wait; }
 </style>

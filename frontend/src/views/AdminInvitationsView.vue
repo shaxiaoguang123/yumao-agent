@@ -147,7 +147,7 @@ onBeforeUnmount(() => {
     </p>
 
     <p v-if="!isAuthorized" class="form-error" role="alert">
-      {{ sessionMessage }} <RouterLink :to="{ name: 'login' }">重新登录</RouterLink>
+      {{ sessionMessage }} <RouterLink class="action-link" :to="{ name: 'login' }">重新登录</RouterLink>
     </p>
 
     <form class="form-stack" @submit.prevent="createInvitation">
@@ -209,7 +209,7 @@ onBeforeUnmount(() => {
       <p v-if="statusMessage" class="copy-status" role="status">{{ statusMessage }}</p>
     </section>
 
-    <RouterLink class="back-link" :to="{ name: 'home' }">返回首页</RouterLink>
+    <RouterLink class="action-link back-link" :to="{ name: 'home' }">返回首页</RouterLink>
   </section>
 </template>
 
@@ -225,5 +225,5 @@ onBeforeUnmount(() => {
 .invitation-actions { display: flex; flex-wrap: wrap; gap: .65rem; }
 .copy-status { margin: 0; color: #176348; font-size: .9rem; }
 .uncertain-create-warning { margin: 0; color: #8a4510; font-size: .9rem; }
-.back-link { display: inline-block; margin-top: 1.25rem; }
+.back-link { margin-top: 1.25rem; }
 </style>
