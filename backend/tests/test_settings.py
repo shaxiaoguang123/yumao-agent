@@ -30,6 +30,10 @@ class AppSettingsTests(unittest.TestCase):
             "LOGIN_IP_WINDOW_SECONDS": "1200",
             "REGISTER_IP_ATTEMPT_LIMIT": "9",
             "REGISTER_IP_WINDOW_SECONDS": "1800",
+            "PASSWORD_CHANGE_USER_ATTEMPT_LIMIT": "4",
+            "PASSWORD_CHANGE_USER_WINDOW_SECONDS": "600",
+            "PASSWORD_CHANGE_IP_ATTEMPT_LIMIT": "25",
+            "PASSWORD_CHANGE_IP_WINDOW_SECONDS": "900",
         })
         with patch.dict(os.environ, {"DATABASE_PATH": "/process-env.sqlite3"}):
             settings = load_settings(env)
@@ -41,6 +45,10 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.login_ip_window_seconds, 1200)
         self.assertEqual(settings.register_ip_attempt_limit, 9)
         self.assertEqual(settings.register_ip_window_seconds, 1800)
+        self.assertEqual(settings.password_change_user_attempt_limit, 4)
+        self.assertEqual(settings.password_change_user_window_seconds, 600)
+        self.assertEqual(settings.password_change_ip_attempt_limit, 25)
+        self.assertEqual(settings.password_change_ip_window_seconds, 900)
 
     def test_csrf_secret_decodes_to_bytes_and_is_excluded_from_repr(self) -> None:
         env = _settings_input()
@@ -242,6 +250,22 @@ class AppSettingsTests(unittest.TestCase):
         env = {**_settings_input(), "LOGIN_PAIR_ATTEMPT_LIMIT": "0"}
         settings = load_settings(env)
         self.assertEqual(settings.login_pair_attempt_limit, 0)
+
+    def test_rate_limit_windows_cannot_exceed_rate_limit_service_maximum(self) -> None:
+        names = (
+            "LOGIN_USERNAME_WINDOW_SECONDS",
+            "LOGIN_IP_WINDOW_SECONDS",
+            "LOGIN_PAIR_WINDOW_SECONDS",
+            "REGISTER_IP_WINDOW_SECONDS",
+            "PASSWORD_CHANGE_USER_WINDOW_SECONDS",
+            "PASSWORD_CHANGE_IP_WINDOW_SECONDS",
+        )
+        for name in names:
+            with self.subTest(setting=name):
+                env = _settings_input()
+                env[name] = "86401"
+                with self.assertRaisesRegex(ValueError, name):
+                    load_settings(env)
 
     def test_missing_upstream_transport_settings_fail_fast(self) -> None:
         required = (
