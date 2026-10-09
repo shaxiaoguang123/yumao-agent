@@ -63,8 +63,6 @@ jobs:
     defaults:
       run:
         working-directory: frontend
-    env:
-      BROWSER_QA_OUTPUT: ${{ runner.temp }}/yumao-browser-e2e
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -83,6 +81,8 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run isolated synthetic browser regression
+        env:
+          BROWSER_QA_OUTPUT: ${{ runner.temp }}/yumao-browser-e2e
         run: npm run test:e2e
 
       - name: Preserve synthetic browser evidence
