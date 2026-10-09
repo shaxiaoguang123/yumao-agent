@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **Plan status:** V1 Reservation Intent and Plan Management / Ready for Execution
+> **Plan status:** V1 Reservation Intent and Plan Management / In Execution — Task 0 PARTIAL; Task 1A authorized; Task 1B BLOCKED.
 
 **Goal:** Add user-owned manual booking plans with immutable semantic `ReservationIntent` revisions, optimistic locking, and a Vue editor, while keeping all upstream execution outside this phase.
 
@@ -12,10 +12,11 @@
 
 **Spec:** [V1 Final Architecture Spec](../specs/2026-10-07-multiuser-booking-design.md), especially sections 3, 6, 9, 10, 13, and 14.
 
-## Verified Baseline (2026-10-08)
+## Verified Baseline (2026-10-09)
 
-- The implementation base is `main` at `bd12ac8` / `v1-credential-token-lifecycle`. The plan branch is `feature/03-reservation-intent` at `869a743`; it contains this plan only and must be preserved.
-- The current code has no `BookingPlan`, `PlanRevision`, ReservationIntent validator, booking-window API, or plan UI.
+- The implementation base is `origin/main` at `2ca7d2b3ba83fa218dc0924433e05c25e7a8e87b`. The existing `feature/03-reservation-intent` worktree is at `160cfa9f78f8c31b6937e845c4bb1b0528f6ef92`; `origin/main` is an ancestor. Preserve this branch and its plan/evidence history. The remote feature branch remains behind and is not part of this task.
+- The codebase has no ReservationIntent booking-window policy or BookingPlan/PlanRevision implementation. The existing `backend/time_utils.py` remains legacy code and is not the source for the configured business-time policy.
+- Task 0 remains **PARTIAL** in `docs/superpowers/evidence/2026-10-08-booking-plan-catalog.md`. Its venue/query-scope, venue/court, and booking-type gaps continue to block Task 1B; no production catalog or semantic option is confirmed.
 - Source schema is version 4. The checked-in migration manifest is:
 
   | Version | File | SHA-256 |
@@ -37,12 +38,12 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 ## Git and Worktree Boundary
 
 - Work only in `/Users/sha/Document/worktree-codex/reservation-intent-plan/yumao-agent` on `feature/03-reservation-intent`; do not develop on `main`.
-- The feature branch starts from the reviewed `main` commit tagged `v1-credential-token-lifecycle`. Preserve the primary checkout's local `.env`, uncommitted local-run note, three unrelated untracked files, and running preview servers.
+- This existing worktree already contains `origin/main` through its prior normal merge. Preserve all local commits. Preserve the primary checkout's `.env`, uncommitted local-run note, unrelated untracked files, and running preview servers.
 - Every implementation Task ends in a separate commit. Stage only the exact files listed by that Task; never use `git add .`, `git clean`, reset, or broad staging.
-- Keep the separate `feature/admin-invitations-ui` iteration out of this branch. If that feature is later approved and merged to `main`, preserve this worktree and rebase `feature/03-reservation-intent` onto the updated `main` before implementation/integration acceptance.
+- Keep the already-merged Admin Invitation UI changes as part of the current `origin/main` base; do not repeat that iteration or alter its branch history here.
 - Never commit `.env`, `req/`, database/WAL files, preview artifacts, Tokens, real personal data, or generated frontend assets. Read `req/` only for Task 0, in memory, from the primary checkout; do not copy captures into the worktree.
 - No real upstream requests are permitted. All tests use temporary databases and synthetic catalog values.
-- The separate Admin Invitation UI feature is merged first only after its own approval. Then verify this worktree is clean before rebasing `feature/03-reservation-intent` onto the new `main`. If there are uncommitted changes, stop and preserve them; do not reset or clean. Run the pre-implementation baseline only:
+- Before starting this plan, verify this worktree is clean and that `origin/main` is an ancestor. If uncommitted changes appear, stop and preserve them; do not reset or clean. Run the existing baseline only when the base changes:
 
   `conda run -n test python -m unittest discover -s backend/tests -v`
 
@@ -57,6 +58,7 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 - Target date is interpreted in the configured IANA `BOOKING_TIMEZONE`, default `Asia/Shanghai`; browser and host time zones do not determine booking windows.
 - The only dates queryable by the current window policy are the business-local dates `D`, `D+1`, and `D+2`. A saved future ReservationIntent never makes a date queryable. `query_open_at` is calculated from target date `T-2` at 00:00 in the business time zone. The observed 07:30 value is display-only; it is not a confirmed open time.
 - This phase cannot query the upstream system. Its `BookingWindowPolicy` always reports `can_book=false` and `can_pay=false`; it does not accept a client-supplied confirmed opening time. A future confirmed opening can only come from a validated server-side upstream observation in a later phase.
+- In Task 1A, `can_query` means only that the pure configured-timezone calendar predicate is satisfied. It is not authorization to send a network request and cannot initiate any upstream call.
 - Venue scope, venue/court labels, semantic keys, and booking type come only from the evidence-gated, versioned Task 0 catalog. The catalog is a user-selection aid, never evidence of a target date's current `nodeList` or availability. A `booktype` value is not a duration.
 - Each immutable PlanRevision snapshots its interpretation context: `BOOKING_TIMEZONE`, nullable deployment currency code/exponent, catalog version, venue query scope, and semantic display-label snapshots. Configuration/catalog changes never rewrite an existing revision. Historical price ceilings always display in their saved currency/exponent; no conversion is implicit. A later Job must fail closed when its currency context is incompatible until an explicit new revision/confirmation or migration. Existing revisions and edits preserve saved context; new plans use active configuration. V1 has no in-place context migration.
 - Reject unknown intent fields, including Credential, Job, payment, Token, availability, price quote, upstream court/time identifiers, indexes, or coordinates.
@@ -73,17 +75,25 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 - A later change to business timezone, currency/exponent, or catalog must not change any existing revision's interpretation; test snapshots across a changed active configuration.
 - A saved plan must not look like a booking task or current availability; test that the API/UI expose intent and window information only, with no execution/job state.
 
+## Current Execution Gate
+
+- Task 0 is still **PARTIAL**; its evidence document is not to be marked complete by the Task 1A implementation.
+- Task 1A is independent of VenueCatalog and is authorized now.
+- Task 1B remains **BLOCKED** until a new evidence review confirms a visible venue option and its query-scope mapping, venue ownership of court labels, and a supported semantic booking-type mapping. Do not add real venue/type values, production catalog entries, or catalog fixtures before that gate is met.
+- Task 2 through Task 6 retain their existing sequence and do not become authorized merely because Task 1A passes. They remain gated on Task 1B because PlanRevision/API/UI contracts snapshot and expose a catalog version and venue-scoped semantic options.
+
 ---
 
 ## File Layout
 
-- `backend/settings.py`: validated `BOOKING_TIMEZONE` and deployment-owned booking currency metadata.
-- `backend/booking_window.py`: pure business-time query-window calculation; no network or database access.
-- `backend/plans/catalog.py`: server-side venue and semantic choice catalog created only from Task 0 evidence.
+- `backend/settings.py`: validated `BOOKING_TIMEZONE` and deployment-owned booking currency metadata (Task 1A).
+- `backend/booking_window.py`: pure business-time query-window calculation; no network or database access (Task 1A).
+- `backend/plans/catalog.py`: server-side venue and semantic choice catalog, deferred to Task 1B and blocked until Task 0 evidence is sufficient.
 - `backend/plans/models.py`, `validation.py`, `service.py`: immutable intent/revision types, strict normalization, and user-scoped transactional PlanService.
 - `backend/migrations/0005_booking_plans.sql`, `backend/db.py`: schema version 5, booking-plan tables, readiness contract, and migration checksum enforcement.
 - `backend/api/plans.py`, `backend/api/booking_window.py`, `backend/app.py`: authenticated user-scoped plan and read-only booking-window routes.
-- `backend/tests/test_booking_window.py`, `test_plan_validation.py`, `test_plan_service.py`, `test_plans_api.py`, and `test_db.py`: pure boundary, temporary-DB, ownership, migration, and API tests.
+- `backend/tests/test_settings.py` and `backend/tests/test_booking_window.py`: settings and pure policy coverage (Task 1A); `backend/tests/test_plan_catalog.py` belongs to Task 1B and is not created or populated with real values while that task is blocked.
+- `backend/tests/test_plan_validation.py`, `test_plan_service.py`, `test_plans_api.py`, and `test_db.py`: future pure boundary, temporary-DB, ownership, migration, and API tests.
 - `frontend/src/api/plans.js` and `plans.test.js`: plan/window HTTP helpers.
 - `frontend/src/views/PlansView.vue` and `PlansView.test.js`: plan list, create/edit form, revision history, and version-conflict UX.
 - `frontend/src/router.js`, `App.vue`, and `HomeView.vue`: authenticated plan navigation.
@@ -104,7 +114,7 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 - The evidence note records relationships and evidence limits, not real query-scope identifiers. Exact query identifiers are kept only in the server-side catalog source and never in fixtures. Never record Token, identity/profile values, full payloads, user dates, prices, orders, or raw capture text.
 - If evidence cannot establish a venue mapping, court semantic option, or booking-type mapping, stop the affected catalog option and report the missing evidence; do not substitute `DEFAULT_NODEID` from legacy Python code or invent a value.
 - Each PlanRevision snapshots `catalog_version` and the selected venue/court/type semantic label snapshots. A catalog update cannot silently rename, remap, or reinterpret an existing revision.
-- Task 0 is a read-only evidence audit, so it has no product failing/passing test. Its acceptance check is the sanitized evidence checklist above; Task 1 tests the resulting catalog interface using synthetic values only.
+- Task 0 is a read-only evidence audit, so it has no product failing/passing test. It remains PARTIAL. Task 1A may test only timezone/currency settings and pure calendar policy; catalog tests belong to Task 1B and stay blocked until its evidence gate is met.
 
 - [ ] **Step 1: Inspect the local official source and matched captures in memory**
 
@@ -118,44 +128,83 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 
   Stage only `docs/superpowers/evidence/2026-10-08-booking-plan-catalog.md` and commit as `docs: record booking plan catalog evidence`.
 
-## Task 1: Business-Time Policy and Safe Catalog
+## Task 1A: Business-Time Policy and Independent Settings
+
+**Status:** Authorized and independent of Task 0 catalog evidence.
 
 **Files:**
 
 - Modify: `backend/settings.py`.
-- Create: `backend/booking_window.py`, `backend/plans/__init__.py`, `backend/plans/catalog.py`.
-- Test: `backend/tests/test_settings.py`, `backend/tests/test_booking_window.py`, `backend/tests/test_plan_catalog.py`.
+- Create: `backend/booking_window.py`.
+- Modify: `backend/tests/test_settings.py`.
+- Create: `backend/tests/test_booking_window.py`.
 
 **Interfaces:**
 
-- `load_settings(env) -> AppSettings` adds `booking_timezone_name`, defaulting to `Asia/Shanghai`, and validates it with `zoneinfo.ZoneInfo`; invalid IANA zones fail fast. It also validates the optional deployment currency/exponent pair.
-- Booking currency is deployment-owned, never user-selected. `BOOKING_CURRENCY_CODE` and `BOOKING_CURRENCY_MINOR_UNIT_EXPONENT` are an all-or-none pair; validate the code as three uppercase ASCII letters and the exponent as an integer from 0 through 4. If absent, plans may omit `price_ceiling_minor`, but a non-null ceiling cannot be entered.
-- `BookingWindowPolicy.business_date_at_utc(now_utc_ms: int) -> date` and `queryable_target_dates(now_utc_ms: int) -> tuple[date, date, date]` always use the currently configured and validated `BOOKING_TIMEZONE`. `describe(target_date: date, now_utc_ms: int, intent_timezone_snapshot: str | None = None) -> BookingWindowState` also computes D, D+1, D+2 only in that active operational timezone. A saved plan cannot choose the operational timezone. If the immutable intent timezone snapshot differs from the active operational timezone, return `can_query=false` with a context-mismatch reason until the user explicitly creates a new plan under the current context or a future explicit migration is approved. Historical target dates/times remain displayed using their saved timezone snapshot.
-- The window state calculates `query_open_at_utc_ms` from T-2 00:00 in the active operational timezone and shows T-2 07:30 as display-only. In this phase `can_book` and `can_pay` are always false; no confirmed-open argument is exposed. Any later validated opening observation is server-internal and outside this plan.
-- `VenueCatalog.list_venues(catalog_version) -> tuple[VenueSummary, ...]` returns semantic venue keys/labels for the selected current or retained version. `VenueCatalog.list_options(catalog_version, venue_key) -> VenueOptions` returns only that venue's semantic court options and supported booking_type values. `resolve_court(venue_key, semantic_key, catalog_version) -> CourtOption` must resolve exactly one entry under that venue/version. Same labels in different venues are distinct scoped choices; duplicate labels or keys within one venue/version are ambiguous and cannot be selected. Retain older versions referenced by saved plans; never silently remap them. No DTO includes upstream node IDs, coordinates, or availability; booking type remains distinct from duration.
+- `load_settings(env) -> AppSettings` adds `booking_timezone_name`, default `Asia/Shanghai`. Require a non-empty valid IANA key accepted by `zoneinfo.ZoneInfo`; invalid or non-canonical whitespace values fail fast. Tests pass an explicit synthetic environment and never read `.env`.
+- `BOOKING_CURRENCY_CODE` and `BOOKING_CURRENCY_MINOR_UNIT_EXPONENT` remain deployment-owned and independent of VenueCatalog. They are an optional all-or-none pair: code is exactly three uppercase ASCII letters; exponent is an integer from 0 through 4 inclusive. If both are absent, settings contain `None` for both. Do not infer currency from upstream samples or expose a user-selected currency.
+- `BookingWindowPolicy` receives the validated active `BOOKING_TIMEZONE`; no host-local or browser timezone participates. `business_date_at_utc(now_utc_ms) -> date` converts a UTC epoch-millisecond instant into the active zone. `queryable_target_dates(now_utc_ms) -> tuple[date, date, date]` returns exactly D, D+1, D+2 by local calendar arithmetic.
+- `describe(target_date, now_utc_ms, intent_timezone_snapshot=None) -> BookingWindowState` is pure and performs no I/O. It includes the active timezone, business date, default target date D+2, target date, current D/D+1/D+2 window, `query_open_at_utc_ms`, estimated display-only T-2 07:30 local time, `can_query`, `can_book`, `can_pay`, `contract_status`, and `reason_code`.
+- `can_query` means only that the calendar window and T-2 time boundary are satisfied; it is not network permission or an upstream validation result. `can_book` and `can_pay` are always `false`, `resolved_official_open_at_utc_ms` is always absent, and no confirmed-open time can be supplied by a caller.
+- Compute T-2 00:00 from a local calendar date in the active IANA zone, then convert that instant to UTC milliseconds. Never subtract fixed 48-hour durations or consult the host timezone. For an ambiguous local midnight, use its first occurrence; for a midnight gap, use the first valid instant on that same local date. If the whole local date is skipped, fail closed with no query-open instant and a reason code.
+- Represent the estimated T-2 07:30 as a local display value with the active timezone and an explicit unconfirmed/display-only state; do not present it as a UTC-confirmed opening. `can_query` is based on T-2 00:00, not 07:30.
+- If `intent_timezone_snapshot` differs from the active operational timezone, return `can_query=false` with a timezone-context-mismatch reason. Do not reinterpret the historical intent date/time under the new configuration. Historical display remains tied to the saved snapshot; a future query requires a new confirmed plan context or an explicit migration outside this phase.
+- A distant target date remains a valid intent input to later PlanService work, but this pure policy reports it outside D..D+2 and non-queryable. Task 1A does not create or save plans.
 
-- [ ] **Step 1: Write failing timezone and catalog tests**
+**Tests:**
 
-  Test default `Asia/Shanghai`, invalid timezone rejection, exact active-timezone D/D+1/D+2 query set, a saved distant target remaining non-queryable, UTC instants immediately before/at/after T-2 local midnight, estimated 07:30 display-only behavior, `can_book=false`/`can_pay=false` for every input, active timezone mismatch blocking query eligibility, all-or-none currency settings, valid exponent bounds, versioned catalog labels, separate booking-type/duration semantics, and that option DTOs never return query node IDs.
-- Add catalog tests for same-named courts in two venues, duplicate labels/keys within one venue, a semantic key incorrectly attached to another venue, and catalog-version changes. Existing revision label/version snapshots must remain unchanged when the active catalog advances.
+- Default timezone, valid IANA zones, invalid/empty timezone rejection, and explicit-env behavior independent of process `.env`.
+- Currency pair absent, both present, either half missing, invalid code shapes, exponent bounds 0 and 4, and rejected out-of-range/non-integer exponent values.
+- Business-date conversion from UTC under the configured timezone, exact D/D+1/D+2 set, far-future target non-queryability, and instants immediately before/at/after T-2 00:00.
+- Month/year rollover, leap day, and DST spring/fall transitions. Include ambiguous/nonexistent local-midnight behavior and fail-closed behavior for a skipped local civil date.
+- Active timezone mismatch blocks `can_query`; the estimated 07:30 remains display-only and unconfirmed; all returned states have `can_book=false` and `can_pay=false`.
+- No test reads `.env`, `req/`, or a real database. Use synthetic settings and fixed UTC epoch milliseconds.
 
-- [ ] **Step 2: Run the focused tests and verify expected failures**
+- [ ] **Step 1: Write failing Task 1A tests**
 
-  Run: `conda run -n test python -m unittest backend.tests.test_settings backend.tests.test_booking_window backend.tests.test_plan_catalog -v`
+  Add only the settings and pure policy cases above. Do not create `test_plan_catalog.py` in this task.
 
-  Expected: missing settings/policy/catalog interfaces fail.
+- [ ] **Step 2: Run focused tests and verify expected failures**
 
-- [ ] **Step 3: Implement settings, pure policy, and catalog**
+  Run: `conda run -n test python -m unittest backend.tests.test_settings backend.tests.test_booking_window -v`
 
-  Re-read only the needed local source values in memory as Task 0 requires and populate the server-side mapping from that evidence. Do not call upstream or reuse the legacy `backend/config.py` node ID.
+  Expected: missing timezone/currency settings and missing `backend.booking_window` interface fail for the intended reasons.
 
-- [ ] **Step 4: Run the focused tests**
+- [ ] **Step 3: Implement the minimum settings and pure policy**
 
-  Run the same command as Step 2. Expected: all focused tests pass.
+  Modify only `backend/settings.py` and create `backend/booking_window.py`. Do not add routes, catalog files, database changes, or network clients.
 
-- [ ] **Step 5: Commit Task 1**
+- [ ] **Step 4: Run focused, full backend, frontend, and build verification**
 
-  Stage exactly `backend/settings.py`, `backend/booking_window.py`, `backend/plans/__init__.py`, `backend/plans/catalog.py`, `backend/tests/test_settings.py`, `backend/tests/test_booking_window.py`, and `backend/tests/test_plan_catalog.py`. Commit as `feat: add booking window policy and plan catalog`.
+  Run the focused command above, then `conda run -n test python -m unittest discover -s backend/tests -v`, `cd frontend && npm test -- --run`, and `cd frontend && npm run build`.
+
+- [ ] **Step 5: Commit Task 1A**
+
+  Stage exactly `backend/settings.py`, `backend/booking_window.py`, `backend/tests/test_settings.py`, and `backend/tests/test_booking_window.py`. Commit as `feat: add independent booking window policy`.
+
+## Task 1B: Evidence-Gated VenueCatalog
+
+**Status: BLOCKED — Task 0 remains PARTIAL. Do not start this task until its evidence gate is explicitly re-reviewed.**
+
+**Files when unblocked:**
+
+- Create: `backend/plans/__init__.py`, `backend/plans/catalog.py`, `backend/tests/test_plan_catalog.py`.
+- Modify the evidence document only after new reliable local evidence is found.
+
+**Unblock requirements:**
+
+- Confirm a visible venue choice and its relationship to the `bookingByTime` parent query scope without publishing identifier values in evidence/fixtures.
+- Confirm which court labels belong to each confirmed venue and that each key resolves uniquely under a catalog version.
+- Confirm the supported semantic booking type from official source and matching local request evidence; keep duration independent from `appointmentType` and `booktype`.
+- Record provenance, client/version scope, evidence limitations, and public-repository visibility considerations before creating any runtime catalog entry.
+
+**Interfaces and future tests when unblocked:**
+
+- Preserve the two-level options API: venue options first; after `venue_key`, only that venue/version's semantic court options and supported booking types. Never return upstream IDs, coordinates, response order, or availability.
+- Test same labels in different venues, duplicate labels/keys within one venue, wrong-venue keys, catalog-version retention, and DTO exclusion of all upstream identifiers.
+- Populate real server-side mappings only from the re-reviewed evidence. Do not invent values, use `DEFAULT_NODEID`, or add synthetic production options to unblock tests.
+
+Task 2 through Task 6 remain in their existing order but cannot begin solely because Task 1A passes. They depend on Task 1B's catalog version and semantic option contract.
 
 ## Task 2: Plan Schema and Migration
 
