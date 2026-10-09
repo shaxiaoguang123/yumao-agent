@@ -166,7 +166,7 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 
 - [ ] **Step 2: Run focused tests and verify expected failures**
 
-  Run: `conda run -n test python -m unittest backend.tests.test_settings backend.tests.test_booking_window -v`
+  Run: `conda run -n test python -m unittest discover -s backend/tests -p 'test_settings.py' -v` and `conda run -n test python -m unittest discover -s backend/tests -p 'test_booking_window.py' -v`.
 
   Expected: missing timezone/currency settings and missing `backend.booking_window` interface fail for the intended reasons.
 
@@ -176,7 +176,7 @@ Planning Agent, LLM Provider settings, live AvailabilityService queries, Booking
 
 - [ ] **Step 4: Run focused, full backend, frontend, and build verification**
 
-  Run the focused command above, then `conda run -n test python -m unittest discover -s backend/tests -v`, `cd frontend && npm test -- --run`, and `cd frontend && npm run build`.
+  Run the focused discovery commands above, then `conda run -n test python -m unittest discover -s backend/tests -v`, `cd frontend && npm test -- --run`, and `cd frontend && npm run build`.
 
 - [ ] **Step 5: Commit Task 1A**
 
