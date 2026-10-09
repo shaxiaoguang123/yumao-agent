@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from flask import Flask, current_app, jsonify, request
 
 
-_ALLOWED_METHODS = "GET, POST, OPTIONS"
+_ALLOWED_METHODS = "GET, POST, PATCH, DELETE, OPTIONS"
 _ALLOWED_HEADERS = "Content-Type, X-CSRF-Token"
 
 
