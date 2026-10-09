@@ -741,16 +741,33 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(new_session_old_csrf.status_code, 403)
         self.assertTrue(self.client.get("/api/auth/session").get_json()["authenticated"])
 
+    def test_admin_invitation_creation_requires_a_valid_session(self) -> None:
+        response = self.client.post(
+            "/api/admin/invitations",
+            json={},
+            headers=self._origin_headers(),
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json(), {"error": "session_invalid"})
+        self.assertEqual(self.invitations_count(), 0)
+
     def test_admin_can_create_single_use_invitation_but_user_cannot(self) -> None:
         admin_csrf = self._login_user(
             "admin-1", "Admin", "admin password for tests", role="admin"
         )
+        started_at_utc_ms = self._now_ms()
         response = self._post_with_csrf(
             self.client, "/api/admin/invitations", admin_csrf, json={}
         )
+        completed_at_utc_ms = self._now_ms()
         self.assertEqual(response.status_code, 201, response.get_json())
         code = response.get_json()["invitation_code"]
         self.assertTrue(code)
+        expires_at_utc_ms = response.get_json()["expires_at_utc_ms"]
+        lifetime_ms = 24 * 60 * 60 * 1000
+        self.assertGreaterEqual(expires_at_utc_ms - lifetime_ms, started_at_utc_ms)
+        self.assertLessEqual(expires_at_utc_ms - lifetime_ms, completed_at_utc_ms)
         conn = self.db.connect_database(self.database_path, BUSY_TIMEOUT_MS)
         try:
             stored = conn.execute("SELECT invitation_code_hash FROM invitations").fetchone()[0]

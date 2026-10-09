@@ -12,6 +12,13 @@ const sessionStore = inject('sessionStore');
       <nav aria-label="主导航">
         <RouterLink v-if="sessionStore?.user" :to="{ name: 'home' }">首页</RouterLink>
         <RouterLink v-if="sessionStore?.user" :to="{ name: 'credentials' }">预约凭据</RouterLink>
+        <RouterLink
+          v-if="sessionStore?.user?.role === 'admin'"
+          data-testid="admin-invitations-link"
+          :to="{ name: 'admin-invitations' }"
+        >
+          邀请码管理
+        </RouterLink>
         <RouterLink v-if="sessionStore?.user" :to="{ name: 'account' }">账户</RouterLink>
         <RouterLink v-if="!sessionStore?.user" :to="{ name: 'login' }">登录</RouterLink>
       </nav>

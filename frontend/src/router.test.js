@@ -12,6 +12,7 @@ function makeStore() {
   return {
     status: 'unknown',
     initialRefreshComplete: false,
+    user: null,
     refresh: vi.fn(),
   };
 }
@@ -114,5 +115,54 @@ describe('auth router guard', () => {
     await router.push('/credentials');
 
     expect(router.currentRoute.value.name).toBe('login');
+  });
+
+  it('allows an administrator after the initial Session refresh', async () => {
+    const createAppRouter = await loadRouterFactory();
+    const store = makeStore();
+    store.refresh.mockImplementation(async () => {
+      store.status = 'authenticated';
+      store.user = { user_id: 'admin-a', username: 'Admin', role: 'admin' };
+      store.initialRefreshComplete = true;
+    });
+    const router = createAppRouter(store, createMemoryHistory());
+
+    await router.push('/admin/invitations');
+
+    expect(router.currentRoute.value.name).toBe('admin-invitations');
+    expect(router.currentRoute.value.meta.requiresAdmin).toBe(true);
+  });
+
+  it.each([
+    ['ordinary user', { user_id: 'user-a', username: 'User', role: 'user' }],
+    ['unknown role', { user_id: 'user-a', username: 'User', role: 'unknown' }],
+    ['missing user role', { user_id: 'user-a', username: 'User' }],
+  ])('redirects an authenticated %s away from the admin route', async (_label, user) => {
+    const createAppRouter = await loadRouterFactory();
+    const store = makeStore();
+    store.status = 'authenticated';
+    store.initialRefreshComplete = true;
+    store.user = user;
+    const router = createAppRouter(store, createMemoryHistory());
+
+    await router.push('/admin/invitations');
+
+    expect(router.currentRoute.value.name).toBe('home');
+  });
+
+  it('does not render the admin route when Session refresh is unavailable', async () => {
+    const createAppRouter = await loadRouterFactory();
+    const store = makeStore();
+    store.refresh.mockImplementation(async () => {
+      store.status = 'unavailable';
+      store.user = null;
+      store.initialRefreshComplete = true;
+    });
+    const router = createAppRouter(store, createMemoryHistory());
+
+    await router.push('/admin/invitations');
+
+    expect(router.currentRoute.value.name).toBe('home');
+    expect(store.refresh).toHaveBeenCalledOnce();
   });
 });
