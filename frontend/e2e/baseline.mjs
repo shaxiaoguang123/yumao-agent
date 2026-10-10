@@ -15,7 +15,7 @@ export async function runBaseline(qa) {
         if (label === 'home') await ctx.page.getByText('1 个凭据的账户连续性尚未确认', { exact: false }).waitFor();
         check(ctx.name, 'expected route', new URL(ctx.page.url()).pathname === route);
         check(ctx.name, 'admin navigation role visibility', await ctx.page.getByTestId('admin-invitations-link').count() === (role === 'admin' ? 1 : 0));
-        await layout(ctx); await tabs(ctx); await screenshot(ctx, ctx.name);
+        await layout(ctx); await screenshot(ctx, ctx.name); await tabs(ctx);
       }, {}, viewport);
     }
   }
