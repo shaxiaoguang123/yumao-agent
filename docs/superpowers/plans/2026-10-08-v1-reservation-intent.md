@@ -1,5 +1,7 @@
 # V1 Reservation Intent and Plan Management Implementation Plan
 
+> **2026-10-10 amendment:** Task 0 remains PARTIAL and Task 1B remains BLOCKED for formal catalog-bound ReservationIntent. The user explicitly authorized a single-system unbound manual draft MVP without Task 1B. The current executable contract and split are in `2026-10-10-booking-plan-mvp.md` and its spec. Historical catalog-dependent fields and gates below apply to formal binding only; they do not block the amended unbound slice. No fake catalog, query ID, booking type or execution eligibility is introduced.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
 > **Plan status:** V1 Reservation Intent and Plan Management / In Execution — Task 0 PARTIAL; Task 1A complete; Task 1B BLOCKED.

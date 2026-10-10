@@ -174,7 +174,7 @@ class AppFactoryTests(unittest.TestCase):
             shutil.copyfile(migration_dir / name, schema_v2_migrations / name)
         migrate_database(database_path, 5000, schema_v2_migrations)
 
-        self.assertEqual(db.CURRENT_SCHEMA_VERSION, 4)
+        self.assertEqual(db.CURRENT_SCHEMA_VERSION, 5)
         with self.assertRaises(db.SchemaNotReadyError):
             _create_app(database_path)
 
