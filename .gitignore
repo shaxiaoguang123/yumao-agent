@@ -22,6 +22,7 @@ booking_plan.json
 *.db-shm
 *.sqlite-wal
 *.sqlite-shm
+.ai-call-locks/
 
 # Extracted Windows application bundles and generated frontend assets
 /_internal/

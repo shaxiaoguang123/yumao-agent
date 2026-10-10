@@ -14,6 +14,7 @@ from backend.api.health import health_bp
 from backend.api.plans import plans_bp
 from backend.api.planning import planning_bp
 from backend.ai.planning import PlanningService
+from backend.ai.call_guard import AICallGuard
 from backend.api.booking_window import booking_window_bp
 from backend.api.ai_models import ai_models_bp
 from backend.ai.service import AIProviderService
@@ -142,6 +143,7 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         settings.database_path,
         settings.sqlite_busy_timeout_ms,
     )
+    app.extensions["ai_call_guard"] = AICallGuard(settings.database_path, app.extensions["rate_limit_service"])
     app.extensions["credential_token_cipher"] = cipher
     app.extensions["credential_upstream_adapter"] = adapter
     app.extensions["upstream_request_gate"] = gate
