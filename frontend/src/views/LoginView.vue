@@ -1,7 +1,8 @@
 <script setup>
-import { inject, ref } from 'vue';
+import { inject, onBeforeUnmount, ref } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 
+import AuthFrame from '../components/AuthFrame.vue';
 const sessionStore = inject('sessionStore');
 const router = useRouter();
 const username = ref('');
@@ -10,21 +11,24 @@ const errorMessage = ref('');
 const submitting = ref(false);
 
 async function submitLogin() {
+  if (submitting.value) return;
   submitting.value = true;
   errorMessage.value = '';
-  const accepted = await sessionStore.login(username.value, password.value);
-  submitting.value = false;
-  if (accepted) {
-    password.value = '';
-    await router.push({ name: 'home' });
-  } else {
-    errorMessage.value = sessionStore.errorMessage;
+  try {
+    const accepted = await sessionStore.login(username.value, password.value);
+    if (accepted) { password.value = ''; await router.push({ name: 'home' }); }
+    else errorMessage.value = sessionStore.errorMessage;
+  } catch {
+    errorMessage.value = '登录暂不可用，请重试';
+  } finally {
+    submitting.value = false;
   }
 }
+onBeforeUnmount(() => { password.value = ''; });
 </script>
 
 <template>
-  <section class="panel" aria-labelledby="login-title">
+  <AuthFrame>
     <h1 id="login-title">登录</h1>
     <p class="muted">使用你的应用账户进入预约工作台。</p>
     <form class="form-stack" @submit.prevent="submitLogin">
@@ -44,5 +48,5 @@ async function submitLogin() {
     <div class="inline-links">
       <RouterLink :to="{ name: 'register' }">使用邀请码注册</RouterLink>
     </div>
-  </section>
+  </AuthFrame>
 </template>

@@ -1,8 +1,9 @@
 <script setup>
-import { inject, ref } from 'vue';
+import { inject, onBeforeUnmount, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 import { createHttpClient } from '../api/http.js';
 
+import AuthFrame from '../components/AuthFrame.vue';
 const httpClient = inject('httpClient', createHttpClient());
 const invitationCode = ref('');
 const username = ref('');
@@ -12,6 +13,7 @@ const successMessage = ref('');
 const submitting = ref(false);
 
 async function submitRegistration() {
+  if (submitting.value) return;
   submitting.value = true;
   errorMessage.value = '';
   successMessage.value = '';
@@ -35,10 +37,11 @@ async function submitRegistration() {
     submitting.value = false;
   }
 }
+onBeforeUnmount(() => { password.value = ''; invitationCode.value = ''; });
 </script>
 
 <template>
-  <section class="panel" aria-labelledby="register-title">
+  <AuthFrame registration>
     <h1 id="register-title">邀请码注册</h1>
     <p class="muted">邀请码仅用于本次注册，不会保存到浏览器。</p>
     <form class="form-stack" @submit.prevent="submitRegistration">
@@ -70,5 +73,5 @@ async function submitRegistration() {
     <div class="inline-links">
       <RouterLink :to="{ name: 'login' }">返回登录</RouterLink>
     </div>
-  </section>
+  </AuthFrame>
 </template>

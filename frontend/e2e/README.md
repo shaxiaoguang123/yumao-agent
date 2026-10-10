@@ -18,7 +18,7 @@ An installed Chrome can be used without downloading another browser:
 BROWSER_EXECUTABLE_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" npm run test:e2e
 ```
 
-`-- --only-regressions` runs the 27 targeted scenarios. The default runs all 73.
+`-- --only-regressions` runs the 31 targeted scenarios. The default runs all 77.
 Each scenario owns a new Context; service workers are blocked. The runner starts
 its own loopback Vite on an available port, disables environment-file loading and
 API proxying, and filters inherited `VITE_*` variables. Only this local HTTP origin
@@ -52,3 +52,5 @@ CI adds an independent **Browser E2E** job. The existing **Backend tests** and
 check is not made required by this change. Browser versions and fonts can differ
 across macOS and Linux: geometry/interaction checks are automated; pixel equality
 is not asserted. Screenshots still need actual visual review before UI acceptance.
+
+UI redesign adds four discovery scenarios (one per viewport): local search/filter, distinct no-match state and explicit verification-record expansion. Intentional brand subtitle is checked separately from single-line navigation labels. The PR trigger includes the browser-fix base for stacked UI PRs.
