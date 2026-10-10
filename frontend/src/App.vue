@@ -5,7 +5,7 @@ import AppIcon from './components/AppIcon.vue';
 import './styles/design-system.css';
 const sessionStore = inject('sessionStore');
 const route = useRoute();
-const contextTitle = computed(() => ({home:'工作台概览',credentials:'凭据管理',account:'账户设置','admin-invitations':'管理员工具'}[route.name] || '账户访问'));
+const contextTitle = computed(() => ({home:'工作台概览',credentials:'凭据管理',plans:'预约计划',account:'账户设置','admin-invitations':'管理员工具'}[route.name] || '账户访问'));
 </script>
 <template>
  <div class="app-shell" :class="{ 'public-shell': !sessionStore?.user }">
@@ -16,11 +16,12 @@ const contextTitle = computed(() => ({home:'工作台概览',credentials:'凭据
    <nav aria-label="主导航" :class="{'admin-nav':sessionStore?.user?.role==='admin'}">
     <RouterLink v-if="sessionStore?.user" :to="{name:'home'}"><AppIcon name="home" />首页</RouterLink>
     <RouterLink v-if="sessionStore?.user" :to="{name:'credentials'}"><AppIcon name="shield" />预约凭据</RouterLink>
+    <RouterLink v-if="sessionStore?.user" :to="{name:'plans'}"><AppIcon name="clock" />预约计划</RouterLink>
     <RouterLink v-if="sessionStore?.user?.role==='admin'" data-testid="admin-invitations-link" :to="{name:'admin-invitations'}"><AppIcon name="ticket" />邀请码管理</RouterLink>
     <RouterLink v-if="sessionStore?.user" :to="{name:'account'}"><AppIcon name="user" />账户</RouterLink>
     <RouterLink v-if="!sessionStore?.user" :to="{name:'login'}"><AppIcon name="user" />登录</RouterLink>
    </nav>
-   <div v-if="sessionStore?.user" class="sidebar-note"><span class="availability-dot" />目前开放<p>账户与预约凭据管理</p><small>让每一步准备都清晰可见。</small></div>
+   <div v-if="sessionStore?.user" class="sidebar-note"><span class="availability-dot" />目前开放<p>账户、凭据与意向草稿</p><small>让每一步准备都清晰可见。</small></div>
   </header>
   <div class="workspace">
    <div v-if="sessionStore?.user" class="workspace-bar"><p>工作空间 <span>/</span> <strong>{{ contextTitle }}</strong></p><div class="workspace-user"><span class="avatar">{{ sessionStore.user.username?.slice(0,1).toUpperCase() }}</span><span>{{ sessionStore.user.username }}</span><span class="role-label">{{ sessionStore.user.role==='admin'?'管理员':'用户' }}</span></div></div>

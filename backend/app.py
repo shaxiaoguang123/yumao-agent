@@ -11,6 +11,10 @@ from backend.api.admin import admin_bp
 from backend.api.auth import auth_bp
 from backend.api.credentials import credentials_bp
 from backend.api.health import health_bp
+from backend.api.plans import plans_bp
+from backend.api.booking_window import booking_window_bp
+from backend.booking_window import BookingWindowPolicy
+from backend.plans.service import PlanService
 from backend.api.security import init_security
 from backend.auth.invitations import InvitationService
 from backend.auth.passwords import create_dummy_password_hash
@@ -132,9 +136,16 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
     app.extensions["upstream_request_gate"] = gate
     app.extensions["credential_service"] = credential_service
     app.extensions["dummy_password_hash"] = create_dummy_password_hash()
+    app.extensions["plan_service"] = PlanService(
+        settings.database_path, settings.sqlite_busy_timeout_ms,
+        BookingWindowPolicy(settings.booking_timezone_name),
+        settings.booking_currency_code, settings.booking_currency_minor_unit_exponent,
+    )
     init_security(app)
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(credentials_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(plans_bp)
+    app.register_blueprint(booking_window_bp)
     return app

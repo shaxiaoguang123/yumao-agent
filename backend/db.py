@@ -7,11 +7,13 @@ from pathlib import Path
 from typing import Mapping
 
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 _MIGRATION_NAME_RE = re.compile(r"\A(?P<version>[0-9]{4})_[a-z0-9_]+\.sql\Z")
 
 _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
     "schema_migrations": frozenset({"version", "filename", "checksum", "applied_at_utc_ms"}),
+    "booking_plans": frozenset({"plan_id", "user_id", "current_revision_id", "version", "created_at_utc_ms", "updated_at_utc_ms"}),
+    "booking_plan_revisions": frozenset({"revision_id", "plan_id", "user_id", "revision_number", "intent_json", "intent_sha256", "created_by_user_id", "created_at_utc_ms"}),
     "users": frozenset({
         "user_id", "username", "normalized_username", "password_hash", "role", "status",
         "created_at_utc_ms", "updated_at_utc_ms", "disabled_at_utc_ms",
@@ -207,13 +209,14 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
     required_contract = {
         name: columns
         for name, columns in _REQUIRED_COLUMNS.items()
-        if schema_version >= 2 or name not in {
+        if (schema_version >= 5 or name not in {"booking_plans", "booking_plan_revisions"})
+        and (schema_version >= 2 or name not in {
             "credentials",
             "credential_token_revisions",
             "credential_validation_observations",
             "credential_lifecycle_audits",
             "upstream_request_gate",
-        }
+        })
     }
     if schema_version == 2:
         required_contract["upstream_request_gate"] = (
@@ -313,6 +316,26 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
         ).fetchone()[0]
         if gate_count != 1:
             raise SchemaNotReadyError("the shared getUserInfo request-gate row is missing or duplicated")
+
+    if schema_version >= 5:
+        for table, columns in (
+            ("booking_plans", ("plan_id", "user_id")),
+            ("booking_plan_revisions", ("revision_id", "plan_id", "user_id", "revision_number")),
+            ("booking_plan_revisions", ("plan_id", "user_id", "revision_number")),
+        ):
+            if not _has_unique_columns(connection, table, columns):
+                raise SchemaNotReadyError(f"plan uniqueness is missing from {table}")
+        for table, parent, columns in (
+            ("booking_plans", "booking_plan_revisions", (("current_revision_id", "revision_id"), ("plan_id", "plan_id"), ("user_id", "user_id"), ("version", "revision_number"))),
+            ("booking_plan_revisions", "booking_plans", (("plan_id", "plan_id"), ("user_id", "user_id"))),
+        ):
+            if not _has_composite_foreign_key(connection, table, parent, columns):
+                raise SchemaNotReadyError(f"plan ownership/pointer constraint is missing from {table}")
+        if not _has_foreign_key(connection, "booking_plans", "user_id", "users", "user_id"):
+            raise SchemaNotReadyError("plan owner constraint is missing")
+        triggers = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+        if not {"booking_plan_revisions_no_update", "booking_plan_revisions_no_delete", "booking_plans_advance_only"} <= triggers:
+            raise SchemaNotReadyError("plan immutability guards are missing")
 
     if schema_version >= 3:
         gate_rows = connection.execute(

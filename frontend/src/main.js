@@ -2,6 +2,7 @@ import { createApp } from 'vue';
 import App from './App.vue';
 import { createAdminInvitationApi } from './api/adminInvitations.js';
 import { createCredentialApi } from './api/credentials.js';
+import { createPlanApi } from './api/plans.js';
 import { httpClient } from './api/http.js';
 import { createAppRouter } from './router.js';
 import { createSessionStore } from './stores/session.js';
@@ -15,6 +16,7 @@ createApp(App)
   .provide('sessionStore', sessionStore)
   .provide('adminInvitationApi', adminInvitationApi)
   .provide('credentialApi', credentialApi)
+  .provide('planApi', createPlanApi(sessionStore))
   .provide('httpClient', httpClient)
   .use(router)
   .mount('#app');

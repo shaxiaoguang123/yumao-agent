@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "test": "vitest",
-    "test:e2e": "node e2e/run.mjs"
+    "test:e2e": "node e2e/run.mjs",
+    "test:e2e:plans": "node e2e/plans-real.mjs"
   },
   "dependencies": {
     "vue": "^3.5.43",
