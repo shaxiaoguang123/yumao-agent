@@ -2,9 +2,10 @@ import { chromium } from 'playwright';
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const OUT = path.resolve(process.env.PLAN_QA_OUTPUT || '/tmp/yumao-plan-real-e2e');
-const repo = path.resolve(new URL('..', import.meta.url).pathname, '..');
+const repo = path.resolve(fileURLToPath(new URL('..', import.meta.url)), '..');
 const frontend = path.join(repo, 'frontend');
 const backendPort = Number(process.env.PLAN_QA_BACKEND_PORT || 5518);
 const vitePort = Number(process.env.PLAN_QA_VITE_PORT || 5517);
@@ -16,7 +17,7 @@ let expectedExternalProbe = false;
 let dbServer; let vite; let browser; let manifest;
 function check(name, passed, evidence = {}) { report.checks.push({ name, status: passed ? 'PASS' : 'FAIL', evidence }); if (!passed) throw new Error(name); }
 async function waitForOutput(child, predicate, timeoutMs = 12000) {
-  let output = ''; const onData = (chunk) => { output += chunk.toString(); };
+  let output = ''; const onData = (chunk) => { output += chunk.toString().replace(/\u001b\[[0-9;]*m/g, ''); };
   child.stdout?.on('data', onData); child.stderr?.on('data', onData);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline && child.exitCode === null && !predicate(output)) await new Promise((resolve) => setTimeout(resolve, 100));
@@ -53,7 +54,7 @@ try {
   dbServer = spawn(python, ['-m', 'backend.tests.plan_browser_server', '--output', OUT, '--origin', origin, '--port', String(backendPort)], { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'] });
   const serverOutput = await waitForOutput(dbServer, (output) => output.includes('"origin"'));
   manifest = JSON.parse(serverOutput.trim().split('\n').find((line) => line.includes('"origin"')));
-  vite = spawn('npm', ['run', 'dev', '--', '--config', 'e2e/plans-real.vite.config.mjs'], { cwd: frontend, env: { ...process.env, PLAN_QA_BACKEND: `http://127.0.0.1:${backendPort}`, PLAN_QA_PORT: String(vitePort), PLAN_QA_CACHE: path.join(OUT, 'vite-cache') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  vite = spawn(process.execPath, [path.join(frontend, 'node_modules/vite/bin/vite.js'), '--config', 'e2e/plans-real.vite.config.mjs'], { cwd: frontend, env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('VITE_'))), PLAN_QA_BACKEND: `http://127.0.0.1:${backendPort}`, PLAN_QA_PORT: String(vitePort), PLAN_QA_CACHE: path.join(OUT, 'vite-cache') }, stdio: ['ignore', 'pipe', 'pipe'] });
   await waitForOutput(vite, (output) => output.includes(`http://127.0.0.1:${vitePort}`));
   browser = await chromium.launch({ headless: true });
   const a = await createContext('desktop-A', 1440, 900); await login(a.page, 'plan_user_a'); await a.page.getByText('还没有预约计划').waitFor({ state: 'visible', timeoutMs: 10000 }); check('A starts empty', await a.page.getByText('还没有预约计划').count() === 1);
