@@ -67,6 +67,7 @@ async function mountView(api) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
+      { path: '/plans', name: 'plans', component: { template: '<div />' } },
       { path: '/credentials', name: 'credentials', component: CredentialView },
       { path: '/elsewhere', name: 'elsewhere', component: EmptyView },
     ],
@@ -207,7 +208,8 @@ describe('Credential management view', () => {
     });
     const router = createRouter({
       history: createMemoryHistory(),
-      routes: [{ path: '/credentials', name: 'credentials', component: CredentialView }],
+      routes: [{ path: '/plans', name: 'plans', component: { template: '<div />' } },
+      { path: '/credentials', name: 'credentials', component: CredentialView }],
     });
     await router.push('/credentials');
     const wrapper = mount({ components: { RouterView }, template: '<RouterView />' }, {
@@ -370,7 +372,8 @@ describe('Credential management view', () => {
       routes: [
         { path: '/', name: 'home', component: HomeView },
         { path: '/account', name: 'account', component: { template: '<div />' } },
-        { path: '/credentials', name: 'credentials', component: { template: '<div />' } },
+        { path: '/plans', name: 'plans', component: { template: '<div />' } },
+      { path: '/credentials', name: 'credentials', component: { template: '<div />' } },
       ],
     });
     await router.push('/');
@@ -402,7 +405,8 @@ describe('Credential management view', () => {
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/account', name: 'account', component: { template: '<div />' } },
-        { path: '/credentials', name: 'credentials', component: { template: '<div />' } },
+        { path: '/plans', name: 'plans', component: { template: '<div />' } },
+      { path: '/credentials', name: 'credentials', component: { template: '<div />' } },
         { path: '/login', name: 'login', component: { template: '<div />' } },
       ],
     });

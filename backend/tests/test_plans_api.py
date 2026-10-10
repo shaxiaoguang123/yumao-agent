@@ -116,3 +116,14 @@ class PlansApiTests(unittest.TestCase):
         for query in ('target_date=bad','target_date=0001-01-01','nodeid=bad','target_date=2026-10-12&target_date=2026-10-13'):
             self.assertEqual(self.a.get('/api/booking-window?'+query).status_code,400)
         self.assertEqual(self.a.get('/api/plans/options?catalog_version=fake').status_code,400)
+
+    def test_window_resolves_saved_context_from_owned_plan_id(self):
+        from backend.booking_window import BookingWindowPolicy
+        plan_id = self.create()['plan_id']
+        self.app.extensions['plan_service'].policy = BookingWindowPolicy('UTC')
+        with patch('backend.api.booking_window._now_utc_ms', return_value=NOW):
+            response = self.a.get(f'/api/booking-window?target_date=2026-10-12&plan_id={plan_id}')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.get_json()['can_query'])
+        self.assertEqual(response.get_json()['reason_code'], 'timezone_context_mismatch')
+        self.assertEqual(self.b.get(f'/api/booking-window?plan_id={plan_id}').status_code, 404)

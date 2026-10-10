@@ -76,7 +76,7 @@ onBeforeUnmount(() => { requestId += 1; });
       </li>
     </ul>
    </section>
-   <aside class="scope-panel"><span class="section-icon"><AppIcon name="court" /></span><h2>一步一步，准备到位</h2><p>当前可管理账户、预约凭据与邀请码。凭据验证不等于已创建预约。</p><div class="scope-status"><span>预约计划 · 自动执行 · 支付</span><strong>尚未开放</strong></div><p class="scope-footnote">功能状态以实际实现为准。</p></aside>
+   <aside class="scope-panel"><span class="section-icon"><AppIcon name="court" /></span><h2>一步一步，准备到位</h2><p>当前可管理账户、预约凭据、邀请码与预约意向草稿。保存草稿不等于已创建预约。</p><div class="scope-status"><span>自动预约 · 支付</span><strong>尚未开放</strong></div><p class="scope-footnote">功能状态以实际实现为准。</p></aside>
   </div>
  </div>
 </template>

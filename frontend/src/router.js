@@ -5,6 +5,7 @@ import CredentialView from './views/CredentialView.vue';
 import HomeView from './views/HomeView.vue';
 import InviteRegisterView from './views/InviteRegisterView.vue';
 import LoginView from './views/LoginView.vue';
+import PlansView from './views/PlansView.vue';
 
 export function createAppRouter(sessionStore, history = createWebHistory()) {
   const router = createRouter({
@@ -36,6 +37,7 @@ export function createAppRouter(sessionStore, history = createWebHistory()) {
         component: AdminInvitationsView,
         meta: { requiresAuth: true, requiresAdmin: true },
       },
+      { path: '/plans', name:'plans', component:PlansView, meta:{requiresAuth:true} },
       { path: '/:pathMatch(.*)*', redirect: { name: 'home' } },
     ],
   });

@@ -13,6 +13,7 @@ export class HttpError extends Error {
     status = 0,
     code = '',
     kind = 'http',
+    fields = {},
     sessionInvalid = false,
     cause = undefined,
   } = {}) {
@@ -21,6 +22,7 @@ export class HttpError extends Error {
     this.status = status;
     this.code = code;
     this.kind = kind;
+    this.fields = fields;
     this.sessionInvalid = sessionInvalid || INVALID_SESSION_CODES.has(code);
   }
 }
@@ -99,6 +101,7 @@ export function createHttpClient({
         status: response.status,
         code,
         kind: 'http',
+        fields: payload?.fields || {},
         sessionInvalid: isSessionInvalid,
       });
     }

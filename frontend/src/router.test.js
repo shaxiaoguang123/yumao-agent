@@ -166,3 +166,7 @@ describe('auth router guard', () => {
     expect(store.refresh).toHaveBeenCalledOnce();
   });
 });
+
+describe('plans route permission',()=>{
+ it('protects plans and opens it only with authenticated Session',async()=>{const create=await loadRouterFactory();const store={status:'unauthenticated',user:null,initialRefreshComplete:true};const router=create(store,createMemoryHistory());await router.push('/plans');expect(router.currentRoute.value.name).toBe('login');store.status='authenticated';store.user={user_id:'a',role:'user'};await router.push('/plans');expect(router.currentRoute.value.name).toBe('plans');});
+});
