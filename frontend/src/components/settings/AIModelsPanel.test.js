@@ -48,4 +48,13 @@ describe('AI models settings',()=>{
   let resolveCreate;const api=fixture({create:vi.fn(()=>new Promise(resolve=>{resolveCreate=resolve;}))});const {wrapper,session}=await mountPanel(api);await wrapper.get('.add-model').trigger('click');await wrapper.get('[name="name"]').setValue('Pending');await wrapper.get('[name="base_url"]').setValue('https://pending.test/v1');await wrapper.get('[name="model"]').setValue('pending');await wrapper.get('[name="api_key"]').setValue('pending-key');await wrapper.get('form').trigger('submit');expect(wrapper.get('form').attributes('aria-busy')).toBe('true');
   session.user={user_id:'other'};await flushPromises();expect(wrapper.find('form').exists()).toBe(false);expect(wrapper.get('.preference-save').element.disabled).toBe(false);resolveCreate({});await flushPromises();expect(wrapper.text()).not.toContain('模型保存失败');
  });
+ it('only calls parsing on explicit click and renders needs-input results',async()=>{
+  const api=fixture({testParsing:vi.fn(async()=>({ok:false,outcome:'needs_input',questions:['请补充场馆'],proposal:null}))});const {wrapper}=await mountPanel(api);expect(api.testParsing).not.toHaveBeenCalled();await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(api.testParsing).toHaveBeenCalledWith('model-1');expect(wrapper.text()).toContain('模型能够连接，但仍要求补充信息');expect(wrapper.text()).toContain('请补充场馆');
+ });
+ it.each([
+  ['provider_access_denied','没有访问权限'],['provider_model_or_endpoint_not_found','模型或接口地址不存在'],['provider_rate_limited','服务商请求过于频繁'],['provider_response_invalid','不符合兼容接口要求'],['invalid_model_proposal','计划结构或字段依据不符合要求'],['ai_call_in_progress','已有模型调用正在进行'],['ai_call_rate_limited','模型调用过于频繁'],
+ ])('uses actual backend category %s for parsing failure',async(code,text)=>{
+  const api=fixture({testParsing:vi.fn(async()=>{throw {code,message:'raw secret supplier error'};})});const {wrapper}=await mountPanel(api);await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain(text);expect(wrapper.text()).not.toContain('raw secret');
+ });
+
 });

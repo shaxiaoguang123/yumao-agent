@@ -269,8 +269,11 @@ class AIProviderService:
             cleaned.append({"role":item["role"],"content":item["content"]})
         return cleaned
 
-    def chat(self, user_id, messages):
-        resolved=self.resolve(user_id)
+    def chat(self, user_id, messages, *, model_id=None):
+        resolved = self.resolve(user_id) if model_id is None else None
+        if model_id is not None:
+            config = self.explicit_config(user_id, model_id)
+            resolved = (config, config.public())
         if not resolved: raise AIModelError("provider_not_configured",409)
         config,public=resolved
         try:
@@ -280,7 +283,7 @@ class AIProviderService:
             return content,public
         except ProviderFailure as exc: raise AIModelError(exc.code,exc.status) from None
 
-    def test(self, user_id, model_id):
+    def explicit_config(self, user_id, model_id):
         db=self._db()
         try:
             if model_id == "service_default": config=self.service_default
@@ -289,6 +292,10 @@ class AIProviderService:
                 config=self._config(row) if row else None
             if not config: raise AIModelError("provider_not_found",404)
         finally: db.close()
+        return config
+
+    def test(self, user_id, model_id):
+        config = self.explicit_config(user_id, model_id)
         try:
             self.transport.test(config)
             return {"ok":True,"message":"连接成功。"}

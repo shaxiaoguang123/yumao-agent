@@ -69,6 +69,61 @@ class AIModelTests(unittest.TestCase):
             "auth_mode":"bearer","api_key":"user-secret-synthetic",
         })
 
+    def test_explicit_parsing_tests_validate_without_saving_and_isolate_model(self):
+        import json
+        from test_planning import ready
+        selected=self._create(name='Selected').get_json()['model']
+        tested=self._create(name='Tested').get_json()['model']
+        self.service.set_preferences('user-a',selected['id'],None)
+        def reply(config,messages):
+            self.transport.calls.append((config,messages))
+            payload=json.loads(messages[-1]['content'])
+            intent=json.loads(ready())['intent']
+            intent['target_date']=payload['relative_dates']['下周六']
+            return ready(intent,{**json.loads(ready())['evidence'],'duration_minutes':'120分钟','court_preferences':'优先6号场，5号场作为备选'})
+        self.transport.chat=reply
+        endpoint='/api/ai/models/'+tested['id']+'/test-parsing'
+        response=self.a.post(endpoint,json={},headers=self._headers(self.csrf_a))
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.get_json()['outcome'],'parsed')
+        self.assertEqual(self.transport.calls[-1][0].provider_id,tested['id'])
+        self.assertEqual(self.service.list_models('user-a')['selected_model_id'],selected['id'])
+        self.assertEqual(self.b.post(endpoint,json={},headers=self._headers(self.csrf_b)).status_code,404)
+        self.assertEqual(len(self.transport.calls),1)
+        with connect_database(self.path,5000) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM booking_plan_revisions').fetchone()[0],0)
+        self.assertEqual(self.app.test_client().post(endpoint,json={},headers=self._headers()).status_code,401)
+        self.assertEqual(self.a.post(endpoint,json={},headers=self._headers()).status_code,403)
+
+    def test_parsing_capability_failures_remain_safe(self):
+        import json
+        from test_planning import ready
+        model=self._create().get_json()['model']
+        endpoint='/api/ai/models/'+model['id']+'/test-parsing'
+        for content in ('raw supplier text', ready(intent={**json.loads(ready())['intent'],'nodeid':'forbidden'})):
+            self.transport.chat=lambda *_args: content
+            response=self.a.post(endpoint,json={},headers=self._headers(self.csrf_a))
+            self.assertEqual((response.status_code,response.get_json()['error']),(502,'invalid_model_proposal'))
+            self.assertNotIn('raw supplier',response.get_data(as_text=True))
+        self.transport.chat=lambda *_args: json.dumps({'status':'needs_input','intent':None,'questions':['请补充信息。'],'evidence':{}})
+        self.assertEqual(self.a.post(endpoint,json={},headers=self._headers(self.csrf_a)).get_json()['outcome'],'needs_input')
+        for code in ('provider_auth_failed','provider_access_denied','provider_model_or_endpoint_not_found','provider_rate_limited','provider_timeout','provider_unavailable'):
+            def failure(*_args): raise ProviderFailure(code,502)
+            self.transport.chat=failure
+            self.assertEqual(self.a.post(endpoint,json={},headers=self._headers(self.csrf_a)).get_json()['error'],code)
+        with connect_database(self.path,5000) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM booking_plan_revisions').fetchone()[0],0)
+
+    def test_user_call_limit_shared_by_connection_and_proposals(self):
+        for _ in range(12):
+            response=self.a.post('/api/ai/models/service_default/test',json={},headers=self._headers(self.csrf_a))
+            self.assertEqual(response.status_code,200)
+        response=self.a.post('/api/ai/models/service_default/test-parsing',json={},headers=self._headers(self.csrf_a))
+        self.assertEqual((response.status_code,response.get_json()['error']),(429,'ai_call_rate_limited'))
+        self.assertGreater(int(response.headers['Retry-After']),0)
+        self.assertEqual(len(self.transport.calls),12)
+        self.assertEqual(self.b.post('/api/ai/models/service_default/test',json={},headers=self._headers(self.csrf_b)).status_code,200)
+
     def test_auth_csrf_isolation_and_secret_never_echoes(self):
         anon = self.app.test_client()
         self.assertEqual(anon.get("/api/ai/models").status_code, 401)

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 
 from flask import Blueprint, current_app, g, jsonify
 
 from backend.ai.service import AIModelError
+from backend.plans.service import PlanError
 from backend.api.auth import require_csrf, require_session
 
 
@@ -47,7 +49,12 @@ def _user_id(): return g.session_context.user.user_id
 
 
 @ai_models_bp.errorhandler(AIModelError)
-def _error(error): return jsonify({"error": error.code}), error.status
+@ai_models_bp.errorhandler(PlanError)
+def _error(error):
+    response = jsonify({"error": error.code})
+    if hasattr(error, "retry_after_seconds"):
+        response.headers["Retry-After"] = str(error.retry_after_seconds)
+    return response, error.status
 
 
 @ai_models_bp.errorhandler(sqlite3.Error)
@@ -105,4 +112,15 @@ def set_preferences():
 @require_csrf
 def test_model(model_id):
     _body(set(), set())
-    return jsonify(_service().test(_user_id(), model_id))
+    with current_app.extensions["ai_call_guard"].hold(_user_id()):
+        return jsonify(_service().test(_user_id(), model_id))
+
+
+@ai_models_bp.post("/<model_id>/test-parsing")
+@require_session
+@require_csrf
+def test_parsing(model_id):
+    _body(set(), set())
+    with current_app.extensions["ai_call_guard"].hold(_user_id()):
+        return jsonify(current_app.extensions["planning_service"].test_parsing(
+            _user_id(), model_id, time.time_ns() // 1_000_000))

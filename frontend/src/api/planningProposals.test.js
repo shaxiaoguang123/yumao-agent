@@ -12,4 +12,10 @@ describe('planning proposal API',()=>{
   await api.generate('weekend? ',null,null);
   expect(client.request.mock.calls[0][1].body).toEqual({message:'weekend? ',plan_id:null,base_version:null});
  });
+ it('sends bounded user answers separately from untrusted prior questions',async()=>{
+  const client={request:vi.fn(async()=>({status:'ready'}))};const api=createPlanningProposalApi(client);
+  await api.generate('original',null,null,['venue'],[['Which venue?']]);
+  expect(client.request.mock.calls[0][1].body).toEqual({message:'original',plan_id:null,base_version:null,answers:['venue'],follow_up_questions:[['Which venue?']]});
+ });
+
 });

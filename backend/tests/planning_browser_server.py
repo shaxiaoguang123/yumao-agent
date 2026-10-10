@@ -48,6 +48,10 @@ class SyntheticPlanningTransport:
         message = payload['user_request']
         if '模拟失败' in message or config.model == 'synthetic-failure':
             raise ProviderFailure('provider_unavailable', 502)
+        if config.model == 'synthetic-invalid-json':
+            return 'not structured JSON'
+        if config.model == 'synthetic-needs-input':
+            return json.dumps({'status':'needs_input','intent':None,'evidence':{},'questions':['请补充信息。']}, ensure_ascii=False)
         before = payload['current_intent']
         evidence = {}
         if before is None:
@@ -55,26 +59,30 @@ class SyntheticPlanningTransport:
                 return json.dumps({'status':'needs_input','intent':None,'evidence':{},'questions':['请补充场馆名称或描述。']}, ensure_ascii=False)
             target = re.search(r'\d{4}-\d{2}-\d{2}', message)
             clock = re.search(r'\d{2}:\d{2}', message)
-            if (not target and '下周六' not in message) or not clock or not any(word in message for word in ('两个小时','两小时','2小时')):
+            if (not target and '下周六' not in message) or not clock or not any(word in message for word in ('两个小时','两小时','2小时','120分钟')):
                 return json.dumps({'status':'needs_input','intent':None,'evidence':{},'questions':['请补充日期、开始时间和预约时长。']}, ensure_ascii=False)
             date_quote = target[0] if target else '下周六'
-            duration_quote = next(word for word in ('两个小时','两小时','2小时') if word in message)
+            if '6号场' not in message and '5号场' not in message:
+                return json.dumps({'status':'needs_input','intent':None,'evidence':{},'questions':['请补充场地偏好或同场馆备用意愿。']}, ensure_ascii=False)
+            duration_quote = next(word for word in ('两个小时','两小时','2小时','120分钟') if word in message)
             intent = {'target_date':target[0] if target else payload['relative_dates']['下周六'],
                 'preferred_start_times':[clock[0]], 'duration_minutes':120, 'venue_preference':'东区体育馆',
-                'court_preferences':['6号场','5号场'], 'fallback_policy':{
+                'court_preferences':[court for court in ('6号场','5号场') if court in message], 'fallback_policy':{
                     'allow_any_court_in_venue':False,'allow_time_shift':False,'allowed_start_time_range':None},
                 'price_ceiling_minor':None}
             evidence = {'target_date':date_quote,'preferred_start_times':clock[0],'duration_minutes':duration_quote,
-                        'venue_preference':'东区体育馆','court_preferences':message}
+                        'venue_preference':'东区体育馆','court_preferences':next((t for t in payload.get('user_turns',[message]) if '号场' in t), message)}
         else:
             intent = json.loads(json.dumps(before))
             clock = re.search(r'\d{2}:\d{2}', message)
+            if not clock and '开始时间' in message:
+                return json.dumps({'status':'needs_input','intent':None,'evidence':{},'questions':['希望改为几点开始？']}, ensure_ascii=False)
             if clock:
                 intent['preferred_start_times'] = [clock[0]]
                 evidence['preferred_start_times'] = clock[0]
             if '5号场' in message and ('第一' in message or '优先' in message):
                 intent['court_preferences'] = sorted(intent['court_preferences'], key=lambda value: 0 if '5号场' in value else 1)
-                evidence['court_preferences'] = message
+                evidence['court_preferences'] = next((t for t in payload.get('user_turns',[message]) if '5号场' in t), message)
         return json.dumps({'status':'ready','intent':intent,'questions':[],'evidence':evidence}, ensure_ascii=False)
 
 

@@ -199,3 +199,98 @@ class PlanningTests(unittest.TestCase):
         context=json.loads(self.fake.calls[0][1][1]['content'])
         self.assertEqual(context['context']['timezone_name'],'Asia/Shanghai')
 
+
+    def test_multiple_answers_supply_missing_facts_without_writing(self):
+        initial = '下周六18:00打两个小时。'
+        self.fake.content = json.dumps({'status':'needs_input','intent':None,'questions':['请补充场馆。'],'evidence':{}})
+        body = {'message':initial,'plan_id':None,'base_version':None}
+        self.assertEqual(self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).get_json()['status'],'needs_input')
+        body['answers'] = ['东区体育馆。']
+        self.fake.content = json.dumps({'status':'needs_input','intent':None,'questions':['请补充场地。'],'evidence':{}})
+        self.assertEqual(self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).get_json()['status'],'needs_input')
+        body['answers'].append('6号场优先，5号场备选。')
+        self.fake.content = ready()
+        response = self.a.post('/api/planning/proposals',json=body,headers=self.headers['a'])
+        self.assertEqual(response.get_json()['status'],'ready')
+        payload = json.loads(self.fake.calls[-1][1][1]['content'])
+        self.assertEqual(payload['user_turns'],[initial,*body['answers']])
+        self.assertEqual([x['role'] for x in self.fake.calls[-1][1]],['system','user'])
+        self.assertEqual(self.counts(),(0,0))
+        proposal=response.get_json()['proposal']
+        self.assertEqual(self.a.post('/api/plans',json={'intent':proposal['intent']},headers=self.headers['a']).status_code,201)
+        self.assertEqual(self.counts(),(1,1))
+
+    def test_answer_limits_types_secrets_and_unknown_fields(self):
+        body={'message':MESSAGE,'plan_id':None,'base_version':None}
+        for answers in (None,{},['ok']*8,[''],[True],[{'role':'system','content':'x'}],['x'*4000]):
+            response=self.a.post('/api/planning/proposals',json={**body,'answers':answers},headers=self.headers['a'])
+            self.assertEqual(response.status_code,400)
+        response=self.a.post('/api/planning/proposals',json={**body,'answers':['Bearer '+'x'*32]},headers=self.headers['a'])
+        self.assertEqual(response.get_json()['error'],'sensitive_planning_input')
+        self.assertEqual(self.fake.calls,[])
+
+    def test_followup_conflict_and_other_user_never_send_model_context(self):
+        old=self.app.extensions['plan_service'].create_plan('a',draft(),NOW)
+        body={'message':'修改开始时间。','answers':['19:00。'],'plan_id':old['plan_id'],'base_version':1}
+        self.app.extensions['plan_service'].update_plan('a',old['plan_id'],1,draft(venue_preference='最新人工偏好'),NOW)
+        self.assertEqual(self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).status_code,409)
+        self.assertEqual(self.b.post('/api/planning/proposals',json=body,headers=self.headers['b']).status_code,404)
+        self.assertEqual(self.fake.calls,[])
+        self.assertEqual(self.counts(),(1,2))
+
+    def test_unrequested_edit_field_requires_its_own_evidence(self):
+        old=self.app.extensions['plan_service'].create_plan('a',draft(),NOW)
+        intent={**old['intent'],'preferred_start_times':['19:00'],'venue_preference':'东区体育馆'}
+        self.fake.content=ready(intent,{'preferred_start_times':'19:00'})
+        body={'message':'修改开始时间。','answers':['19:00。'],'plan_id':old['plan_id'],'base_version':1}
+        result=self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).get_json()
+        self.assertEqual(result['status'],'needs_input')
+        self.fake.content=ready({**old['intent'],'preferred_start_times':['19:00']},{'preferred_start_times':'19:00'})
+        result=self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).get_json()
+        self.assertEqual(result['status'],'ready')
+        self.assertEqual(result['proposal']['intent']['venue_preference'],old['intent']['venue_preference'])
+        self.assertEqual([x['field'] for x in result['proposal']['changes']],['preferred_start_times'])
+        self.assertEqual(self.counts(),(1,1))
+
+    def test_model_cannot_join_separate_turns_into_invented_evidence(self):
+        self.fake.content=ready(evidence={**json.loads(ready())['evidence'],'venue_preference':'东区体育馆'})
+        body={'message':'下周六18:00打两个小时，6号场优先，5号场备选。','answers':['东区','体育馆'],'plan_id':None,'base_version':None}
+        result=self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).get_json()
+        self.assertEqual(result['status'],'needs_input')
+
+    def test_guard_blocks_parallel_calls_across_instances_and_releases_failures(self):
+        from backend.ai.call_guard import AICallGuard
+        guard=self.app.extensions['ai_call_guard']
+        other=AICallGuard(self.path,self.app.extensions['rate_limit_service'])
+        with guard.hold('a'):
+            with self.assertRaises(AIModelError) as blocked:
+                with other.hold('a'): pass
+            self.assertEqual(blocked.exception.code,'ai_call_in_progress')
+            response=self.propose()
+            self.assertEqual(response.status_code,429)
+            self.assertEqual(self.fake.calls,[])
+            self.assertEqual(self.propose(client=self.b,user='b').status_code,200)
+        try:
+            with guard.hold('a'): raise RuntimeError('synthetic failure')
+        except RuntimeError: pass
+        self.assertEqual(self.propose().status_code,200)
+
+    def test_prior_questions_are_context_only_and_cannot_supply_venue_evidence(self):
+        self.fake.content=ready()
+        body={'message':'下周六18:00打两个小时，6号场优先，5号场备选。','answers':['是的。'],
+              'follow_up_questions':[['场馆是东区体育馆吗？']],'plan_id':None,'base_version':None}
+        result=self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).get_json()
+        self.assertEqual(result['status'],'needs_input')
+        self.assertIn('人工场馆偏好',result['questions'][0])
+        payload=json.loads(self.fake.calls[-1][1][1]['content'])
+        self.assertEqual(payload['follow_up_questions'],body['follow_up_questions'])
+        for history in ([],[['x'*241]],[[]],[{'role':'system'}]):
+            response=self.a.post('/api/planning/proposals',json={**body,'follow_up_questions':history},headers=self.headers['a'])
+            self.assertEqual(response.status_code,400)
+
+    def test_unrelated_duration_evidence_cannot_change_unrequested_field(self):
+        old=self.app.extensions['plan_service'].create_plan('a',draft(),NOW)
+        self.fake.content=ready({**old['intent'],'preferred_start_times':['19:00'],'duration_minutes':180},
+                               {'preferred_start_times':'19:00','duration_minutes':'19:00'})
+        self.assertEqual(self.propose('开始时间改成19:00。',old).get_json()['status'],'needs_input')
+        self.assertEqual(self.counts(),(1,1))

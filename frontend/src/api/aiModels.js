@@ -8,6 +8,7 @@ export function createAIModelsApi(client) {
     update: (id, changes) => client.request(`/api/ai/models/${encodeURIComponent(id)}`, { method:'PATCH', body:changes }),
     remove: (id, base_version) => client.request(`/api/ai/models/${encodeURIComponent(id)}`, { method:'DELETE', body:{base_version} }),
     preferences: (selected_model_id, default_model_id) => client.request('/api/ai/models/preferences', { method:'PATCH', body:{selected_model_id,default_model_id} }),
+    testParsing: (id) => client.request(`/api/ai/models/${encodeURIComponent(id)}/test-parsing`, {method:'POST',body:{}}),
     test: async (id) => {
       const result=await client.request(`/api/ai/models/${encodeURIComponent(id)}/test`, { method:'POST', body:{} });
       if(result?.ok!==true){

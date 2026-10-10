@@ -77,4 +77,29 @@ describe('proposal assistant',()=>{
  it('shows provider setup guidance when a missing provider is returned as a 409',async()=>{
   const config=fixture();config.proposalApi.generate=vi.fn(async()=>{throw {status:409,code:'provider_not_configured'};});const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('新建预约意向');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('尚未配置 AI 模型');expect(wrapper.text()).not.toContain('计划版本已变化');
  });
+ it('continues two clarification rounds using just each answer and saves only on confirmation',async()=>{
+  const config=fixture();config.proposalApi.generate=vi.fn().mockResolvedValueOnce({status:'needs_input',questions:['场馆？'],proposal:null}).mockResolvedValueOnce({status:'needs_input',questions:['场地？'],proposal:null}).mockResolvedValueOnce({status:'ready',questions:[],proposal});
+  const {wrapper,proposalApi,planApi}=await mountAssistant(config);
+  await wrapper.get('[data-testid="proposal-message"]').setValue('下周六18:00打两个小时');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
+  await wrapper.get('[data-testid="proposal-answer"]').setValue('东区体育馆');await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
+  expect(wrapper.text()).toContain('东区体育馆');expect(wrapper.text()).toContain('场地？');
+  await wrapper.get('[data-testid="proposal-answer"]').setValue('6号场优先');await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
+  expect(proposalApi.generate).toHaveBeenLastCalledWith('下周六18:00打两个小时',null,null,['东区体育馆','6号场优先'],[['场馆？'],['场地？']]);expect(planApi.create).not.toHaveBeenCalled();
+  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.create).toHaveBeenCalledOnce();
+ });
+ it('retains the conversation version on followup and requires explicit latest read after 409',async()=>{
+  const config=fixture({plans:[plan(1)]});config.proposalApi.generate=vi.fn().mockResolvedValueOnce({status:'needs_input',questions:['几点？'],proposal:null}).mockRejectedValueOnce({code:'plan_version_conflict',status:409}).mockResolvedValueOnce({status:'needs_input',questions:['请确认？'],proposal:null});
+  const {wrapper,proposalApi,planApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('修改开始时间');await wrapper.get('[data-testid="proposal-target"]').setValue('synthetic-plan');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
+  await wrapper.get('[data-testid="proposal-answer"]').setValue('19:00');await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
+  expect(planApi.get).toHaveBeenCalledOnce();expect(proposalApi.generate).toHaveBeenLastCalledWith('修改开始时间','synthetic-plan',3,['19:00'],[['几点？']]);expect(wrapper.get('[data-testid="proposal-answer"]').element.value).toBe('19:00');expect(wrapper.get('[data-testid="continue-proposal"]').element.disabled).toBe(true);expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(true);
+  await wrapper.get('[data-testid="read-latest-regenerate"]').trigger('click');await flushPromises();expect(planApi.get).toHaveBeenCalledTimes(2);expect(wrapper.text()).toContain('latest venue');
+ });
+ it('preserves failed supplement input and clears all conversation data on restart or account change',async()=>{
+  const config=fixture();config.proposalApi.generate=vi.fn().mockResolvedValueOnce({status:'needs_input',questions:['场馆？'],proposal:null}).mockRejectedValueOnce({code:'provider_access_denied'});
+  const {wrapper,session}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('初始描述');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();await wrapper.get('[data-testid="proposal-answer"]').setValue('用户A的场馆');await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
+  expect(wrapper.text()).toContain('没有访问权限');expect(wrapper.get('[data-testid="proposal-answer"]').element.value).toBe('用户A的场馆');
+  session.status='anonymous';await flushPromises();expect(wrapper.find('[data-testid="proposal-answer"]').exists()).toBe(false);
+  await wrapper.get('[data-testid="restart-conversation"]').trigger('click');expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('');
+ });
+
 });
