@@ -9,13 +9,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from backend.credentials.keyring import parse_credential_keyring
 
 
 _BASE64URL_RE = re.compile(r"\A[A-Za-z0-9_-]+\Z")
+_BOOKING_CURRENCY_CODE_RE = re.compile(r"\A[A-Z]{3}\Z", re.ASCII)
 _PLACEHOLDER_SECRETS = {"changeme", "change-me", "password", "secret", "default"}
 _MAX_RATE_LIMIT_WINDOW_SECONDS = 86_400
+_DEFAULT_BOOKING_TIMEZONE = "Asia/Shanghai"
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +40,9 @@ class AppSettings:
     upstream_retry_after_fallback_seconds: int
     max_upstream_backoff_seconds: int
     upstream_lease_safety_margin_seconds: float
+    booking_timezone_name: str
+    booking_currency_code: str | None
+    booking_currency_minor_unit_exponent: int | None
     token_expiring_soon_window_seconds: int = 604800
     session_cookie_name: str = "yumao_session"
     session_ttl_seconds: int = 86400
@@ -108,6 +114,42 @@ def _optional_positive_int(env: Mapping[str, str], name: str) -> int | None:
     return value
 
 
+def _booking_timezone_name(env: Mapping[str, str]) -> str:
+    value = env.get("BOOKING_TIMEZONE", _DEFAULT_BOOKING_TIMEZONE)
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError("BOOKING_TIMEZONE must be a valid IANA timezone key")
+    try:
+        ZoneInfo(value)
+    except (TypeError, ValueError, ZoneInfoNotFoundError) as exc:
+        raise ValueError("BOOKING_TIMEZONE must be a valid IANA timezone key") from exc
+    return value
+
+
+def _booking_currency_metadata(env: Mapping[str, str]) -> tuple[str | None, int | None]:
+    code = env.get("BOOKING_CURRENCY_CODE")
+    raw_exponent = env.get("BOOKING_CURRENCY_MINOR_UNIT_EXPONENT")
+    code_present = code is not None and code != ""
+    exponent_present = raw_exponent is not None and raw_exponent != ""
+
+    if not code_present and not exponent_present:
+        return None, None
+    if not code_present or not exponent_present:
+        raise ValueError(
+            "BOOKING_CURRENCY_CODE and BOOKING_CURRENCY_MINOR_UNIT_EXPONENT must be configured together"
+        )
+    if not isinstance(code, str) or code != code.strip() or not _BOOKING_CURRENCY_CODE_RE.fullmatch(code):
+        raise ValueError("BOOKING_CURRENCY_CODE must be three uppercase ASCII letters")
+    if not isinstance(raw_exponent, str) or raw_exponent != raw_exponent.strip():
+        raise ValueError("BOOKING_CURRENCY_MINOR_UNIT_EXPONENT must be an integer from 0 through 4")
+    try:
+        exponent = int(raw_exponent)
+    except ValueError as exc:
+        raise ValueError("BOOKING_CURRENCY_MINOR_UNIT_EXPONENT must be an integer from 0 through 4") from exc
+    if not 0 <= exponent <= 4:
+        raise ValueError("BOOKING_CURRENCY_MINOR_UNIT_EXPONENT must be an integer from 0 through 4")
+    return code, exponent
+
+
 def _https_origin(env: Mapping[str, str]) -> str:
     raw = env.get("UPSTREAM_ORIGIN")
     if not isinstance(raw, str) or not raw or raw != raw.strip():
@@ -174,6 +216,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         allowed_origins = ("http://localhost:5173",)
 
     csrf_hmac_secret = _decode_csrf_secret(source)
+    booking_timezone_name = _booking_timezone_name(source)
+    booking_currency_code, booking_currency_minor_unit_exponent = _booking_currency_metadata(source)
     encryption_keyring = parse_credential_keyring(
         source.get("APP_CREDENTIAL_ENCRYPTION_KEYS"),
         source.get("APP_CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID"),
@@ -223,6 +267,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         upstream_retry_after_fallback_seconds=retry_after_fallback,
         max_upstream_backoff_seconds=max_backoff,
         upstream_lease_safety_margin_seconds=lease_safety_margin,
+        booking_timezone_name=booking_timezone_name,
+        booking_currency_code=booking_currency_code,
+        booking_currency_minor_unit_exponent=booking_currency_minor_unit_exponent,
         token_expiring_soon_window_seconds=_positive_int(
             source, "TOKEN_EXPIRING_SOON_WINDOW_SECONDS", 604800
         ),

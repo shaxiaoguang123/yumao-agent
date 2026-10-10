@@ -285,6 +285,69 @@ class AppSettingsTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     load_settings(env)
 
+    def test_booking_timezone_defaults_to_asia_shanghai(self) -> None:
+        settings = load_settings(_settings_input())
+
+        self.assertEqual(settings.booking_timezone_name, "Asia/Shanghai")
+
+    def test_booking_timezone_accepts_iana_zone_and_rejects_invalid_keys(self) -> None:
+        env = {**_settings_input(), "BOOKING_TIMEZONE": "America/New_York"}
+        self.assertEqual(load_settings(env).booking_timezone_name, "America/New_York")
+
+        for value in ("", "Not/A_Zone", " Asia/Shanghai", "Asia/Shanghai "):
+            with self.subTest(value=value):
+                env = {**_settings_input(), "BOOKING_TIMEZONE": value}
+                with self.assertRaisesRegex(ValueError, "BOOKING_TIMEZONE"):
+                    load_settings(env)
+
+    def test_booking_currency_metadata_is_optional_and_deployment_owned(self) -> None:
+        settings = load_settings(_settings_input())
+        self.assertIsNone(settings.booking_currency_code)
+        self.assertIsNone(settings.booking_currency_minor_unit_exponent)
+
+        for code, exponent in (("USD", "2"), ("JPY", "0"), ("KWD", "3"), ("XYZ", "4")):
+            with self.subTest(code=code, exponent=exponent):
+                env = {
+                    **_settings_input(),
+                    "BOOKING_CURRENCY_CODE": code,
+                    "BOOKING_CURRENCY_MINOR_UNIT_EXPONENT": exponent,
+                }
+                configured = load_settings(env)
+                self.assertEqual(configured.booking_currency_code, code)
+                self.assertEqual(configured.booking_currency_minor_unit_exponent, int(exponent))
+
+    def test_booking_currency_metadata_requires_both_values(self) -> None:
+        for setting, value in (
+            ("BOOKING_CURRENCY_CODE", "USD"),
+            ("BOOKING_CURRENCY_MINOR_UNIT_EXPONENT", "2"),
+        ):
+            with self.subTest(setting=setting):
+                env = {**_settings_input(), setting: value}
+                with self.assertRaisesRegex(ValueError, "BOOKING_CURRENCY"):
+                    load_settings(env)
+
+    def test_booking_currency_code_requires_three_uppercase_ascii_letters(self) -> None:
+        for code in ("usd", "US", "USDD", "U1D", "ＵＳＤ", " USD"):
+            with self.subTest(code=code):
+                env = {
+                    **_settings_input(),
+                    "BOOKING_CURRENCY_CODE": code,
+                    "BOOKING_CURRENCY_MINOR_UNIT_EXPONENT": "2",
+                }
+                with self.assertRaisesRegex(ValueError, "BOOKING_CURRENCY_CODE"):
+                    load_settings(env)
+
+    def test_booking_currency_exponent_must_be_an_integer_from_zero_through_four(self) -> None:
+        for exponent in ("-1", "5", "1.5", "two", ""):
+            with self.subTest(exponent=exponent):
+                env = {
+                    **_settings_input(),
+                    "BOOKING_CURRENCY_CODE": "USD",
+                    "BOOKING_CURRENCY_MINOR_UNIT_EXPONENT": exponent,
+                }
+                with self.assertRaisesRegex(ValueError, "BOOKING_CURRENCY_MINOR_UNIT_EXPONENT"):
+                    load_settings(env)
+
 
 if __name__ == "__main__":
     unittest.main()
