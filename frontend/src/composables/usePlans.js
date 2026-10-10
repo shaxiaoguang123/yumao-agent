@@ -87,7 +87,7 @@ export function usePlans(api, session) {
   }
   function closeHistory(){historyPlanId.value=null;history.value=[];historySequence++;}
   function acknowledgeUncertain(){if(authorized.value)uncertain.value=false;}
-  watch(()=>[session?.status,session?.user?.user_id],()=>{epoch++;clearAll();if(authorized.value)void initialize();},{immediate:true,flush:'sync'});
+  watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken],()=>{epoch++;clearAll();if(authorized.value)void initialize();},{immediate:true,flush:'sync'});
   onBeforeUnmount(()=>{alive=false;epoch++;clearAll();});
   return {plans,context,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain};
 }
