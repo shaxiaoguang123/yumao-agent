@@ -28,9 +28,9 @@ class PlanSchemaTests(unittest.TestCase):
         self.db.execute('INSERT INTO booking_plan_revisions VALUES (?,?,?,?,?,?,?,?)', (revision, plan, user, version, '{}', hashlib.sha256(b'{}').hexdigest(), user, 1))
 
     def test_fresh_chain_and_readiness(self):
-        self.assertEqual(CURRENT_SCHEMA_VERSION, 5)
-        self.assertEqual([r[0] for r in self.db.execute('SELECT version FROM schema_migrations ORDER BY version')], [1,2,3,4,5])
-        check_schema_ready(self.path, 5000, 5)
+        self.assertEqual(CURRENT_SCHEMA_VERSION, 6)
+        self.assertEqual([r[0] for r in self.db.execute('SELECT version FROM schema_migrations ORDER BY version')], [1,2,3,4,5,6])
+        check_schema_ready(self.path, 5000, 6)
 
     def test_pointer_and_revision_are_committed_together(self):
         self.db.execute('BEGIN IMMEDIATE')
@@ -72,7 +72,7 @@ class PlanSchemaTests(unittest.TestCase):
     def test_readiness_requires_revision_guard(self):
         self.db.execute('DROP TRIGGER booking_plan_revisions_no_update')
         with self.assertRaises(SchemaNotReadyError):
-            check_schema_ready(self.path, 5000, 5)
+            check_schema_ready(self.path, 5000, 6)
 
     def test_all_verified_prefixes_preserve_users_and_original_checksums(self):
         for version in (1,2,3,4):
@@ -88,7 +88,7 @@ class PlanSchemaTests(unittest.TestCase):
                 before = [tuple(r) for r in db.execute('SELECT version,checksum FROM schema_migrations')]
                 db.close()
                 migrate_database(path,5000)
-                check_schema_ready(path,5000,5)
+                check_schema_ready(path,5000,6)
                 db = connect_database(path,5000)
                 self.assertEqual(db.execute("SELECT user_id FROM users").fetchone()[0], 'existing')
                 self.assertEqual([tuple(r) for r in db.execute('SELECT version,checksum FROM schema_migrations WHERE version<=?',(version,))],before)

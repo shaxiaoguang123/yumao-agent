@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
+from types import MappingProxyType
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -43,6 +44,7 @@ class AppSettings:
     booking_timezone_name: str
     booking_currency_code: str | None
     booking_currency_minor_unit_exponent: int | None
+    llm_service_default: Mapping[str, str] | None = field(default=None, repr=False)
     token_expiring_soon_window_seconds: int = 604800
     session_cookie_name: str = "yumao_session"
     session_ttl_seconds: int = 86400
@@ -233,6 +235,21 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
     if csrf_hmac_secret in encryption_material or csrf_hmac_secret in fingerprint_material:
         raise ValueError("CSRF and Credential key material must be independent")
 
+    # Keep the deployment provider as one complete object. Missing pieces never
+    # fall through to user-saved fields; invalid/incomplete configuration is absent.
+    llm_names = ("LLM_BASE_URL", "LLM_MODEL", "LLM_AUTH_MODE", "LLM_PROTOCOL")
+    llm_values = {name: source.get(name) for name in llm_names}
+    llm_key = source.get("LLM_API_KEY")
+    llm_service_default = None
+    if all(isinstance(value, str) and value and value == value.strip() for value in llm_values.values()):
+        if llm_values["LLM_AUTH_MODE"] in {"bearer", "none"} and llm_values["LLM_PROTOCOL"] == "openai-chat-completions":
+            if llm_values["LLM_AUTH_MODE"] == "none" or (isinstance(llm_key, str) and bool(llm_key)):
+                llm_service_default = MappingProxyType({
+                    "base_url": llm_values["LLM_BASE_URL"], "model": llm_values["LLM_MODEL"],
+                    "auth_mode": llm_values["LLM_AUTH_MODE"], "protocol": llm_values["LLM_PROTOCOL"],
+                    "api_key": llm_key or "",
+                })
+
     connect_timeout = _positive_float(source, "UPSTREAM_CONNECT_TIMEOUT_SECONDS")
     read_timeout = _positive_float(source, "UPSTREAM_READ_TIMEOUT_SECONDS")
     total_deadline = _positive_float(source, "UPSTREAM_TOTAL_DEADLINE_SECONDS")
@@ -256,6 +273,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         credential_encryption_active_key_id=encryption_keyring.active_key_id,
         upstream_fingerprint_keys=fingerprint_keyring.keys,
         upstream_fingerprint_active_key_id=fingerprint_keyring.active_key_id,
+        llm_service_default=llm_service_default,
         upstream_origin=_https_origin(source),
         upstream_get_user_info_min_interval_ms=_optional_positive_int(
             source, "UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS"

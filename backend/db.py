@@ -7,13 +7,15 @@ from pathlib import Path
 from typing import Mapping
 
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 _MIGRATION_NAME_RE = re.compile(r"\A(?P<version>[0-9]{4})_[a-z0-9_]+\.sql\Z")
 
 _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
     "schema_migrations": frozenset({"version", "filename", "checksum", "applied_at_utc_ms"}),
     "booking_plans": frozenset({"plan_id", "user_id", "current_revision_id", "version", "created_at_utc_ms", "updated_at_utc_ms"}),
     "booking_plan_revisions": frozenset({"revision_id", "plan_id", "user_id", "revision_number", "intent_json", "intent_sha256", "created_by_user_id", "created_at_utc_ms"}),
+    "ai_models": frozenset({"model_id", "user_id", "name", "base_url", "model", "auth_mode", "api_key_ciphertext", "api_key_nonce", "api_key_tag", "encryption_key_id", "key_revision", "version", "created_at_utc_ms", "updated_at_utc_ms"}),
+    "ai_model_preferences": frozenset({"user_id", "selected_model_id", "default_model_id", "updated_at_utc_ms"}),
     "users": frozenset({
         "user_id", "username", "normalized_username", "password_hash", "role", "status",
         "created_at_utc_ms", "updated_at_utc_ms", "disabled_at_utc_ms",
@@ -209,7 +211,8 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
     required_contract = {
         name: columns
         for name, columns in _REQUIRED_COLUMNS.items()
-        if (schema_version >= 5 or name not in {"booking_plans", "booking_plan_revisions"})
+        if (schema_version >= 6 or name not in {"ai_models", "ai_model_preferences"})
+        and (schema_version >= 5 or name not in {"booking_plans", "booking_plan_revisions"})
         and (schema_version >= 2 or name not in {
             "credentials",
             "credential_token_revisions",
@@ -336,6 +339,14 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
         triggers = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
         if not {"booking_plan_revisions_no_update", "booking_plan_revisions_no_delete", "booking_plans_advance_only"} <= triggers:
             raise SchemaNotReadyError("plan immutability guards are missing")
+
+    if schema_version >= 6:
+        if not _has_unique_columns(connection, "ai_models", ("user_id", "model_id")):
+            raise SchemaNotReadyError("AI model tenant uniqueness is missing")
+        if not _has_foreign_key(connection, "ai_models", "user_id", "users", "user_id"):
+            raise SchemaNotReadyError("AI model owner constraint is missing")
+        if not _has_foreign_key(connection, "ai_model_preferences", "user_id", "users", "user_id"):
+            raise SchemaNotReadyError("AI model preference owner constraint is missing")
 
     if schema_version >= 3:
         gate_rows = connection.execute(

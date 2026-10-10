@@ -88,7 +88,7 @@ class MigrationTests(unittest.TestCase):
             database_path = Path(temp_dir) / "binding-audit.sqlite3"
             migrate_database(database_path, BUSY_TIMEOUT_MS)
 
-            self.assertEqual(db.CURRENT_SCHEMA_VERSION, 5)
+            self.assertEqual(db.CURRENT_SCHEMA_VERSION, 6)
             conn = db.connect_database(database_path, BUSY_TIMEOUT_MS)
             try:
                 columns = {
@@ -100,7 +100,7 @@ class MigrationTests(unittest.TestCase):
                     [row[0] for row in conn.execute(
                         "SELECT version FROM schema_migrations ORDER BY version"
                     )],
-                    [1, 2, 3, 4, 5],
+                    [1, 2, 3, 4, 5, 6],
                 )
             finally:
                 conn.close()
@@ -130,7 +130,7 @@ class MigrationTests(unittest.TestCase):
                         "SELECT version FROM schema_migrations ORDER BY version"
                     )
                 ]
-                self.assertEqual(versions, [1, 2, 3, 4, 5])
+                self.assertEqual(versions, [1, 2, 3, 4, 5, 6])
                 self.assertEqual(
                     conn.execute(
                         "SELECT username FROM users WHERE user_id=?", ("user-a",)
