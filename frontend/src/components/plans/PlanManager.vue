@@ -6,8 +6,10 @@ import PlanHistory from './PlanHistory.vue';
 import PlanSnapshotDetails from './PlanSnapshotDetails.vue';
 import BookingWindowStatus from './BookingWindowStatus.vue';
 import ProposalAssistant from './ProposalAssistant.vue';
+import AvailabilitySimulationPanel from './AvailabilitySimulationPanel.vue';
 import { usePlans } from '../../composables/usePlans.js';
 const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('planningProposalApi');
+const simulationApi=inject('availabilitySimulationApi',null);
 const {plans,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain}=usePlans(api,session);
 </script>
 <template>
@@ -30,6 +32,7 @@ const {plans,source,listStatus,metadataError,saving,message,saveError,fields,con
     <div v-else class="plan-list"><article v-for="plan in plans" :key="plan.plan_id" class="plan-card"><div><span class="plan-draft-tag">未绑定草稿</span><h3>{{ plan.intent.venue_preference }}</h3><p>{{ plan.intent.target_date }} · {{ plan.intent.preferred_start_times.join(' → ') }} · {{ plan.intent.duration_minutes }} 分钟</p><p class="muted">版本 {{ plan.version }} · {{ plan.context.timezone_name }} · {{ plan.booking_window.can_query ? '处于日历窗口，尚未核验' : '当前不可查询' }}</p></div><div class="plan-actions"><button data-testid="edit-plan" class="secondary-button" type="button" :disabled="saving" @click="edit(plan)">编辑计划</button><button data-testid="history-plan" class="text-button" type="button" :disabled="saving" @click="showHistory(plan.plan_id)">版本历史</button></div></article></div>
    </section>
    <PlanHistory v-if="historyPlanId" :revisions="history" :status="historyStatus" @close="closeHistory" @retry="showHistory(historyPlanId)" />
+   <AvailabilitySimulationPanel v-if="simulationApi" :plans="plans" :api="simulationApi" :session="session" @refresh-request="refresh" />
   </template>
  </div>
 </template>
