@@ -12,7 +12,12 @@ from backend.api.auth import auth_bp
 from backend.api.credentials import credentials_bp
 from backend.api.health import health_bp
 from backend.api.plans import plans_bp
+from backend.api.planning import planning_bp
+from backend.ai.planning import PlanningService
 from backend.api.booking_window import booking_window_bp
+from backend.api.ai_models import ai_models_bp
+from backend.ai.service import AIProviderService
+from backend.ai.key_dependencies import check_ai_provider_key_dependencies
 from backend.booking_window import BookingWindowPolicy
 from backend.plans.service import PlanService
 from backend.api.security import init_security
@@ -35,6 +40,7 @@ _SECRET_CONFIG_KEYS = {
     "APP_CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID",
     "APP_UPSTREAM_FINGERPRINT_KEYS",
     "APP_UPSTREAM_FINGERPRINT_ACTIVE_KEY_ID",
+    "LLM_API_KEY",
 }
 
 
@@ -71,6 +77,11 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         settings.sqlite_busy_timeout_ms,
         encryption_keyring=encryption_keyring,
         fingerprint_keyring=fingerprint_keyring,
+    )
+    check_ai_provider_key_dependencies(
+        settings.database_path,
+        settings.sqlite_busy_timeout_ms,
+        encryption_keyring,
     )
     gate = UpstreamRequestGate(
         database_path=settings.database_path,
@@ -141,11 +152,22 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         BookingWindowPolicy(settings.booking_timezone_name),
         settings.booking_currency_code, settings.booking_currency_minor_unit_exponent,
     )
+    app.extensions["ai_provider_service"] = AIProviderService(
+        database_path=settings.database_path,
+        busy_timeout_ms=settings.sqlite_busy_timeout_ms,
+        keyring=encryption_keyring,
+        service_default=settings.llm_service_default,
+    )
     init_security(app)
+    app.extensions["planning_service"] = PlanningService(
+        app.extensions["plan_service"], app.extensions["ai_provider_service"],
+    )
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(credentials_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(plans_bp)
+    app.register_blueprint(planning_bp)
     app.register_blueprint(booking_window_bp)
+    app.register_blueprint(ai_models_bp)
     return app

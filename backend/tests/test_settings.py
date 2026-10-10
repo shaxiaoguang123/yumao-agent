@@ -20,6 +20,27 @@ def _settings_input() -> dict[str, str]:
 
 
 class AppSettingsTests(unittest.TestCase):
+    def test_service_provider_is_complete_and_keeps_one_auth_mode(self) -> None:
+        env = _settings_input()
+        env.update({"LLM_BASE_URL":"https://service.example/v1", "LLM_MODEL":"svc",
+                    "LLM_API_KEY":"synthetic-service-key", "LLM_AUTH_MODE":"bearer",
+                    "LLM_PROTOCOL":"openai-chat-completions"})
+        settings = load_settings(env)
+        self.assertEqual(settings.llm_service_default["base_url"], "https://service.example/v1")
+        self.assertEqual(settings.llm_service_default["auth_mode"], "bearer")
+        self.assertNotIn("synthetic-service-key", repr(settings))
+        for missing in ("LLM_BASE_URL", "LLM_MODEL", "LLM_AUTH_MODE", "LLM_PROTOCOL", "LLM_API_KEY"):
+            partial = dict(env)
+            partial.pop(missing)
+            self.assertIsNone(load_settings(partial).llm_service_default, missing)
+        explicit_none = dict(env)
+        explicit_none["LLM_AUTH_MODE"] = "none"
+        explicit_none.pop("LLM_API_KEY")
+        self.assertEqual(load_settings(explicit_none).llm_service_default["auth_mode"], "none")
+        invalid_protocol = dict(env)
+        invalid_protocol["LLM_PROTOCOL"] = "vendor-custom"
+        self.assertIsNone(load_settings(invalid_protocol).llm_service_default)
+
     def test_explicit_values_override_process_environment_without_dotenv_loading(self) -> None:
         env = _settings_input()
         env.update({

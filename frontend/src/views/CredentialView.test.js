@@ -406,6 +406,7 @@ describe('Credential management view', () => {
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/account', name: 'account', component: { template: '<div />' } },
         { path: '/plans', name: 'plans', component: { template: '<div />' } },
+        { path: '/settings/ai-models', name: 'ai-models', component: { template: '<div />' } },
       { path: '/credentials', name: 'credentials', component: { template: '<div />' } },
         { path: '/login', name: 'login', component: { template: '<div />' } },
       ],

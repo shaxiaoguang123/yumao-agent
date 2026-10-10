@@ -6,6 +6,7 @@ import HomeView from './views/HomeView.vue';
 import InviteRegisterView from './views/InviteRegisterView.vue';
 import LoginView from './views/LoginView.vue';
 import PlansView from './views/PlansView.vue';
+import AIModelsView from './views/AIModelsView.vue';
 
 export function createAppRouter(sessionStore, history = createWebHistory()) {
   const router = createRouter({
@@ -38,6 +39,7 @@ export function createAppRouter(sessionStore, history = createWebHistory()) {
         meta: { requiresAuth: true, requiresAdmin: true },
       },
       { path: '/plans', name:'plans', component:PlansView, meta:{requiresAuth:true} },
+      { path: '/settings/ai-models', name:'ai-models', component:AIModelsView, meta:{requiresAuth:true} },
       { path: '/:pathMatch(.*)*', redirect: { name: 'home' } },
     ],
   });

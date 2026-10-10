@@ -5,8 +5,9 @@ import PlanForm from './PlanForm.vue';
 import PlanHistory from './PlanHistory.vue';
 import PlanSnapshotDetails from './PlanSnapshotDetails.vue';
 import BookingWindowStatus from './BookingWindowStatus.vue';
+import ProposalAssistant from './ProposalAssistant.vue';
 import { usePlans } from '../../composables/usePlans.js';
-const session=inject('sessionStore'),api=inject('planApi');
+const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('planningProposalApi');
 const {plans,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain}=usePlans(api,session);
 </script>
 <template>
@@ -15,6 +16,7 @@ const {plans,source,listStatus,metadataError,saving,message,saveError,fields,con
   <p class="plan-notice">当前仅保存预约意向，场馆和场地尚未核验，不会自动查询或预约。</p>
   <div v-if="!authorized" class="panel"><p role="alert">{{ session?.status==='unauthenticated' ? '登录状态已失效，请重新登录。' : '暂时无法确认登录状态，请重试。' }}</p></div>
   <template v-else>
+   <ProposalAssistant v-if="proposalApi" :plans="plans" :plan-api="api" :proposal-api="proposalApi" :session="session" @refresh-request="refresh" />
    <p v-if="metadataError" class="form-error" role="alert">{{ metadataError }} <button class="secondary-button" type="button" @click="initialize">重新读取配置</button></p>
    <p v-if="message" class="form-success" role="status">{{ message }}</p>
    <div v-if="saveError" class="plan-feedback" :class="conflict?'plan-conflict':''" role="alert"><p>{{ saveError }}</p><button v-if="source?.planId && (conflict || uncertain)" class="secondary-button" data-testid="view-latest" type="button" @click="viewLatest">查看最新版本</button><template v-if="uncertain"><button class="secondary-button" type="button" @click="refresh">读取计划列表核对</button><button class="secondary-button" type="button" @click="acknowledgeUncertain">已核对，允许再次保存</button></template></div>
