@@ -55,7 +55,7 @@ export function usePlans(api, session) {
   async function save(intent) {
     if(!authorized.value || saving.value || !source.value || conflict.value || uncertain.value)return;
     const generation=epoch, selected=source.value;
-    saving.value=true;saveError.value='';fields.value={};message.value='';listSequence++;
+    saving.value=true;saveError.value='';fields.value={};message.value='';
     try {
       const result=selected.planId ? await api.update(selected.planId,selected.baseVersion,intent) : await api.create(intent);
       if(!valid(generation))return;

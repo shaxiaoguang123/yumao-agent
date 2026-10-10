@@ -23,4 +23,19 @@ describe('manual plans page',()=>{
  it('clears owned data on account switch and ignores the old list response',async()=>{let resolve;let calls=0;const {wrapper,session}=await mountView(apiFixture({list:vi.fn(()=>++calls===1?new Promise(r=>{resolve=r;}):Promise.resolve({plans:[]}))}));session.user={user_id:'b',username:'Bob'};await flushPromises();resolve({plans:[plan()]});await flushPromises();expect(wrapper.text()).not.toContain('人工意向场馆');expect(wrapper.text()).toContain('还没有预约计划');});
  it('clears owned data when the same user receives a new session token',async()=>{const {wrapper,session}=await mountView();await edit(wrapper);session.csrfToken='csrf-rotated';await flushPromises();expect(wrapper.find('form').exists()).toBe(false);expect(wrapper.text()).not.toContain('编辑预约意向');});
  it('uses stored currency/timezone for edits and does not accept absent currency price',async()=>{const {wrapper}=await mountView(apiFixture({options:vi.fn(async()=>({catalog_status:'not_configured',venues:[],context:{...context,currency_code:null,currency_minor_unit_exponent:null,timezone_name:'UTC'}}))}));await edit(wrapper);expect(wrapper.get('[name="price_ceiling"]').element.value).toBe('12.34');expect(wrapper.text()).toContain('CNY');expect(wrapper.text()).toContain('Asia/Shanghai');await newDraft(wrapper);expect(wrapper.find('[name="price_ceiling"]').exists()).toBe(false);expect(wrapper.text()).toContain('未配置货币');});
+ it('settles a pending list refresh after a rejected save',async()=>{
+   let finishRefresh;let calls=0;
+   const {wrapper}=await mountView(apiFixture({
+     list:vi.fn(()=>++calls===1?Promise.resolve({plans:[plan()]}):new Promise(resolve=>{finishRefresh=resolve;})),
+     update:vi.fn(async()=>{throw {status:400,fields:{venue_preference:'请检查场馆文本'}};}),
+   }));
+   await edit(wrapper);
+   await wrapper.get('[data-testid="refresh-plans"]').trigger('click');
+   await wrapper.get('form').trigger('submit');
+   await flushPromises();
+   finishRefresh({plans:[plan()]});await flushPromises();
+   expect(wrapper.get('[data-testid="refresh-plans"]').element.disabled).toBe(false);
+   expect(wrapper.text()).not.toContain('正在读取计划');
+ });
+
 });
