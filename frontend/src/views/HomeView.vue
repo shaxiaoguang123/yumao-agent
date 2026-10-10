@@ -44,7 +44,7 @@ onMounted(loadCredentialSummary);
     <template v-else>
       <h1>你好，{{ sessionStore.user?.username || '用户' }}</h1>
       <p class="muted">身份基础已就绪。预约计划和自动执行功能将在后续阶段接入。</p>
-      <RouterLink :to="{ name: 'account' }">管理账户与密码</RouterLink>
+      <RouterLink class="action-link" :to="{ name: 'account' }">管理账户与密码</RouterLink>
     </template>
   </section>
 
@@ -54,7 +54,7 @@ onMounted(loadCredentialSummary);
         <h2 id="credential-summary-title">预约凭据状态</h2>
         <p class="muted">只显示当前账户的凭据风险摘要。</p>
       </div>
-      <RouterLink :to="{ name: 'credentials' }">管理凭据</RouterLink>
+      <RouterLink class="action-link" :to="{ name: 'credentials' }">管理凭据</RouterLink>
     </div>
     <p v-if="credentialStatus === 'loading'" class="muted" role="status">正在读取凭据状态…</p>
     <p v-else-if="credentialStatus === 'unavailable'" class="muted" role="status">
@@ -88,7 +88,9 @@ onMounted(loadCredentialSummary);
 
 <style scoped>
 .home-panel { width: 100%; margin: 0 0 1.25rem; }
-.summary-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.summary-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; }
+.summary-heading > div { flex: 1 1 15rem; min-width: 0; }
+.summary-heading > a { flex-shrink: 0; }
 .summary-heading h2 { margin: 0; font-size: 1.15rem; }
 .summary-heading p { margin: .3rem 0 0; }
 .risk-list { display: grid; gap: .6rem; margin: 1rem 0 0; padding-left: 1.25rem; line-height: 1.5; }

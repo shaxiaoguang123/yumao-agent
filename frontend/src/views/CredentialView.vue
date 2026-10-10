@@ -1,10 +1,12 @@
 <script setup>
-import { inject, onMounted, onUnmounted, ref } from 'vue';
+import { computed, inject, onMounted, onUnmounted, ref } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 
 const api = inject('credentialApi');
 const credentials = ref([]);
-const loading = ref(true);
+const listStatus = ref('loading');
+const loading = computed(() => listStatus.value === 'loading');
+let listRequestId = 0;
 const loadingError = ref('');
 const errorMessage = ref('');
 const successMessage = ref('');
@@ -98,19 +100,20 @@ function attemptText(value) {
   return attemptLabels[value] || '验证结果未知';
 }
 
-async function loadCredentials({ quiet = false } = {}) {
-  if (!quiet) {
-    loading.value = true;
-    loadingError.value = '';
-  }
+async function loadCredentials() {
+  const requestId = ++listRequestId;
+  listStatus.value = 'loading';
+  loadingError.value = '';
   try {
     const result = await api.list();
+    if (requestId !== listRequestId) return;
     if (!Array.isArray(result?.credentials)) throw new Error('invalid_response');
     credentials.value = result.credentials;
+    listStatus.value = 'ready';
   } catch (error) {
-    if (!quiet) loadingError.value = safeMessage(error);
-  } finally {
-    if (!quiet) loading.value = false;
+    if (requestId !== listRequestId) return;
+    loadingError.value = safeMessage(error);
+    listStatus.value = 'error';
   }
 }
 
@@ -149,7 +152,7 @@ async function createCredential() {
     await api.create({ label: submittedLabel, token: submittedToken });
     label.value = '';
     successMessage.value = '凭据已添加。';
-    await loadCredentials({ quiet: true });
+    await loadCredentials();
   } catch (error) {
     errorMessage.value = safeMessage(error);
   } finally {
@@ -170,7 +173,7 @@ async function runCredentialAction(credential, action, successText) {
     errorMessage.value = safeMessage(error);
   } finally {
     busyCredentialId.value = '';
-    await loadCredentials({ quiet: true });
+    await loadCredentials();
   }
 }
 
@@ -230,13 +233,16 @@ async function rotateCredential(credential) {
   } finally {
     rotationToken.value = '';
     busyCredentialId.value = '';
-    await loadCredentials({ quiet: true });
+    await loadCredentials();
   }
 }
 
 onMounted(() => loadCredentials());
 onBeforeRouteLeave(() => clearSensitiveInputs());
-onUnmounted(() => clearSensitiveInputs());
+onUnmounted(() => {
+  listRequestId += 1;
+  clearSensitiveInputs();
+});
 </script>
 
 <template>
@@ -258,7 +264,7 @@ onUnmounted(() => clearSensitiveInputs());
       {{ successMessage }}
     </p>
     <p v-if="loadingError" class="credential-message error-message" role="alert">
-      {{ loadingError }}
+      未能读取凭据列表。{{ loadingError }}
       <button class="text-button" type="button" @click="loadCredentials()">重试</button>
     </p>
 
@@ -304,7 +310,7 @@ onUnmounted(() => clearSensitiveInputs());
       </form>
     </section>
 
-    <section class="credential-list" aria-labelledby="credential-list-title">
+    <section class="credential-list" aria-labelledby="credential-list-title" :aria-busy="loading">
       <div class="section-heading">
         <h2 id="credential-list-title">已保存凭据</h2>
         <button class="text-button" type="button" :disabled="loading" @click="loadCredentials()">
@@ -312,10 +318,11 @@ onUnmounted(() => clearSensitiveInputs());
         </button>
       </div>
       <p v-if="loading" class="muted" role="status">正在读取凭据状态…</p>
-      <p v-else-if="credentials.length === 0" class="empty-state">
+      <p v-else-if="listStatus === 'ready' && credentials.length === 0" class="empty-state">
         暂无预约凭据。添加后可查看 Token 状态和账户连续性。
       </p>
 
+      <template v-if="listStatus === 'ready'">
       <article
         v-for="credential in credentials"
         :key="credential.credential_id"
@@ -461,23 +468,25 @@ onUnmounted(() => clearSensitiveInputs());
           </div>
         </form>
       </article>
+      </template>
     </section>
   </section>
 </template>
 
 <style scoped>
-.credential-page { display: grid; gap: 1.25rem; }
+.credential-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
 .credential-heading h1 { margin: 0 0 .4rem; font-size: clamp(1.6rem, 4vw, 2rem); }
 .eyebrow { margin: 0 0 .25rem; color: #58716c; font-size: .78rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 .credential-add { width: 100%; margin: 0; }
 .credential-add h2, .section-heading h2 { margin: 0; font-size: 1.1rem; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.credential-list { display: grid; gap: .9rem; }
-.credential-card { display: grid; gap: 1rem; padding: 1.2rem; border: 1px solid #e1e7ec; border-radius: .9rem; background: white; }
+.credential-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: .9rem; min-width: 0; }
+.credential-card { display: grid; min-width: 0; gap: 1rem; padding: 1.2rem; border: 1px solid #e1e7ec; border-radius: .9rem; background: white; }
 .credential-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
-.credential-card-heading h3 { margin: 0 0 .2rem; font-size: 1.05rem; }
+.credential-card-heading > div { min-width: 0; }
+.credential-card-heading h3 { margin: 0 0 .2rem; font-size: 1.05rem; overflow-wrap: anywhere; }
 .credential-card-heading p { margin: 0; font-size: .84rem; }
-.state-pill { padding: .25rem .6rem; border-radius: 999px; font-size: .78rem; font-weight: 700; }
+.state-pill { flex-shrink: 0; white-space: nowrap; padding: .25rem .6rem; border-radius: 999px; font-size: .78rem; font-weight: 700; }
 .state-enabled { color: #155a45; background: #e4f3eb; }
 .state-disabled { color: #52606d; background: #edf0f2; }
 .credential-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .8rem 1.25rem; margin: 0; }
@@ -487,7 +496,7 @@ onUnmounted(() => clearSensitiveInputs());
 .risk-note { margin: 0; padding: .7rem .85rem; border-left: 3px solid #b98222; border-radius: .35rem; color: #5c461b; background: #fff8e9; line-height: 1.5; }
 .danger-note { border-left-color: #a94343; color: #713333; background: #fff0f0; }
 .credential-actions { display: flex; flex-wrap: wrap; gap: .6rem; }
-.credential-actions .primary-button, .credential-actions .secondary-button, .danger-button { min-height: 2.4rem; padding: .5rem .8rem; }
+.credential-actions .primary-button, .credential-actions .secondary-button, .danger-button { min-width: 2.75rem; min-height: 2.75rem; padding: .65rem .8rem; }
 .danger-button { border: 0; border-radius: .6rem; color: #8f2929; background: #fbe8e8; font: inherit; font-weight: 700; cursor: pointer; }
 .danger-button:disabled { opacity: .6; cursor: wait; }
 .rotation-form { display: grid; gap: .8rem; padding: 1rem; border-radius: .7rem; background: #f4f7f8; }
@@ -495,6 +504,6 @@ onUnmounted(() => clearSensitiveInputs());
 .error-message { color: #8f2929; }
 .success-message { color: #176348; }
 .empty-state { margin: 0; padding: 1.2rem; border: 1px dashed #cbd5df; border-radius: .8rem; color: #65717e; background: white; }
-.text-button { padding: .2rem .4rem; border: 0; color: #146c5b; background: transparent; font: inherit; font-weight: 700; cursor: pointer; }
+.text-button { min-width: 2.75rem; min-height: 2.75rem; padding: .5rem .4rem; border: 0; color: #146c5b; background: transparent; font: inherit; font-weight: 700; cursor: pointer; }
 .text-button:disabled { opacity: .6; cursor: wait; }
 </style>
