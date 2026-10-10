@@ -5,7 +5,7 @@ import AppIcon from './components/AppIcon.vue';
 import './styles/design-system.css';
 const sessionStore = inject('sessionStore');
 const route = useRoute();
-const contextTitle = computed(() => ({home:'工作台概览',credentials:'凭据管理',plans:'预约计划',account:'账户设置','admin-invitations':'管理员工具'}[route.name] || '账户访问'));
+const contextTitle = computed(() => ({home:'工作台概览',credentials:'凭据管理',plans:'预约计划',account:'账户设置','ai-models':'AI模型设置','admin-invitations':'管理员工具'}[route.name] || '账户访问'));
 </script>
 <template>
  <div class="app-shell" :class="{ 'public-shell': !sessionStore?.user }">
@@ -19,6 +19,7 @@ const contextTitle = computed(() => ({home:'工作台概览',credentials:'凭据
     <RouterLink v-if="sessionStore?.user" :to="{name:'plans'}"><AppIcon name="clock" />预约计划</RouterLink>
     <RouterLink v-if="sessionStore?.user?.role==='admin'" data-testid="admin-invitations-link" :to="{name:'admin-invitations'}"><AppIcon name="ticket" />邀请码管理</RouterLink>
     <RouterLink v-if="sessionStore?.user" :to="{name:'account'}"><AppIcon name="user" />账户</RouterLink>
+    <RouterLink v-if="sessionStore?.user" :to="{name:'ai-models'}"><AppIcon name="settings" />设置 · AI模型</RouterLink>
     <RouterLink v-if="!sessionStore?.user" :to="{name:'login'}"><AppIcon name="user" />登录</RouterLink>
    </nav>
    <div v-if="sessionStore?.user" class="sidebar-note"><span class="availability-dot" />目前开放<p>账户、凭据与意向草稿</p><small>让每一步准备都清晰可见。</small></div>
