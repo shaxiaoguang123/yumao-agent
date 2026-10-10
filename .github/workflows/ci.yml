@@ -67,6 +67,14 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies for isolated booking-plan integration
+        run: python -m pip install -r requirements.txt
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -84,6 +92,12 @@ jobs:
         env:
           BROWSER_QA_OUTPUT: ${{ runner.temp }}/yumao-browser-e2e
         run: npm run test:e2e
+
+      - name: Run real Flask and SQLite booking-plan integration
+        env:
+          PLAN_QA_OUTPUT: ${{ runner.temp }}/yumao-booking-plan-e2e
+          PLAN_QA_PYTHON: python
+        run: npm run test:e2e:plans
 
       - name: Preserve synthetic browser evidence
         if: always()

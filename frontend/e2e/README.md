@@ -53,4 +53,15 @@ check is not made required by this change. Browser versions and fonts can differ
 across macOS and Linux: geometry/interaction checks are automated; pixel equality
 is not asserted. Screenshots still need actual visual review before UI acceptance.
 
+## Real booking-plan integration
+
+`npm run test:e2e:plans` starts a fresh temporary Flask application and SQLite
+database, creates only synthetic users, and drives the actual `/api/plans` routes
+through a real browser. The test covers create, refresh persistence, edit/version
+history, cross-user isolation, distant-date non-queryability, and 320px overflow.
+The isolated server rejects all upstream HTTP and non-loopback sockets; the runner
+fails if any external request or browser error is observed. Set `PLAN_QA_OUTPUT` to
+a new empty directory outside the repository to preserve screenshots and the
+SQLite verification record. This is separate from the existing API-mocked suite.
+
 UI redesign adds four discovery scenarios (one per viewport): local search/filter, distinct no-match state and explicit verification-record expansion. Intentional brand subtitle is checked separately from single-line navigation labels. The PR trigger includes the browser-fix base for stacked UI PRs.
