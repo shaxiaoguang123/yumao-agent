@@ -1,8 +1,9 @@
 <script setup>
-import { computed, inject, onBeforeUnmount, ref } from 'vue';
+import { computed, inject, onBeforeUnmount, ref, watch } from 'vue';
 import { RouterLink } from 'vue-router';
 
 const invitationApi = inject('adminInvitationApi');
+const sessionStore = inject('sessionStore');
 const invitationCode = ref('');
 const expiresAtUtcMs = ref(null);
 const submitting = ref(false);
@@ -10,6 +11,21 @@ const errorMessage = ref('');
 const statusMessage = ref('');
 const creationOutcomeUncertain = ref(false);
 let isMounted = true;
+let sessionEpoch = 0;
+const isAuthorized = computed(() => (
+  sessionStore?.status === 'authenticated' && sessionStore.user?.role === 'admin'
+));
+const sessionMessage = computed(() => (
+  sessionStore?.status === 'unauthenticated'
+    ? '登录状态已失效，请重新登录后再试。'
+    : '当前无法确认管理员权限，请重新登录后再试。'
+));
+
+watch(() => [sessionStore?.status, sessionStore?.user?.user_id, sessionStore?.user?.role], () => {
+  // A lost/replaced Session invalidates both plaintext and all in-flight results.
+  sessionEpoch += 1;
+  dismissInvitation();
+}, { flush: 'sync' });
 
 const expiryIso = computed(() => (
   expiresAtUtcMs.value === null
@@ -51,7 +67,10 @@ function safeErrorMessage(error) {
 
 async function createInvitation({ acknowledgeUncertainOutcome = false } = {}) {
   if (
-    submitting.value
+    !isMounted
+    || !isAuthorized.value
+    || !invitationApi
+    || submitting.value
     || invitationCode.value
     || (creationOutcomeUncertain.value && !acknowledgeUncertainOutcome)
   ) return;
@@ -60,13 +79,14 @@ async function createInvitation({ acknowledgeUncertainOutcome = false } = {}) {
   submitting.value = true;
   errorMessage.value = '';
   statusMessage.value = '';
+  const requestEpoch = sessionEpoch;
   try {
     const result = await invitationApi.create();
-    if (!isMounted) return;
+    if (!isMounted || !isAuthorized.value || requestEpoch !== sessionEpoch) return;
     invitationCode.value = result.invitation_code;
     expiresAtUtcMs.value = result.expires_at_utc_ms;
   } catch (error) {
-    if (!isMounted) return;
+    if (!isMounted || !isAuthorized.value || requestEpoch !== sessionEpoch) return;
     errorMessage.value = safeErrorMessage(error);
     creationOutcomeUncertain.value = (
       error?.status >= 500
@@ -75,12 +95,12 @@ async function createInvitation({ acknowledgeUncertainOutcome = false } = {}) {
       || error?.kind === 'invalid_response'
     );
   } finally {
-    if (isMounted) submitting.value = false;
+    if (isMounted && requestEpoch === sessionEpoch) submitting.value = false;
   }
 }
 
 function createAnotherAfterUncertainOutcome() {
-  if (!creationOutcomeUncertain.value || submitting.value) return;
+  if (!isAuthorized.value || !creationOutcomeUncertain.value || submitting.value) return;
   const confirmed = window.confirm(
     '上次请求可能已经创建邀请码，但当前无法查看结果。继续会再创建一个新邀请码，可能留下未使用的邀请码。仍要继续吗？',
   );
@@ -89,14 +109,15 @@ function createAnotherAfterUncertainOutcome() {
 }
 
 async function copyInvitation() {
-  if (!invitationCode.value) return;
+  if (!isAuthorized.value || !invitationCode.value) return;
+  const copyEpoch = sessionEpoch;
   statusMessage.value = '';
   try {
     if (!navigator.clipboard?.writeText) throw new Error('clipboard_unavailable');
     await navigator.clipboard.writeText(invitationCode.value);
-    statusMessage.value = '邀请码已复制。';
+    if (isMounted && isAuthorized.value && copyEpoch === sessionEpoch) statusMessage.value = '邀请码已复制。';
   } catch {
-    statusMessage.value = '复制失败，请手动选择并复制邀请码。';
+    if (isMounted && isAuthorized.value && copyEpoch === sessionEpoch) statusMessage.value = '复制失败，请手动选择并复制邀请码。';
   }
 }
 
@@ -111,6 +132,7 @@ function dismissInvitation() {
 
 onBeforeUnmount(() => {
   isMounted = false;
+  sessionEpoch += 1;
   dismissInvitation();
 });
 </script>
@@ -124,13 +146,17 @@ onBeforeUnmount(() => {
       邀请码只在本页临时显示一次。
     </p>
 
+    <p v-if="!isAuthorized" class="form-error" role="alert">
+      {{ sessionMessage }} <RouterLink class="action-link" :to="{ name: 'login' }">重新登录</RouterLink>
+    </p>
+
     <form class="form-stack" @submit.prevent="createInvitation">
       <p v-if="errorMessage" class="form-error" role="alert">{{ errorMessage }}</p>
       <button
         data-testid="create-invitation"
         class="primary-button"
         type="submit"
-        :disabled="submitting || Boolean(invitationCode) || creationOutcomeUncertain || !invitationApi"
+        :disabled="!isAuthorized || submitting || Boolean(invitationCode) || creationOutcomeUncertain || !invitationApi"
       >
         {{ submitting ? '正在创建…' : '创建邀请码' }}
       </button>
@@ -142,6 +168,7 @@ onBeforeUnmount(() => {
         data-testid="confirm-create-after-uncertain"
         class="secondary-button"
         type="button"
+        :disabled="!isAuthorized || submitting"
         @click="createAnotherAfterUncertainOutcome"
       >
         我理解可能已有邀请码，仍要创建另一个
@@ -149,7 +176,7 @@ onBeforeUnmount(() => {
     </form>
 
     <section
-      v-if="invitationCode"
+      v-if="isAuthorized && invitationCode"
       class="invitation-result"
       aria-labelledby="invitation-result-title"
       aria-live="polite"
@@ -182,7 +209,7 @@ onBeforeUnmount(() => {
       <p v-if="statusMessage" class="copy-status" role="status">{{ statusMessage }}</p>
     </section>
 
-    <RouterLink class="back-link" :to="{ name: 'home' }">返回首页</RouterLink>
+    <RouterLink class="action-link back-link" :to="{ name: 'home' }">返回首页</RouterLink>
   </section>
 </template>
 
@@ -198,5 +225,5 @@ onBeforeUnmount(() => {
 .invitation-actions { display: flex; flex-wrap: wrap; gap: .65rem; }
 .copy-status { margin: 0; color: #176348; font-size: .9rem; }
 .uncertain-create-warning { margin: 0; color: #8a4510; font-size: .9rem; }
-.back-link { display: inline-block; margin-top: 1.25rem; }
+.back-link { margin-top: 1.25rem; }
 </style>

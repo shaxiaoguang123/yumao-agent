@@ -43,10 +43,12 @@ body { margin: 0; min-width: 320px; min-height: 100vh; }
 button, input { font: inherit; }
 a { color: #146c5b; text-decoration: none; }
 a:hover { text-decoration: underline; }
+a:focus-visible, button:focus-visible { outline: 3px solid #146c5b; outline-offset: 3px; }
 .app-shell { min-height: 100vh; }
-.topbar { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding: 1rem clamp(1rem, 5vw, 4rem); background: #fff; border-bottom: 1px solid #e1e7ec; }
-.brand { color: #163b35; font-weight: 750; letter-spacing: .01em; }
-.topbar nav { display: flex; gap: 1.25rem; }
+.topbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .25rem 1.5rem; padding: 1rem clamp(1rem, 5vw, 4rem); background: #fff; border-bottom: 1px solid #e1e7ec; }
+.brand { display: inline-flex; align-items: center; min-height: 2.75rem; flex-shrink: 0; white-space: nowrap; color: #163b35; font-weight: 750; letter-spacing: .01em; }
+.topbar nav { display: flex; flex-wrap: wrap; gap: .25rem .5rem; min-width: 0; max-width: 100%; }
+.topbar nav a { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; min-width: 2.75rem; min-height: 2.75rem; padding: .5rem .65rem; white-space: nowrap; }
 .page-content { width: min(100% - 2rem, 68rem); margin: 2.5rem auto; }
 .panel { width: min(100%, 34rem); margin: 3rem auto; padding: clamp(1.25rem, 4vw, 2rem); background: #fff; border: 1px solid #e4e9ed; border-radius: 1rem; box-shadow: 0 12px 32px rgb(23 41 56 / 5%); }
 .panel h1 { margin: 0 0 .5rem; font-size: clamp(1.4rem, 4vw, 1.9rem); }
@@ -61,5 +63,6 @@ a:hover { text-decoration: underline; }
 .secondary-button { color: #263747; background: #eaf0f2; }
 .form-error, [role="alert"] { color: #a32626; }
 .form-success { color: #176348; }
-.inline-links { display: flex; gap: 1rem; margin-top: 1.25rem; }
+.action-link, .inline-links a { display: inline-flex; align-items: center; justify-content: center; min-width: 2.75rem; min-height: 2.75rem; padding: .5rem .65rem; white-space: nowrap; vertical-align: middle; }
+.inline-links { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1.25rem; }
 </style>

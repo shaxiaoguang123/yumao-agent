@@ -81,6 +81,46 @@ async function mountView(api) {
 }
 
 describe('Credential management view', () => {
+  it.each(['upstream_unavailable', 'network'])('does not claim an empty list after initial %s failure; retries to a genuine empty state', async (code) => {
+    const list = vi.fn().mockRejectedValueOnce(Object.assign(new Error('synthetic-error'), { code }))
+      .mockResolvedValueOnce({ credentials: [] });
+    const { wrapper } = await mountView(makeApi({ list }));
+    expect(wrapper.get('[role="alert"]').exists()).toBe(true);
+    expect(wrapper.text()).not.toContain('暂无预约凭据');
+    await wrapper.get('[role="alert"] button').trigger('click');
+    await flushPromises();
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain('暂无预约凭据');
+  });
+
+  it('does not present a previous list as freshly loaded after refresh fails', async () => {
+    const list = vi.fn().mockResolvedValueOnce({ credentials: [credential()] })
+      .mockRejectedValueOnce(Object.assign(new Error('synthetic-error'), { code: 'upstream_unavailable' }));
+    const { wrapper } = await mountView(makeApi({ list }));
+    expect(wrapper.find('[data-testid="credential-card-credential-a"]').exists()).toBe(true);
+    await wrapper.get('.section-heading button').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="credential-card-credential-a"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('暂无预约凭据');
+  });
+
+  it('reports a failed refresh after a mutation instead of silently showing stale data', async () => {
+    const list = vi.fn().mockResolvedValueOnce({ credentials: [credential()] })
+      .mockRejectedValueOnce(Object.assign(new Error('synthetic-error'), { code: 'upstream_unavailable' }));
+    const { wrapper } = await mountView(makeApi({ list }));
+    await wrapper.get('[data-testid="validate-credential-a"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="credential-card-credential-a"]').exists()).toBe(false);
+  });
+
+  it('preserves the complete legal 128-character unbroken name', async () => {
+    const label = 'W'.repeat(128);
+    const { wrapper } = await mountView(makeApi({ credentials: [credential({ label })] }));
+    expect(wrapper.get('.credential-card h3').text()).toBe(label);
+  });
   it('shows expiry, Token validity, account binding, latest request and last success separately', async () => {
     const api = makeApi({ credentials: [credential()] });
     const { wrapper } = await mountView(api);
