@@ -45,6 +45,7 @@ class AppSettings:
     booking_currency_code: str | None
     booking_currency_minor_unit_exponent: int | None
     llm_service_default: Mapping[str, str] | None = field(default=None, repr=False)
+    availability_simulation_enabled: bool = False
     token_expiring_soon_window_seconds: int = 604800
     session_cookie_name: str = "yumao_session"
     session_ttl_seconds: int = 86400
@@ -209,6 +210,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
     app_env = source.get("APP_ENV", "development").strip().lower()
     if not app_env:
         raise ValueError("APP_ENV must not be empty")
+    simulation_flag = source.get('AVAILABILITY_SIMULATION_ENABLED', 'false')
+    if simulation_flag not in ('true', 'false'):
+        raise ValueError('AVAILABILITY_SIMULATION_ENABLED must be true or false')
 
     raw_origins = source.get("APP_ALLOWED_ORIGINS", "")
     allowed_origins = tuple(origin.strip().rstrip("/") for origin in raw_origins.split(",") if origin.strip())
@@ -274,6 +278,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         upstream_fingerprint_keys=fingerprint_keyring.keys,
         upstream_fingerprint_active_key_id=fingerprint_keyring.active_key_id,
         llm_service_default=llm_service_default,
+        availability_simulation_enabled=app_env == 'development' and simulation_flag == 'true',
         upstream_origin=_https_origin(source),
         upstream_get_user_info_min_interval_ms=_optional_positive_int(
             source, "UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS"

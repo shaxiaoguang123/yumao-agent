@@ -14,6 +14,8 @@ from backend.api.health import health_bp
 from backend.api.plans import plans_bp
 from backend.api.planning import planning_bp
 from backend.ai.planning import PlanningService
+from backend.api.availability_simulation import availability_simulation_bp
+from backend.availability_matching.service import SimulationAvailabilityService
 from backend.ai.call_guard import AICallGuard
 from backend.api.booking_window import booking_window_bp
 from backend.api.ai_models import ai_models_bp
@@ -164,12 +166,15 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
     app.extensions["planning_service"] = PlanningService(
         app.extensions["plan_service"], app.extensions["ai_provider_service"],
     )
+    app.extensions['availability_simulation_service'] = SimulationAvailabilityService(
+        app.extensions['plan_service'], enabled=settings.availability_simulation_enabled)
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(credentials_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(plans_bp)
     app.register_blueprint(planning_bp)
+    app.register_blueprint(availability_simulation_bp)
     app.register_blueprint(booking_window_bp)
     app.register_blueprint(ai_models_bp)
     return app

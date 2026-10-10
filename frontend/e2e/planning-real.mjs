@@ -58,6 +58,8 @@ try {
   await a.page.getByRole('button',{name:'添加AI模型',exact:true}).click();
   await a.page.getByLabel('显示名称').fill('合成规划模型');await a.page.getByLabel('兼容接口地址').fill('https://model.example/v1');await a.page.getByLabel('模型名称',{exact:true}).fill('synthetic-planner');await a.page.getByLabel(/^API Key/).fill('Synthetic-model-key-only-42');
   await a.page.getByRole('button',{name:'保存模型',exact:true}).click();await a.page.getByText('模型配置已保存。').waitFor();
+  // The success notice is set before the asynchronous model-list refresh completes.
+  await a.page.getByText('API Key 已配置（不会显示密钥）',{exact:false}).waitFor();
   check('model config stores encrypted secret without echo',await a.page.getByText('API Key 已配置（不会显示密钥）',{exact:false}).count()===1&&storage().plaintext_keys===0);
   await a.page.getByLabel('当前使用模型').selectOption({label:'合成规划模型 · synthetic-planner'});await a.page.getByLabel('默认模型').selectOption({label:'合成规划模型 · synthetic-planner'});await a.page.getByRole('button',{name:'保存模型选择'}).click();await a.page.getByText('当前模型与默认模型已更新。').waitFor();
   await a.page.getByRole('button',{name:'测试连接',exact:true}).click();await a.page.getByText('模型连接成功。').waitFor();check('explicit provider connection test reaches fake adapter',true);

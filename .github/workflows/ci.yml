@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, codex/fix-browser-baseline, codex/booking-plan-mvp, codex/planning-agent-mvp]
+    branches: [main, codex/fix-browser-baseline, codex/booking-plan-mvp, codex/planning-agent-mvp, codex/planning-agent-v11]
   push:
     branches: [main]
 
@@ -105,6 +105,12 @@ jobs:
           PLAN_QA_PYTHON: python
         run: npm run test:e2e:planning
 
+      - name: Match synthetic availability using saved plans and real SQLite
+        env:
+          AVAILABILITY_QA_OUTPUT: ${{ runner.temp }}/yumao-availability-e2e
+          PLAN_QA_PYTHON: python
+        run: npm run test:e2e:availability
+
       - name: Preserve synthetic browser evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -117,4 +123,6 @@ jobs:
             ${{ runner.temp }}/yumao-browser-e2e/logs/
             ${{ runner.temp }}/yumao-planning-agent-e2e/results.json
             ${{ runner.temp }}/yumao-planning-agent-e2e/*.jpg
+            ${{ runner.temp }}/yumao-availability-e2e/results.json
+            ${{ runner.temp }}/yumao-availability-e2e/*.jpg
           retention-days: 7

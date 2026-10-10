@@ -91,6 +91,7 @@ def main():
     parser.add_argument('--output',required=True)
     parser.add_argument('--origin',required=True)
     parser.add_argument('--port',type=int,default=0)
+    parser.add_argument('--simulation',action='store_true',help='explicitly enable synthetic availability matching')
     args = parser.parse_args()
     root = Path(args.output).resolve()
     if root.exists():
@@ -116,6 +117,7 @@ def main():
     record()
     migrate_database(database,5000)
     app = create_app({**credential_test_settings(database),'APP_ENV':'development','APP_ALLOWED_ORIGINS':args.origin,
+                      'AVAILABILITY_SIMULATION_ENABLED':'true' if args.simulation else 'false',
                       'BOOKING_TIMEZONE':'Asia/Shanghai','BOOKING_CURRENCY_CODE':'CNY','BOOKING_CURRENCY_MINOR_UNIT_EXPONENT':'2'})
     settings = app.extensions['app_settings']
     provider = AIProviderService(database_path=database,busy_timeout_ms=5000,
