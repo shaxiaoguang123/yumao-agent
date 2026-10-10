@@ -44,9 +44,11 @@ export async function runRegressions(qa) {
           const link = ctx.page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: label, exact: true });
           await link.click();
           check(ctx.name, `F1 click ${label} reaches its route`, new URL(ctx.page.url()).pathname === route && await link.isVisible());
-          const nav = await textGeometry(ctx.page.locator('.topbar a'));
+          const nav = await textGeometry(ctx.page.locator('.topbar nav a'));
+          const brand = await textGeometry(ctx.page.locator('.brand-title'));
+          check(ctx.name, 'brand name stays complete beside its intentional subtitle', brand.length === 1 && brand[0].lines === 1, { brand });
           check(ctx.name, `F1 complete labels on ${route}`, nav.every((n) => n.lines === 1), { nav });
-          check(ctx.name, `F7 navigation touch targets on ${route}`, nav.every((n) => n.width >= 44 && n.height >= 44), { nav });
+          check(ctx.name, `F7 navigation touch targets on ${route}`, (await textGeometry(ctx.page.locator('.topbar a'))).every((n) => n.width >= 44 && n.height >= 44), { nav });
           await mainLinks(ctx);
           await layout(ctx);
         }

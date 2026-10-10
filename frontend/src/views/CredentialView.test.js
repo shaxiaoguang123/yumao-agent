@@ -81,6 +81,34 @@ async function mountView(api) {
 }
 
 describe('Credential management view', () => {
+  it('discards a rotation draft when local filtering hides its credential', async()=>{
+    const api=makeApi({credentials:[credential()]});const {wrapper}=await mountView(api);
+    await wrapper.get('[data-testid="rotate-credential-a"]').trigger('click');
+    await wrapper.get('[data-testid="rotation-token"]').setValue('synthetic-hidden-draft');
+    await wrapper.get('[data-testid="credential-search"]').setValue('no-match');
+    await wrapper.get('[data-testid="credential-search"]').setValue('');
+    expect(wrapper.find('[data-testid="rotation-token"]').exists()).toBe(false);
+    expect(api.rotateToken).not.toHaveBeenCalled();
+  });
+
+  it('searches complete names locally without issuing another API request', async () => {
+    const list=vi.fn().mockResolvedValue({credentials:[credential({credential_id:'one',label:'Morning court'}),credential({credential_id:'two',label:'Evening court'})]});
+    const {wrapper}=await mountView(makeApi({list}));
+    await wrapper.get('[data-testid="credential-search"]').setValue('evening');
+    expect(wrapper.find('[data-testid="credential-card-one"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="credential-card-two"]').exists()).toBe(true);
+    expect(list).toHaveBeenCalledOnce();
+    await wrapper.get('[data-testid="credential-search"]').setValue('no match');
+    expect(wrapper.text()).toContain('没有匹配的凭据');
+    expect(wrapper.text()).not.toContain('暂无预约凭据');
+  });
+  it('filters enabled and disabled records without changing stored state',async()=>{
+    const {wrapper}=await mountView(makeApi({credentials:[credential({credential_id:'one',enabled:true}),credential({credential_id:'two',enabled:false})]}));
+    await wrapper.get('[data-testid="credential-filter"]').setValue('disabled');
+    expect(wrapper.find('[data-testid="credential-card-one"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="credential-card-two"]').exists()).toBe(true);
+  });
+
   it.each(['upstream_unavailable', 'network'])('does not claim an empty list after initial %s failure; retries to a genuine empty state', async (code) => {
     const list = vi.fn().mockRejectedValueOnce(Object.assign(new Error('synthetic-error'), { code }))
       .mockResolvedValueOnce({ credentials: [] });

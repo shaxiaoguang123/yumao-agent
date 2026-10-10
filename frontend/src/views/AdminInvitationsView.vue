@@ -2,6 +2,8 @@
 import { computed, inject, onBeforeUnmount, ref, watch } from 'vue';
 import { RouterLink } from 'vue-router';
 
+import PageHeader from '../components/PageHeader.vue';
+import AppIcon from '../components/AppIcon.vue';
 const invitationApi = inject('adminInvitationApi');
 const sessionStore = inject('sessionStore');
 const invitationCode = ref('');
@@ -138,9 +140,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="panel admin-invitations-panel" aria-labelledby="admin-invitations-title">
-    <p class="eyebrow">管理员</p>
-    <h1 id="admin-invitations-title">创建注册邀请码</h1>
+  <section class="admin-page" aria-labelledby="admin-invitations-title">
+    <PageHeader title-id="admin-invitations-title" eyebrow="管理员工具" title="创建注册邀请码" description="为受邀用户提供安全的账户入口。邀请码明文只临时显示一次。" />
+    <div class="admin-grid"><div class="panel admin-invitations-panel"><span class="section-icon"><AppIcon name="ticket" /></span><h2 class="invitation-create-heading">新建邀请码</h2>
     <p class="muted">
       邀请码有效期为 24 小时，且只能注册一个账户。创建后请立即复制并安全地交给受邀用户。
       邀请码只在本页临时显示一次。
@@ -210,20 +212,170 @@ onBeforeUnmount(() => {
     </section>
 
     <RouterLink class="action-link back-link" :to="{ name: 'home' }">返回首页</RouterLink>
+    </div><aside class="invitation-guide"><p class="eyebrow">邀请流程</p><h2>一个入口，三步完成</h2><ol><li><strong>创建</strong><span>管理员创建一个有效期为 24 小时的邀请码。</span></li><li><strong>安全分享</strong><span>复制后，通过可信渠道交给受邀用户。离开页面后无法再次查看明文。</span></li><li><strong>完成注册</strong><span>受邀用户填写邀请码、用户名与密码。一个邀请码仅注册一个账户。</span></li></ol><p class="security-caption"><AppIcon name="shield" />页面不会自动重试创建请求。</p></aside></div>
   </section>
 </template>
 
 <style scoped>
-.admin-invitations-panel { width: min(100%, 42rem); }
-.eyebrow { margin: 0 0 .5rem; color: #146c5b; font-size: .82rem; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
-.admin-invitations-panel h1 { margin-bottom: .5rem; }
-.invitation-result { display: grid; gap: .75rem; margin-top: 1.5rem; padding: 1.25rem; border: 1px solid #cfe3dc; border-radius: .8rem; background: #f5fbf8; }
-.invitation-result h2 { margin: 0; font-size: 1.1rem; }
-.invitation-result .muted { margin: 0; }
-.invitation-code { overflow-wrap: anywhere; padding: .9rem; border: 1px solid #d9e4df; border-radius: .55rem; background: white; color: #163b35; font-size: 1rem; user-select: all; }
-.expiry-line { margin: 0; color: #334155; font-size: .9rem; }
-.invitation-actions { display: flex; flex-wrap: wrap; gap: .65rem; }
-.copy-status { margin: 0; color: #176348; font-size: .9rem; }
-.uncertain-create-warning { margin: 0; color: #8a4510; font-size: .9rem; }
-.back-link { margin-top: 1.25rem; }
+.admin-grid {
+  display:grid;
+  grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);
+  gap:30px;
+  align-items:start;
+
+}
+
+.admin-invitations-panel > .muted {
+  font-size:13px;
+
+}
+
+.invitation-create-heading {
+  margin-top:18px;
+
+}
+
+.invitation-guide {
+  padding:22px 8px;
+
+}
+
+.invitation-guide h2 {
+  font-size:20px;
+
+}
+
+.invitation-guide ol {
+  padding:0;
+  margin:26px 0 30px;
+  list-style:none;
+  counter-reset:steps;
+  display:grid;
+  gap:25px;
+
+}
+
+.invitation-guide li {
+  position:relative;
+  padding-left:44px;
+  counter-increment:steps;
+
+}
+
+.invitation-guide li:before {
+  content:"0" counter(steps);
+  position:absolute;
+  top:0;
+  left:0;
+  width:29px;
+  height:29px;
+  display:grid;
+  place-items:center;
+  border:1px solid var(--line);
+  border-radius:7px;
+  color:var(--brand);
+  background:white;
+  font-size:10px;
+
+}
+
+.invitation-guide strong {
+  display:block;
+  font-size:13px;
+  margin-bottom:8px;
+
+}
+
+.invitation-guide li span {
+  display:block;
+  font-size:12px;
+  color:var(--muted);
+  line-height:1.8;
+
+}
+
+.invitation-result {
+  display:grid;
+  gap:13px;
+  padding:20px;
+  margin-top:24px;
+  background:var(--brand-soft);
+  border:1px solid #cbded0;
+  border-radius:12px;
+
+}
+
+.invitation-result h2 {
+  font-size:18px;
+
+}
+
+.invitation-result .muted {
+  margin:0;
+  font-size:12px;
+
+}
+
+.invitation-code {
+  display:block;
+  overflow-wrap:anywhere;
+  padding:16px;
+  border:1px dashed #b5ceb9;
+  background:white;
+  border-radius:8px;
+  color:var(--brand-dark);
+  font-family:ui-monospace,SFMono-Regular,monospace;
+  font-size:16px;
+  line-height:1.8;
+  user-select:all;
+
+}
+
+.expiry-line {
+  margin:0;
+  color:var(--muted);
+  font-size:12px;
+
+}
+
+.invitation-actions {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+
+}
+
+.copy-status {
+  margin:0;
+  font-size:12px;
+  color:var(--brand);
+
+}
+
+.uncertain-create-warning {
+  padding:12px 15px;
+  color:var(--warning);
+  background:var(--warning-soft);
+  border-radius:9px;
+  margin:0;
+  line-height:1.8;
+  font-size:12px;
+
+}
+
+.back-link {
+  margin-top:18px;
+
+} @media(max-width:700px) {
+  .admin-grid {
+  grid-template-columns:1fr;
+  gap:12px;
+
+}
+
+.invitation-guide {
+  padding:20px 8px;
+
+}
+}
 </style>

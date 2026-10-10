@@ -1,7 +1,11 @@
 <script setup>
-import { computed, inject, onMounted, onUnmounted, ref } from 'vue';
+import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 
+import PageHeader from '../components/PageHeader.vue';
+import AppIcon from '../components/AppIcon.vue';
+import CredentialCard from '../components/CredentialCard.vue';
+import { needsAttention } from '../utils/credentialSummary.js';
 const api = inject('credentialApi');
 const credentials = ref([]);
 const listStatus = ref('loading');
@@ -12,42 +16,24 @@ const errorMessage = ref('');
 const successMessage = ref('');
 const creating = ref(false);
 const busyCredentialId = ref('');
+const search = ref('');
+const filter = ref('all');
+const visibleCredentials = computed(() => credentials.value.filter(item => (
+ item.label.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase())
+ && (filter.value === 'all' || (filter.value === 'enabled' && item.enabled) || (filter.value === 'disabled' && !item.enabled) || (filter.value === 'attention' && needsAttention(item)))
+)));
+// A hidden card must not retain a rotation candidate that can reappear later.
+watch([search, filter], () => {
+  if (rotationCredentialId.value && !visibleCredentials.value.some(item => item.credential_id === rotationCredentialId.value)) {
+    rotationToken.value = '';
+    rotationCredentialId.value = '';
+  }
+}, { flush: 'sync' });
 const label = ref('');
 const createToken = ref('');
 const rotationCredentialId = ref('');
 const rotationToken = ref('');
 
-const expiryLabels = {
-  expiry_unknown: '到期时间未知',
-  expiry_ok: '有效期正常',
-  expiring_soon: '即将过期',
-  expired: '已过期',
-};
-const validationLabels = {
-  never_confirmed: '尚未确认',
-  confirmed_valid: '已验证有效',
-  confirmed_invalid: '已确认无效',
-};
-const bindingLabels = {
-  unresolved: '尚未确认',
-  confirmed: '已确认',
-  needs_reconfirmation: '需要重新确认',
-};
-const attemptLabels = {
-  success: '验证成功',
-  explicit_invalid: 'Token 已确认无效',
-  network_error: '网络错误',
-  rate_limited: '受到限流',
-  contract_drift: '上游协议变化',
-  validation_unknown: '结果未知',
-  unresolved_identity: 'Token 已验证，账户连续性未确认',
-  internal_error: '验证暂不可用',
-};
-const operationLabels = {
-  create_candidate: '添加 Token',
-  validate_current: '验证当前 Token',
-  token_rotation_candidate: '验证替换 Token',
-};
 const safeErrors = {
   invalid_request: '输入内容无效，请检查后重试。',
   invalid_credential_label: '名称长度须为 1 到 128 个字符，且不能包含控制字符。',
@@ -72,32 +58,6 @@ const safeErrors = {
 
 function safeMessage(error) {
   return safeErrors[error?.code] || '操作未完成，请重试。';
-}
-
-function formatDate(value) {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
-  return new Intl.DateTimeFormat('zh-CN', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date);
-}
-
-function expiryText(value) {
-  return expiryLabels[value] || '到期时间未知';
-}
-
-function validationText(value) {
-  return validationLabels[value] || '验证状态未知';
-}
-
-function bindingText(value) {
-  return bindingLabels[value] || '账户状态未知';
-}
-
-function attemptText(value) {
-  return attemptLabels[value] || '验证结果未知';
 }
 
 async function loadCredentials() {
@@ -247,15 +207,7 @@ onUnmounted(() => {
 
 <template>
   <section class="credential-page" aria-labelledby="credential-title">
-    <header class="credential-heading">
-      <div>
-        <p class="eyebrow">账号安全</p>
-        <h1 id="credential-title">预约凭据</h1>
-        <p class="muted">
-          Token 只用于只读验证和安全保存。账户连续性、有效期与验证结果分别显示。
-        </p>
-      </div>
-    </header>
+    <PageHeader title-id="credential-title" eyebrow="账户安全 · 凭据管理" title="预约凭据" description="清晰管理 Token 有效期、验证结果与账户连续性。验证和保存不代表已经预约。" />
 
     <p v-if="errorMessage" class="credential-message error-message" role="alert">
       {{ errorMessage }}
@@ -268,7 +220,9 @@ onUnmounted(() => {
       <button class="text-button" type="button" @click="loadCredentials()">重试</button>
     </p>
 
+    <div class="credential-workspace">
     <section class="credential-add panel" aria-labelledby="credential-add-title">
+      <span class="section-icon"><AppIcon name="plus" /></span>
       <h2 id="credential-add-title">添加预约凭据</h2>
       <p class="muted">
         Token 会在服务器端加密保存。验证完成后会清空输入框；Token 不会放入浏览器地址或本地存储。
@@ -317,120 +271,18 @@ onUnmounted(() => {
           刷新
         </button>
       </div>
+      <div v-if="listStatus === 'ready' && credentials.length" class="credential-toolbar">
+       <label class="search-field"><AppIcon name="search" /><span class="sr-only">搜索凭据名称</span><input v-model="search" data-testid="credential-search" type="search" placeholder="搜索凭据名称" autocomplete="off" /></label>
+       <label class="filter-field"><span class="sr-only">凭据状态</span><select v-model="filter" data-testid="credential-filter" aria-label="凭据状态"><option value="all">全部状态</option><option value="attention">需要关注</option><option value="enabled">已启用</option><option value="disabled">已停用</option></select></label>
+      </div>
+      <p v-if="listStatus === 'ready' && credentials.length && !visibleCredentials.length" class="search-empty">没有匹配的凭据。请调整名称或状态筛选。</p>
       <p v-if="loading" class="muted" role="status">正在读取凭据状态…</p>
       <p v-else-if="listStatus === 'ready' && credentials.length === 0" class="empty-state">
         暂无预约凭据。添加后可查看 Token 状态和账户连续性。
       </p>
 
       <template v-if="listStatus === 'ready'">
-      <article
-        v-for="credential in credentials"
-        :key="credential.credential_id"
-        class="credential-card"
-        :data-testid="`credential-card-${credential.credential_id}`"
-      >
-        <header class="credential-card-heading">
-          <div>
-            <h3>{{ credential.label }}</h3>
-            <p class="muted">版本 {{ credential.credential_version }}</p>
-          </div>
-          <span class="state-pill" :class="credential.enabled ? 'state-enabled' : 'state-disabled'">
-            {{ credential.enabled ? '已启用' : '已停用' }}
-          </span>
-        </header>
-
-        <dl class="credential-facts">
-          <div>
-            <dt>账户连续性</dt>
-            <dd>{{ bindingText(credential.account_binding_state) }}</dd>
-          </div>
-          <div>
-            <dt>Token 验证</dt>
-            <dd>{{ validationText(credential.last_confirmed_validation_state) }}</dd>
-          </div>
-          <div>
-            <dt>有效期</dt>
-            <dd>{{ expiryText(credential.expiry_state) }}</dd>
-          </div>
-          <div>
-            <dt>Token 到期时间</dt>
-            <dd>{{ formatDate(credential.token_expires_at_utc) }}</dd>
-          </div>
-          <div>
-            <dt>最近成功验证</dt>
-            <dd>{{ formatDate(credential.last_successful_validation_at_utc) }}</dd>
-          </div>
-          <div>
-            <dt>最近发起的验证</dt>
-            <dd v-if="credential.latest_requested_validation_attempt">
-              {{ operationLabels[credential.latest_requested_validation_attempt.operation_kind] || '验证请求' }}：
-              {{ attemptText(credential.latest_requested_validation_attempt.attempt_result) }}
-              <span class="muted">
-                （开始 {{ formatDate(credential.latest_requested_validation_attempt.started_at_utc) }}；
-                完成 {{ formatDate(credential.latest_requested_validation_attempt.completed_at_utc) }}）
-              </span>
-            </dd>
-            <dd v-else>尚无验证请求</dd>
-          </div>
-        </dl>
-
-        <p v-if="credential.expiry_state === 'expiring_soon'" class="risk-note">
-          Token 即将到期，请提前准备替换 Token。此提醒本身不会阻止当前凭据使用。
-        </p>
-        <p v-if="credential.expiry_state === 'expired' || credential.last_confirmed_validation_state === 'confirmed_invalid'" class="risk-note danger-note">
-          当前 Token 已过期或已确认无效，需验证新的 Token 后才能继续使用。
-        </p>
-        <p v-if="credential.requires_revalidation" class="risk-note">
-          凭据重新启用后需要再次验证当前 Token。
-        </p>
-        <p v-if="credential.account_binding_state === 'unresolved'" class="risk-note">
-          账户连续性尚未确认。此凭据不能轮换 Token，也不能用于依赖上游账户身份的后续预约任务；可重新验证当前 Token 以尝试确认。
-        </p>
-        <p v-if="credential.account_binding_state === 'needs_reconfirmation'" class="risk-note danger-note">
-          账户连续性需要重新确认。轮换和后续账户级使用已暂停；验证当前 Token 并匹配原账户后才能恢复。
-        </p>
-
-        <div class="credential-actions">
-          <button
-            v-if="credential.enabled"
-            class="secondary-button"
-            type="button"
-            :data-testid="`validate-${credential.credential_id}`"
-            :disabled="busyCredentialId === credential.credential_id"
-            @click="validateCredential(credential)"
-          >
-            {{ busyCredentialId === credential.credential_id ? '处理中…' : '验证当前 Token' }}
-          </button>
-          <button
-            v-if="credential.enabled && credential.account_binding_state === 'confirmed'"
-            class="secondary-button"
-            type="button"
-            :data-testid="`rotate-${credential.credential_id}`"
-            :disabled="busyCredentialId === credential.credential_id"
-            @click="beginRotation(credential.credential_id)"
-          >
-            轮换 Token
-          </button>
-          <button
-            class="secondary-button"
-            type="button"
-            :data-testid="`credential-${credential.enabled ? 'disable' : 'enable'}-${credential.credential_id}`"
-            :disabled="busyCredentialId === credential.credential_id"
-            @click="toggleEnabled(credential)"
-          >
-            {{ credential.enabled ? '停用' : '重新启用' }}
-          </button>
-          <button
-            class="danger-button"
-            type="button"
-            :data-testid="`credential-delete-${credential.credential_id}`"
-            :disabled="busyCredentialId === credential.credential_id"
-            @click="deleteCredential(credential)"
-          >
-            删除
-          </button>
-        </div>
-
+      <CredentialCard v-for="credential in visibleCredentials" :key="credential.credential_id" :credential="credential" :busy="Boolean(busyCredentialId)" @validate="validateCredential(credential)" @rotate="beginRotation(credential.credential_id)" @toggle="toggleEnabled(credential)" @remove="deleteCredential(credential)">
         <form
           v-if="rotationCredentialId === credential.credential_id"
           class="rotation-form"
@@ -467,43 +319,160 @@ onUnmounted(() => {
             </button>
           </div>
         </form>
-      </article>
+      </CredentialCard>
       </template>
     </section>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.credential-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
-.credential-heading h1 { margin: 0 0 .4rem; font-size: clamp(1.6rem, 4vw, 2rem); }
-.eyebrow { margin: 0 0 .25rem; color: #58716c; font-size: .78rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
-.credential-add { width: 100%; margin: 0; }
-.credential-add h2, .section-heading h2 { margin: 0; font-size: 1.1rem; }
-.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.credential-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: .9rem; min-width: 0; }
-.credential-card { display: grid; min-width: 0; gap: 1rem; padding: 1.2rem; border: 1px solid #e1e7ec; border-radius: .9rem; background: white; }
-.credential-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
-.credential-card-heading > div { min-width: 0; }
-.credential-card-heading h3 { margin: 0 0 .2rem; font-size: 1.05rem; overflow-wrap: anywhere; }
-.credential-card-heading p { margin: 0; font-size: .84rem; }
-.state-pill { flex-shrink: 0; white-space: nowrap; padding: .25rem .6rem; border-radius: 999px; font-size: .78rem; font-weight: 700; }
-.state-enabled { color: #155a45; background: #e4f3eb; }
-.state-disabled { color: #52606d; background: #edf0f2; }
-.credential-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .8rem 1.25rem; margin: 0; }
-.credential-facts div { min-width: 0; }
-.credential-facts dt { color: #65717e; font-size: .78rem; }
-.credential-facts dd { margin: .2rem 0 0; color: #253545; font-size: .9rem; line-height: 1.5; overflow-wrap: anywhere; }
-.risk-note { margin: 0; padding: .7rem .85rem; border-left: 3px solid #b98222; border-radius: .35rem; color: #5c461b; background: #fff8e9; line-height: 1.5; }
-.danger-note { border-left-color: #a94343; color: #713333; background: #fff0f0; }
-.credential-actions { display: flex; flex-wrap: wrap; gap: .6rem; }
-.credential-actions .primary-button, .credential-actions .secondary-button, .danger-button { min-width: 2.75rem; min-height: 2.75rem; padding: .65rem .8rem; }
-.danger-button { border: 0; border-radius: .6rem; color: #8f2929; background: #fbe8e8; font: inherit; font-weight: 700; cursor: pointer; }
-.danger-button:disabled { opacity: .6; cursor: wait; }
-.rotation-form { display: grid; gap: .8rem; padding: 1rem; border-radius: .7rem; background: #f4f7f8; }
-.credential-message { margin: 0; padding: .75rem .9rem; border-radius: .6rem; background: white; }
-.error-message { color: #8f2929; }
-.success-message { color: #176348; }
-.empty-state { margin: 0; padding: 1.2rem; border: 1px dashed #cbd5df; border-radius: .8rem; color: #65717e; background: white; }
-.text-button { min-width: 2.75rem; min-height: 2.75rem; padding: .5rem .4rem; border: 0; color: #146c5b; background: transparent; font: inherit; font-weight: 700; cursor: pointer; }
-.text-button:disabled { opacity: .6; cursor: wait; }
+.credential-message {
+  margin:0 0 18px;
+
+}
+
+.credential-workspace {
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  gap:26px;
+  align-items:start;
+
+}
+
+.credential-add h2 {
+  margin-top:17px;
+  font-size:18px;
+
+}
+
+.credential-add .muted {
+  font-size:12px;
+  margin:10px 0 0;
+
+}
+
+.credential-add .form-stack {
+  gap:17px;
+
+}
+
+.credential-actions {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+
+}
+
+.credential-list {
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  gap:16px;
+  min-width:0;
+
+}
+
+.section-heading h2 {
+  font-size:18px;
+
+}
+
+.credential-toolbar {
+  display:flex;
+  gap:10px;
+
+}
+
+.search-field {
+  position:relative;
+  min-width:0;
+  flex:1;
+
+}
+
+.search-field svg {
+  position:absolute;
+  top:14px;
+  left:12px;
+  color:var(--muted);
+
+}
+
+.search-field input {
+  padding-left:40px;
+  font-size:13px;
+
+}
+
+.filter-field select {
+  min-height:48px;
+  max-width:100%;
+  padding:10px 28px 10px 13px;
+  background:white;
+  border:1px solid var(--line);
+  border-radius:9px;
+  color:var(--ink);
+  font-size:12px;
+
+}
+
+.search-empty {
+  font-size:13px;
+  color:var(--muted);
+  padding:20px;
+  border:1px dashed var(--line);
+  border-radius:12px;
+
+}
+
+.text-button {
+  padding-inline:10px;
+
+}
+
+.rotation-form {
+  margin-top:18px;
+  display:grid;
+  gap:12px;
+  background:var(--page);
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:18px;
+
+}
+
+.sr-only {
+  position:absolute;
+  width:1px;
+  height:1px;
+  padding:0;
+  margin:-1px;
+  overflow:hidden;
+  clip:rect(0,0,0,0);
+  white-space:nowrap;
+  border:0;
+
+}
+@media(min-width:1200px) {
+  .credential-workspace {
+  grid-template-columns:280px minmax(0,1fr);
+
+}
+}
+@media(max-width:360px) {
+  .credential-toolbar {
+  flex-wrap:wrap;
+
+}
+
+.filter-field {
+  width:100%;
+
+}
+
+.filter-field select {
+  width:100%;
+
+}
+}
 </style>

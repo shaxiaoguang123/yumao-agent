@@ -1,68 +1,30 @@
 <script setup>
-import { inject } from 'vue';
-import { RouterLink, RouterView } from 'vue-router';
-
+import { computed, inject } from 'vue';
+import { RouterLink, RouterView, useRoute } from 'vue-router';
+import AppIcon from './components/AppIcon.vue';
+import './styles/design-system.css';
 const sessionStore = inject('sessionStore');
+const route = useRoute();
+const contextTitle = computed(() => ({home:'工作台概览',credentials:'凭据管理',account:'账户设置','admin-invitations':'管理员工具'}[route.name] || '账户访问'));
 </script>
-
 <template>
-  <div class="app-shell">
-    <header class="topbar">
-      <RouterLink class="brand" :to="{ name: 'home' }">羽毛球预约工作台</RouterLink>
-      <nav aria-label="主导航">
-        <RouterLink v-if="sessionStore?.user" :to="{ name: 'home' }">首页</RouterLink>
-        <RouterLink v-if="sessionStore?.user" :to="{ name: 'credentials' }">预约凭据</RouterLink>
-        <RouterLink
-          v-if="sessionStore?.user?.role === 'admin'"
-          data-testid="admin-invitations-link"
-          :to="{ name: 'admin-invitations' }"
-        >
-          邀请码管理
-        </RouterLink>
-        <RouterLink v-if="sessionStore?.user" :to="{ name: 'account' }">账户</RouterLink>
-        <RouterLink v-if="!sessionStore?.user" :to="{ name: 'login' }">登录</RouterLink>
-      </nav>
-    </header>
-    <main class="page-content">
-      <RouterView />
-    </main>
+ <div class="app-shell" :class="{ 'public-shell': !sessionStore?.user }">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <header class="topbar">
+   <RouterLink class="brand" :to="{name:'home'}"><span class="brand-mark"><AppIcon name="court" /></span><span><span class="brand-title">羽毛球预约工作台</span><small>YUMAO WORKSPACE</small></span></RouterLink>
+   <p v-if="sessionStore?.user" class="nav-caption">工作空间</p>
+   <nav aria-label="主导航" :class="{'admin-nav':sessionStore?.user?.role==='admin'}">
+    <RouterLink v-if="sessionStore?.user" :to="{name:'home'}"><AppIcon name="home" />首页</RouterLink>
+    <RouterLink v-if="sessionStore?.user" :to="{name:'credentials'}"><AppIcon name="shield" />预约凭据</RouterLink>
+    <RouterLink v-if="sessionStore?.user?.role==='admin'" data-testid="admin-invitations-link" :to="{name:'admin-invitations'}"><AppIcon name="ticket" />邀请码管理</RouterLink>
+    <RouterLink v-if="sessionStore?.user" :to="{name:'account'}"><AppIcon name="user" />账户</RouterLink>
+    <RouterLink v-if="!sessionStore?.user" :to="{name:'login'}"><AppIcon name="user" />登录</RouterLink>
+   </nav>
+   <div v-if="sessionStore?.user" class="sidebar-note"><span class="availability-dot" />目前开放<p>账户与预约凭据管理</p><small>让每一步准备都清晰可见。</small></div>
+  </header>
+  <div class="workspace">
+   <div v-if="sessionStore?.user" class="workspace-bar"><p>工作空间 <span>/</span> <strong>{{ contextTitle }}</strong></p><div class="workspace-user"><span class="avatar">{{ sessionStore.user.username?.slice(0,1).toUpperCase() }}</span><span>{{ sessionStore.user.username }}</span><span class="role-label">{{ sessionStore.user.role==='admin'?'管理员':'用户' }}</span></div></div>
+   <main id="main-content" class="page-content" tabindex="-1"><RouterView /></main>
   </div>
+ </div>
 </template>
-
-<style>
-:root {
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #182230;
-  background: #f4f6f8;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; }
-button, input { font: inherit; }
-a { color: #146c5b; text-decoration: none; }
-a:hover { text-decoration: underline; }
-a:focus-visible, button:focus-visible { outline: 3px solid #146c5b; outline-offset: 3px; }
-.app-shell { min-height: 100vh; }
-.topbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .25rem 1.5rem; padding: 1rem clamp(1rem, 5vw, 4rem); background: #fff; border-bottom: 1px solid #e1e7ec; }
-.brand { display: inline-flex; align-items: center; min-height: 2.75rem; flex-shrink: 0; white-space: nowrap; color: #163b35; font-weight: 750; letter-spacing: .01em; }
-.topbar nav { display: flex; flex-wrap: wrap; gap: .25rem .5rem; min-width: 0; max-width: 100%; }
-.topbar nav a { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; min-width: 2.75rem; min-height: 2.75rem; padding: .5rem .65rem; white-space: nowrap; }
-.page-content { width: min(100% - 2rem, 68rem); margin: 2.5rem auto; }
-.panel { width: min(100%, 34rem); margin: 3rem auto; padding: clamp(1.25rem, 4vw, 2rem); background: #fff; border: 1px solid #e4e9ed; border-radius: 1rem; box-shadow: 0 12px 32px rgb(23 41 56 / 5%); }
-.panel h1 { margin: 0 0 .5rem; font-size: clamp(1.4rem, 4vw, 1.9rem); }
-.muted { color: #65717e; line-height: 1.6; }
-.form-stack { display: grid; gap: 1rem; margin-top: 1.5rem; }
-.field { display: grid; gap: .4rem; color: #334155; font-size: .92rem; font-weight: 600; }
-.field input { width: 100%; padding: .75rem .85rem; border: 1px solid #cbd5df; border-radius: .6rem; background: #fff; color: #182230; }
-.field input:focus { outline: 3px solid rgb(20 108 91 / 16%); border-color: #146c5b; }
-.primary-button, .secondary-button { min-height: 2.75rem; padding: .65rem 1rem; border: 0; border-radius: .6rem; cursor: pointer; font-weight: 700; }
-.primary-button { color: white; background: #146c5b; }
-.primary-button:disabled { opacity: .6; cursor: wait; }
-.secondary-button { color: #263747; background: #eaf0f2; }
-.form-error, [role="alert"] { color: #a32626; }
-.form-success { color: #176348; }
-.action-link, .inline-links a { display: inline-flex; align-items: center; justify-content: center; min-width: 2.75rem; min-height: 2.75rem; padding: .5rem .65rem; white-space: nowrap; vertical-align: middle; }
-.inline-links { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1.25rem; }
-</style>

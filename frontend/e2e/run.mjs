@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createHarness } from './harness.mjs';
 import { runBaseline } from './baseline.mjs';
 import { runRegressions } from './regressions.mjs';
+import { runRedesign } from './redesign.mjs';
 
 const frontend = fileURLToPath(new URL('../', import.meta.url));
 const repository = path.resolve(frontend, '..');
@@ -84,6 +85,7 @@ try {
   qa.report.browserBatchSize = 12;
   if (!process.argv.includes('--only-regressions')) await runBaseline(qa);
   await runRegressions(qa);
+  await runRedesign(qa);
 } catch (error) {
   if (qa) qa.report.runnerError = { message: error.message };
   throw error;
