@@ -49,6 +49,14 @@ class OfficialBookingByTimeHistoryAdapterTests(unittest.TestCase):
         self.assertEqual(cell["state"], "historical_unknown")
         self.assertFalse(cell["selectable"])
 
+    def test_distinct_activity_categories_at_one_coordinate_become_unknown(self):
+        grid = self.adapter.preview(response(conflictList=["0-0-0", "0-0-1"]))
+        self.assertEqual(grid["rows"][0]["cells"][0]["state"], "historical_unknown")
+
+    def test_duplicate_identical_activity_categories_keep_the_observed_display_state(self):
+        grid = self.adapter.preview(response(conflictList=["0-0-3", "0-0-3"]))
+        self.assertEqual(grid["rows"][0]["cells"][0]["state"], "historical_activity_occupied")
+
     def test_unknown_row_status_or_conflict_type_stays_unknown(self):
         payload = response()
         payload["resultData"]["timeList"][0]["status"] = "unrecognized"

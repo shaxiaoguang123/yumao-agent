@@ -44,6 +44,20 @@ function currentFallback(){
 const proposedFallback=computed(()=>pendingGridSelection.value?.mode==='preserve'
  ? copy(pendingGridSelection.value.previous.fallback_policy)
  : {allow_any_court_in_venue:false,allow_time_shift:false,allowed_start_time_range:null});
+const preserveFallbackProblem=computed(()=>{
+ const selection=pendingGridSelection.value;
+ const fallback=selection?.previous.fallback_policy;
+ if(!selection||!fallback?.allow_time_shift)return '';
+ const range=fallback.allowed_start_time_range;
+ if(!range||typeof range.start!=='string'||typeof range.end!=='string'||!/^\d{2}:\d{2}$/.test(range.start)||!/^\d{2}:\d{2}$/.test(range.end)||range.start>range.end)
+  return '原时间浮动范围不完整或无效，不能保留。';
+ if(selection.start_time<range.start||selection.start_time>range.end)
+  return `${selection.start_time} 不在原时间浮动范围 ${range.start}～${range.end} 内，无法保留该策略。`;
+ const [hour,minute]=range.end.split(':').map(Number);
+ if(hour*60+minute+selection.duration_minutes>1440)
+  return '原时间浮动范围加上本次时长会跨越当天午夜，无法保留该策略。';
+ return '';
+});
 function fallbackSummary(value){
  const courts=value.allow_any_court_in_venue?'允许考虑同场馆其他场地':'不扩展到其他场地';
  const time=value.allow_time_shift?`允许开始时间在 ${value.allowed_start_time_range?.start||'未填写'}～${value.allowed_start_time_range?.end||'未填写'} 浮动`:'不允许额外时间浮动';
@@ -118,7 +132,8 @@ async function submit(){
      <fieldset class="grid-mode-options" :disabled="busy">
       <legend>选择本次应用的备用范围</legend>
       <label class="plan-checkbox"><input v-model="pendingGridSelection.mode" data-testid="grid-mode-strict" type="radio" value="strict" />严格按照本次网格选择（默认）：只按已确认顺序尝试所选场地，不扩展场地，不浮动时间。</label>
-      <label class="plan-checkbox"><input v-model="pendingGridSelection.mode" data-testid="grid-mode-preserve" type="radio" value="preserve" />保留原计划额外备用策略：{{ fallbackSummary(pendingGridSelection.previous.fallback_policy) }}</label>
+      <label class="plan-checkbox"><input v-model="pendingGridSelection.mode" data-testid="grid-mode-preserve" type="radio" value="preserve" :disabled="Boolean(preserveFallbackProblem)" />保留原计划额外备用策略：{{ fallbackSummary(pendingGridSelection.previous.fallback_policy) }}</label>
+      <small v-if="preserveFallbackProblem" data-testid="grid-preserve-fallback-problem" class="form-error" role="status">{{ preserveFallbackProblem }}</small>
      </fieldset>
      <div class="plan-actions"><button data-testid="confirm-grid-selection" class="primary-button" type="button" :disabled="busy||saveBlocked" @click="confirmGridSelection">确认应用到未保存表单</button><button data-testid="cancel-grid-selection" class="secondary-button" type="button" :disabled="busy" @click="cancelGridSelection">取消，不修改表单</button></div>
     </section>

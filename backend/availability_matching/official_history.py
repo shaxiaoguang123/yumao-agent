@@ -73,7 +73,7 @@ class OfficialBookingByTimeHistoryAdapter:
         if (type(conflicts) is not list or len(conflicts) > _CONFLICT_LIMIT
                 or type(prices) is not list or len(prices) > _CONFLICT_LIMIT):
             _invalid()
-        by_cell: dict[tuple[int, int], set[str]] = {}
+        by_cell: dict[tuple[int, int], set[tuple[str, int | None]]] = {}
         for conflict in conflicts:
             if type(conflict) is not str:
                 _invalid()
@@ -84,11 +84,12 @@ class OfficialBookingByTimeHistoryAdapter:
             if court_index >= len(courts) or row_index >= row_count:
                 _invalid()
             if len(parts) == 2:
-                state = "reserved"
+                observation = ("reserved", None)
             else:
                 category = int(parts[2])
                 state = "activity_occupied" if 0 <= category <= 6 else "unbookable" if category == 7 else "unknown"
-            by_cell.setdefault((court_index, row_index), set()).add(state)
+                observation = (state, category)
+            by_cell.setdefault((court_index, row_index), set()).add(observation)
 
         rows = []
         for row_index, (label, row_status) in enumerate(time_rows):
@@ -99,7 +100,7 @@ class OfficialBookingByTimeHistoryAdapter:
                 if not row_status_known or len(observed_states) > 1:
                     state = "unknown"
                 elif observed_states:
-                    state = next(iter(observed_states))
+                    state = next(iter(observed_states))[0]
                 else:
                     # The official client initializes the grid as display-state 1.
                     # It is retained only as a historical observation, not availability.

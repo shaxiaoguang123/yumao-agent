@@ -20,10 +20,10 @@ function gridReply() {
   };
 }
 
-async function mountForm() {
+async function mountForm(timeRange={start:'18:00',end:'20:00'}) {
   const source={planId:'plan-a',baseVersion:2,intent:{
     ...structuredClone(intent),court_preferences:['6号场','5号场'],duration_minutes:60,preferred_start_times:['18:00','19:00'],
-    fallback_policy:{allow_any_court_in_venue:true,allow_time_shift:true,allowed_start_time_range:{start:'18:00',end:'20:00'}},
+    fallback_policy:{allow_any_court_in_venue:true,allow_time_shift:true,allowed_start_time_range:timeRange},
   },context:structuredClone(context)};
   const gridApi={options:vi.fn(async()=>({grid_preview_enabled:true,grid_scenarios:[{id:'partially_occupied',name:'部分占用'}]})),gridPreview:vi.fn(async()=>gridReply())};
   const wrapper=mount(PlanForm,{props:{source,busy:false,saveBlocked:false,fields:{},gridApi}});
@@ -67,6 +67,17 @@ describe('grid selection review in the plan form',()=>{
     expect(wrapper.emitted('save')[0][0].fallback_policy).toEqual({
       allow_any_court_in_venue:true,allow_time_shift:true,
       allowed_start_time_range:{start:'18:00',end:'20:00'},
+    });
+  });
+
+  it('blocks retaining a time-shift range that excludes the selected grid start',async()=>{
+    const wrapper=await mountForm({start:'19:00',end:'20:00'});
+    expect(wrapper.get('[data-testid="grid-mode-preserve"]').element.disabled).toBe(true);
+    expect(wrapper.text()).toContain('18:00 不在原时间浮动范围 19:00～20:00 内');
+    await wrapper.get('[data-testid="confirm-grid-selection"]').trigger('click');
+    await wrapper.get('form').trigger('submit');
+    expect(wrapper.emitted('save')[0][0].fallback_policy).toEqual({
+      allow_any_court_in_venue:false,allow_time_shift:false,allowed_start_time_range:null,
     });
   });
 
