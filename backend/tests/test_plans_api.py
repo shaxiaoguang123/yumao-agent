@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -25,8 +26,9 @@ class PlansApiTests(unittest.TestCase):
                 db.execute("INSERT INTO users (user_id,username,normalized_username,password_hash,role,status,created_at_utc_ms,updated_at_utc_ms) VALUES (?,?,?,'synthetic','user','active',1,1)",(user,user,user))
         self.a,self.b=self.app.test_client(),self.app.test_client()
         self.headers={}
+        session_now=time.time_ns()//1_000_000
         for user,client in (('a',self.a),('b',self.b)):
-            cookie,csrf=self.app.extensions['session_service'].create(user,NOW)
+            cookie,csrf=self.app.extensions['session_service'].create(user,session_now)
             client.set_cookie('yumao_session',cookie)
             self.headers[user]={'Origin':ORIGIN,'X-CSRF-Token':csrf}
         self.network=self.enterContext(patch('requests.sessions.Session.request',side_effect=AssertionError('upstream forbidden')))
