@@ -19,6 +19,7 @@ class ProtocolEvidenceTests(unittest.TestCase):
         report = assess_evidence(CURRENT_EVIDENCE)
 
         self.assertEqual(report["readiness"], {
+            "booking_node_scope_flow": True,
             "venue_directory_display": False,
             "venue_catalog": False,
             "plan_binding": False,
@@ -28,6 +29,14 @@ class ProtocolEvidenceTests(unittest.TestCase):
         })
         self.assertEqual(report["findings"]["venue_name_to_parent_scope"], "partial")
         self.assertEqual(report["findings"]["venue_list_response"], "missing")
+
+    def test_booking_node_scope_chain_is_separate_from_physical_venue_evidence(self):
+        report = assess_evidence(CURRENT_EVIDENCE)
+        self.assertTrue(report['readiness']['booking_node_scope_flow'])
+        self.assertEqual(report['findings']['booking_node_list_response'], 'confirmed')
+        self.assertEqual(report['findings']['selected_booking_node_to_query_scope'], 'confirmed')
+        self.assertFalse(report['readiness']['venue_catalog'])
+        self.assertIn('physical_venue_label_to_parent_scope', report['blocking_findings']['venue_catalog'])
 
     def test_read_only_contract_does_not_depend_on_booking_type_semantics(self):
         manifest = {

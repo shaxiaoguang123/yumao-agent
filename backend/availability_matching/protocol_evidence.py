@@ -8,6 +8,9 @@ from __future__ import annotations
 
 FINDING_STATUSES = frozenset({"confirmed", "partial", "missing"})
 FINDING_KEYS = frozenset({
+    "booking_node_list_response",
+    "selected_booking_node_to_query_scope",
+    "physical_venue_label_to_parent_scope",
     "client_version_association",
     "venue_list_response",
     "venue_name_to_parent_scope",
@@ -35,6 +38,9 @@ class EvidenceManifestError(ValueError):
 CURRENT_EVIDENCE = {
     "schema_version": 1,
     "findings": {
+        "booking_node_list_response": "confirmed",
+        "selected_booking_node_to_query_scope": "confirmed",
+        "physical_venue_label_to_parent_scope": "missing",
         "client_version_association": "missing",
         "venue_list_response": "missing",
         "venue_name_to_parent_scope": "partial",
@@ -54,6 +60,10 @@ CURRENT_EVIDENCE = {
 
 
 _REQUIREMENTS = {
+    "booking_node_scope_flow": (
+        "booking_node_list_response",
+        "selected_booking_node_to_query_scope",
+    ),
     "venue_directory_display": (
         "client_version_association",
         "venue_list_response",
@@ -62,17 +72,20 @@ _REQUIREMENTS = {
         "client_version_association",
         "venue_list_response",
         "venue_name_to_parent_scope",
+        "physical_venue_label_to_parent_scope",
     ),
     "plan_binding": (
         "client_version_association",
         "venue_list_response",
         "venue_name_to_parent_scope",
+        "physical_venue_label_to_parent_scope",
         "court_to_venue_association",
     ),
     "recorded_availability": (
         "client_version_association",
         "venue_list_response",
         "venue_name_to_parent_scope",
+        "physical_venue_label_to_parent_scope",
         "court_to_venue_association",
         "booking_by_time_scope_response_association",
         "booking_by_time_response_structure",
@@ -84,6 +97,7 @@ _REQUIREMENTS = {
         "client_version_association",
         "venue_list_response",
         "venue_name_to_parent_scope",
+        "physical_venue_label_to_parent_scope",
         "court_to_venue_association",
         "booking_by_time_scope_response_association",
         "booking_by_time_response_structure",
@@ -96,6 +110,7 @@ _REQUIREMENTS = {
         "client_version_association",
         "venue_list_response",
         "venue_name_to_parent_scope",
+        "physical_venue_label_to_parent_scope",
         "court_to_venue_association",
         "booking_by_time_scope_response_association",
         "booking_by_time_response_structure",
