@@ -65,6 +65,9 @@ class AvailabilitySnapshot:
     currency_code: str | None = None
     currency_minor_unit_exponent: int | None = None
     venue_semantic_key: str | None = None
+    catalog_version: str | None = None
+    captured_at_utc_ms: int | None = None
+    valid_until_utc_ms: int | None = None
 
     def __post_init__(self):
         try:
@@ -94,6 +97,20 @@ class AvailabilitySnapshot:
             raise AvailabilityError('invalid_availability_snapshot')
         if self.venue_semantic_key is not None:
             _text(self.venue_semantic_key, 100)
+        if self.catalog_version is not None:
+            _text(self.catalog_version, 64)
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}", self.catalog_version, re.ASCII):
+                raise AvailabilityError('invalid_availability_snapshot')
+            if self.venue_semantic_key is None:
+                raise AvailabilityError('invalid_availability_snapshot')
+        captured_at, valid_until = self.captured_at_utc_ms, self.valid_until_utc_ms
+        if (captured_at is None) != (valid_until is None):
+            raise AvailabilityError('invalid_availability_snapshot')
+        if captured_at is not None:
+            if (type(captured_at) is not int or type(valid_until) is not int or captured_at <= 0
+                    or valid_until <= captured_at or self.simulation is not False
+                    or self.catalog_version is None or self.venue_semantic_key is None):
+                raise AvailabilityError('invalid_availability_snapshot')
         code, exponent = self.currency_code, self.currency_minor_unit_exponent
         if (code is None) != (exponent is None):
             raise AvailabilityError('invalid_availability_snapshot')
@@ -113,8 +130,28 @@ class AvailabilitySnapshot:
             if any(minutes(a.end_time, end=True) > minutes(b.start_time) for a, b in zip(ordered, ordered[1:])):
                 raise AvailabilityError('invalid_availability_snapshot')
 
-    def provenance(self):
+    def provenance(self, as_of_utc_ms: int | None = None):
+        data_state = 'synthetic' if self.simulation else (
+            'historical_unverified' if self.captured_at_utc_ms is not None else 'normalized_unverified'
+        )
+        freshness = (
+            ('synthetic' if self.simulation else 'not_evaluated' if self.captured_at_utc_ms is not None else 'unknown')
+            if as_of_utc_ms is None else self.freshness_state(as_of_utc_ms)
+        )
         return {'source': self.source, 'simulation': self.simulation,
                 'trust_state': 'synthetic' if self.simulation else 'normalized_unverified',
+                'data_state': data_state, 'freshness_state': freshness,
                 'target_date': self.target_date, 'timezone_name': self.timezone_name,
-                'venue_name': self.venue_name, 'venue_semantic_key': self.venue_semantic_key}
+                'venue_name': self.venue_name, 'venue_semantic_key': self.venue_semantic_key,
+                'catalog_version': self.catalog_version,
+                'captured_at_utc_ms': self.captured_at_utc_ms,
+                'valid_until_utc_ms': self.valid_until_utc_ms}
+
+    def freshness_state(self, now_utc_ms: int) -> str:
+        if type(now_utc_ms) is not int or now_utc_ms < 0:
+            raise AvailabilityError('invalid_availability_snapshot')
+        if self.simulation:
+            return 'synthetic'
+        if self.captured_at_utc_ms is None:
+            return 'unknown'
+        return 'stale' if now_utc_ms >= self.valid_until_utc_ms else 'within_declared_window'

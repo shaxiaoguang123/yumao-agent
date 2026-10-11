@@ -27,7 +27,7 @@ SORT_ORDER = ['preferred_start_priority', 'court_preference_priority', 'shift_di
 
 class AvailabilityMatcher:
     """Pure matching; exact starts precede all authorized shifts. Price is a filter, not a sort key."""
-    def match(self, plan: dict, snapshot: AvailabilitySnapshot) -> dict:
+    def match(self, plan: dict, snapshot: AvailabilitySnapshot, *, as_of_utc_ms: int | None = None) -> dict:
         if type(snapshot) is not AvailabilitySnapshot:
             raise AvailabilityError('invalid_availability_snapshot')
         try:
@@ -37,7 +37,7 @@ class AvailabilityMatcher:
             intent = parse_manual_intent(plan['intent'], today_business_date=date.min, context=context).value['intent']
         except (KeyError, TypeError, ValueError, IntentValidationError):
             raise AvailabilityError('invalid_matching_plan') from None
-        provenance = snapshot.provenance()
+        provenance = snapshot.provenance(as_of_utc_ms)
         result = {'candidates': [], 'rejections': [], 'reason_summary': [], 'source': provenance,
                   'sort_order': SORT_ORDER.copy(), 'total_candidates': 0, 'candidates_truncated': False,
                   'rejections_truncated': False, 'can_book': False, 'can_pay': False, 'can_create_job': False,

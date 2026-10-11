@@ -26,7 +26,7 @@ class SimulationAvailabilityService:
         snapshot = self.source.snapshot(plan, scenario)
         if snapshot.simulation is not True:
             raise AvailabilityError('simulation_source_invalid', 503)
-        result = self.matcher.match(plan, snapshot)
+        result = self.matcher.match(plan, snapshot, as_of_utc_ms=now)
         # Do not silently present results after a concurrently advanced revision.
         if self.plans.get_plan(user_id, plan_id, now)['version'] != base_version:
             raise PlanError('plan_version_conflict', 409)

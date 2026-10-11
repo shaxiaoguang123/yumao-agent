@@ -53,6 +53,7 @@ class PlansApiTests(unittest.TestCase):
 
     def test_security_session_csrf_and_origin(self):
         self.assertEqual(self.app.test_client().get('/api/plans').status_code,401)
+        self.assertEqual(self.app.test_client().get('/api/plans/options').status_code,401)
         self.assertEqual(self.a.post('/api/plans',json={'intent':draft()},headers={'Origin':ORIGIN}).status_code,403)
         self.assertEqual(self.a.post('/api/plans',json={'intent':draft()},headers={**self.headers['a'],'Origin':'https://wrong.invalid'}).status_code,403)
         self.assertEqual(self.app.test_client().get('/api/booking-window?target_date=2026-10-12').status_code,401)
@@ -112,7 +113,14 @@ class PlansApiTests(unittest.TestCase):
         response=self.a.get('/api/plans/options').get_json()
         self.assertEqual(response['catalog_status'],'not_configured')
         self.assertEqual(response['venues'],[])
+        self.assertIsNone(response['catalog_version'])
+        self.assertEqual(response['source_state'],'protocol_evidence_partial')
+        self.assertEqual(response['capabilities'],{'display':False,'plan_binding':False,'historical_availability':False,'live_availability':False})
+        self.assertFalse(response['evidence_readiness']['venue_catalog'])
+        self.assertFalse(response['evidence_readiness']['recorded_availability'])
+        self.assertNotIn('nodeid',response)
         self.assertIsNone(response['context']['catalog_version'])
+        self.network.assert_not_called()
         for query in ('target_date=bad','target_date=0001-01-01','nodeid=bad','target_date=2026-10-12&target_date=2026-10-13'):
             self.assertEqual(self.a.get('/api/booking-window?'+query).status_code,400)
         self.assertEqual(self.a.get('/api/plans/options?catalog_version=fake').status_code,400)

@@ -129,6 +129,28 @@ class AvailabilityMatcherTests(unittest.TestCase):
         self.assertEqual(result['source']['trust_state'],'normalized_unverified')
         for flag in ('can_book','can_pay','can_create_job','can_query_upstream'): self.assertIs(result[flag],False)
 
+    def test_recorded_provenance_keeps_catalog_capture_and_expiry_without_becoming_live(self):
+        recorded=snapshot(hourly(),simulation=False,source='local-recording',venue_semantic_key='test-venue',
+                          catalog_version='catalog-test-v1',captured_at_utc_ms=1000,valid_until_utc_ms=2000)
+        result=self.matcher.match(plan(),recorded,as_of_utc_ms=2000)
+        self.assertEqual(result['source']['catalog_version'],'catalog-test-v1')
+        self.assertEqual(result['source']['captured_at_utc_ms'],1000)
+        self.assertEqual(result['source']['valid_until_utc_ms'],2000)
+        self.assertEqual(result['source']['data_state'],'historical_unverified')
+        self.assertEqual(result['source']['freshness_state'],'stale')
+        self.assertEqual(recorded.freshness_state(2000),'stale')
+        self.assertEqual(recorded.freshness_state(1999),'within_declared_window')
+        for flag in ('can_book','can_pay','can_create_job','can_query_upstream'): self.assertFalse(result[flag])
+
+    def test_recorded_provenance_rejects_incomplete_or_ambiguous_timestamp_contract(self):
+        with self.assertRaises(AvailabilityError):
+            snapshot(hourly(),simulation=False,captured_at_utc_ms=1000)
+        with self.assertRaises(AvailabilityError):
+            snapshot(hourly(),simulation=True,captured_at_utc_ms=1000,valid_until_utc_ms=2000)
+        with self.assertRaises(AvailabilityError):
+            snapshot(hourly(),simulation=False,venue_semantic_key='test-venue',catalog_version='v1',
+                     captured_at_utc_ms=2000,valid_until_utc_ms=1000)
+
     def test_local_clock_contract_rejects_dst_gaps_folds_and_offset_change_days(self):
         for target in ('2026-03-08','2026-11-01'):
             with self.assertRaises(AvailabilityError) as failure:
