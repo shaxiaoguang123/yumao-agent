@@ -29,19 +29,21 @@ def _unique_object(pairs):
     return result
 
 
-def _body(required_fields: set[str]) -> dict:
-    if request.content_length is not None and request.content_length > MAX_PLAN_BODY_BYTES:
+def _body(required_fields: set[str], optional_fields: set[str] | None = None, *, max_body_bytes=MAX_PLAN_BODY_BYTES) -> dict:
+    if request.content_length is not None and request.content_length > max_body_bytes:
         raise PlanError("request_too_large", 413)
     if request.mimetype != "application/json":
         raise PlanError("invalid_request", 400)
-    raw = request.stream.read(MAX_PLAN_BODY_BYTES + 1)
-    if len(raw) > MAX_PLAN_BODY_BYTES:
+    raw = request.stream.read(max_body_bytes + 1)
+    if len(raw) > max_body_bytes:
         raise PlanError("request_too_large", 413)
     try:
         body = json.loads(raw.decode("utf-8", errors="strict"), object_pairs_hook=_unique_object, parse_constant=_reject_constant)
     except (UnicodeDecodeError, ValueError, RecursionError):
         raise PlanError("invalid_request", 400) from None
-    if type(body) is not dict or body.keys() != required_fields:
+    optional_fields = optional_fields or set()
+    if (type(body) is not dict or not required_fields.issubset(body)
+            or body.keys() - required_fields - optional_fields):
         raise PlanError("invalid_request", 400)
     return body
 

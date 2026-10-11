@@ -2,31 +2,66 @@
 import { computed, nextTick, ref, shallowRef, useTemplateRef, watch } from 'vue';
 import { copy, decimalToMinor, minorToDecimal } from '../../utils/planForm.js';
 import VenueTimeGrid from './VenueTimeGrid.vue';
-const props=defineProps({source:{type:Object,required:true},busy:Boolean,saveBlocked:Boolean,fields:{type:Object,default:()=>({})},gridApi:{type:Object,default:null}});
-const emit=defineEmits(['save','cancel','target-change']);
+const props=defineProps({source:{type:Object,required:true},busy:Boolean,saveBlocked:Boolean,fields:{type:Object,default:()=>({})},gridApi:{type:Object,default:null},sessionKey:{type:String,default:''}});
+const emit=defineEmits(['save','cancel','target-change','draft-change']);
 const form=ref(copy(props.source.intent)), courtsText=shallowRef(''), priceText=shallowRef(''), localError=shallowRef('');
 const rangeStart=shallowRef(''), rangeEnd=shallowRef('');
-const pendingGridSelection=shallowRef(null);
+const pendingGridSelection=ref(null),gridReviewMessage=shallowRef('');
 const currentCourts=computed(()=>courtsText.value.split('\n').map(value=>value.trim()).filter(Boolean));
 const summary=useTemplateRef('errorSummary');
-watch(()=>props.source,source=>{form.value=copy(source.intent);courtsText.value=form.value.court_preferences.join('\n');priceText.value=minorToDecimal(form.value.price_ceiling_minor,source.context.currency_minor_unit_exponent);rangeStart.value=form.value.fallback_policy.allowed_start_time_range?.start||'';rangeEnd.value=form.value.fallback_policy.allowed_start_time_range?.end||'';localError.value='';pendingGridSelection.value=null;},{immediate:true});
+watch(()=>props.source,source=>{
+ const restored=source.draftState;
+ if(restored){form.value=copy(restored.form);courtsText.value=restored.courtsText;priceText.value=restored.priceText;rangeStart.value=restored.rangeStart;rangeEnd.value=restored.rangeEnd;}
+ else{form.value=copy(source.intent);courtsText.value=form.value.court_preferences.join('\n');priceText.value=minorToDecimal(form.value.price_ceiling_minor,source.context.currency_minor_unit_exponent);rangeStart.value=form.value.fallback_policy.allowed_start_time_range?.start||'';rangeEnd.value=form.value.fallback_policy.allowed_start_time_range?.end||'';}
+ localError.value='';pendingGridSelection.value=null;gridReviewMessage.value='';
+},{immediate:true,flush:'sync'});
 watch(()=>form.value.target_date,date=>{pendingGridSelection.value=null;emit('target-change',date);},{immediate:true});
-watch(()=>[form.value.duration_minutes,form.value.venue_preference,courtsText.value],()=>{pendingGridSelection.value=null;});
+const gridContextKey=computed(()=>JSON.stringify({
+ source_plan:props.source.planId,base_version:props.source.baseVersion,session:props.sessionKey,blocked:props.saveBlocked,
+ target_date:form.value.target_date,preferred_start_times:form.value.preferred_start_times,
+ duration_minutes:form.value.duration_minutes,venue_preference:form.value.venue_preference,
+ court_preferences:courtsText.value,fallback_policy:form.value.fallback_policy,range_start:rangeStart.value,range_end:rangeEnd.value,
+ price:priceText.value,
+}));
+function currentDraftState(){return {form:copy(form.value),courtsText:courtsText.value,priceText:priceText.value,rangeStart:rangeStart.value,rangeEnd:rangeEnd.value};}
+watch(gridContextKey,()=>{
+ emit('draft-change',currentDraftState());
+ if(pendingGridSelection.value){pendingGridSelection.value=null;gridReviewMessage.value='表单内容已变化，请重新生成并确认网格选择。';}
+},{flush:'sync'});
 watch(()=>props.fields,async()=>{if(Object.keys(props.fields).length){await nextTick();summary.value?.focus();}});
 function moveTime(index,delta){const times=form.value.preferred_start_times;[times[index],times[index+delta]]=[times[index+delta],times[index]];}
 function reviewGridSelection(selection){
  if(props.busy||props.saveBlocked)return;
- pendingGridSelection.value={...selection,previous:{target_date:form.value.target_date,preferred_start_times:[...form.value.preferred_start_times],duration_minutes:form.value.duration_minutes,court_preferences:[...currentCourts.value]}};
+ pendingGridSelection.value={...selection,mode:'strict',previous:{target_date:form.value.target_date,preferred_start_times:[...form.value.preferred_start_times],duration_minutes:form.value.duration_minutes,court_preferences:[...currentCourts.value],fallback_policy:currentFallback(),price:priceText.value}};
+ gridReviewMessage.value='';
 }
 function cancelGridSelection(){pendingGridSelection.value=null;}
+function currentFallback(){
+ return {allow_any_court_in_venue:form.value.fallback_policy.allow_any_court_in_venue,
+  allow_time_shift:form.value.fallback_policy.allow_time_shift,
+  allowed_start_time_range:form.value.fallback_policy.allow_time_shift?{start:rangeStart.value,end:rangeEnd.value}:null};
+}
+const proposedFallback=computed(()=>pendingGridSelection.value?.mode==='preserve'
+ ? copy(pendingGridSelection.value.previous.fallback_policy)
+ : {allow_any_court_in_venue:false,allow_time_shift:false,allowed_start_time_range:null});
+function fallbackSummary(value){
+ const courts=value.allow_any_court_in_venue?'允许考虑同场馆其他场地':'不扩展到其他场地';
+ const time=value.allow_time_shift?`允许开始时间在 ${value.allowed_start_time_range?.start||'未填写'}～${value.allowed_start_time_range?.end||'未填写'} 浮动`:'不允许额外时间浮动';
+ return `${courts}；${time}`;
+}
 function confirmGridSelection(){
  const selection=pendingGridSelection.value;if(!selection||props.busy||props.saveBlocked)return;
+ const nextFallback=proposedFallback.value;
  pendingGridSelection.value=null;
  form.value.target_date=selection.target_date;
  form.value.duration_minutes=selection.duration_minutes;
  form.value.preferred_start_times=[selection.start_time];
  courtsText.value=selection.court_preferences.join('\n');
+ form.value.fallback_policy=copy(nextFallback);
+ rangeStart.value=nextFallback.allowed_start_time_range?.start||'';
+ rangeEnd.value=nextFallback.allowed_start_time_range?.end||'';
  localError.value='';
+ gridReviewMessage.value='';
 }
 async function submit(){
  if(props.busy||props.saveBlocked)return;
@@ -65,12 +100,27 @@ async function submit(){
     </div>
     <label class="field">场馆名称或描述（人工偏好）<input id="plan-venue_preference" v-model="form.venue_preference" name="venue_preference" maxlength="200" required :aria-invalid="Boolean(fields.venue_preference)" /><small v-if="fields.venue_preference" class="form-error">{{ fields.venue_preference }}</small></label>
     <label class="field">场地偏好（人工输入，每行一项）<textarea id="plan-court_preferences" v-model="courtsText" name="court_preferences" rows="3" :aria-invalid="Boolean(fields.court_preferences)" /><small class="muted">最多 16 项，每项 100 字；顺序代表你的偏好，不关联上游场地 ID。</small><small v-if="fields.court_preferences" class="form-error">{{ fields.court_preferences }}</small></label>
-    <VenueTimeGrid v-if="gridApi" :api="gridApi" :target-date="form.target_date" :duration-minutes="form.duration_minutes" :venue-preference="form.venue_preference" :court-preferences="currentCourts" @update:target-date="form.target_date=$event" @apply="reviewGridSelection" />
+    <VenueTimeGrid v-if="gridApi" :api="gridApi" :target-date="form.target_date" :duration-minutes="form.duration_minutes" :venue-preference="form.venue_preference" :court-preferences="currentCourts" :timezone-name="source.context.timezone_name" :selection-context-key="gridContextKey" @update:target-date="form.target_date=$event" @apply="reviewGridSelection" />
+    <p v-if="gridReviewMessage" class="form-error" role="status">{{ gridReviewMessage }}</p>
     <section v-if="pendingGridSelection" class="grid-apply-confirmation" data-testid="grid-apply-confirmation" aria-label="确认应用网格意向">
      <h3>确认应用网格意向</h3>
-     <p class="muted">这只会更新下方未保存表单。点击“保存预约意向”后才会创建 PlanRevision；网格数据仍是合成示例。</p>
-     <dl><dt>当前偏好</dt><dd>{{ pendingGridSelection.previous.target_date }} · {{ pendingGridSelection.previous.preferred_start_times.join(' → ') }} · {{ pendingGridSelection.previous.court_preferences.join('、')||'未填写场地' }}</dd><dt>网格选择</dt><dd>{{ pendingGridSelection.target_date }} · {{ pendingGridSelection.start_time }} · {{ pendingGridSelection.duration_minutes }} 分钟 · {{ pendingGridSelection.court_preferences.join('、') }}</dd></dl>
-     <div class="plan-actions"><button data-testid="confirm-grid-selection" class="primary-button" type="button" :disabled="busy||saveBlocked" @click="confirmGridSelection">确认替换表单偏好</button><button class="secondary-button" type="button" :disabled="busy" @click="cancelGridSelection">取消</button></div>
+     <p class="muted">这只会更新下方未保存表单。点击“保存预约意向”后才会创建 PlanRevision；不会同时预约多块场地。</p>
+     <dl>
+      <dt>原日期／时间／时长</dt><dd>{{ pendingGridSelection.previous.target_date }} · {{ pendingGridSelection.previous.preferred_start_times.join(' → ') }} · {{ pendingGridSelection.previous.duration_minutes }} 分钟</dd>
+      <dt>新日期／时间／时长</dt><dd>{{ pendingGridSelection.target_date }} · {{ pendingGridSelection.start_time }}～{{ pendingGridSelection.end_time }} · {{ pendingGridSelection.duration_minutes }} 分钟</dd>
+      <dt>原场地顺序</dt><dd>{{ pendingGridSelection.previous.court_preferences.join(' → ')||'未填写场地' }}</dd>
+      <dt>新场地顺序</dt><dd>{{ pendingGridSelection.court_preferences.join(' → ') }}</dd>
+      <dt>原备用策略</dt><dd>原来允许同场馆其他场地：{{ pendingGridSelection.previous.fallback_policy.allow_any_court_in_venue?'是':'否' }}；原时间浮动：{{ pendingGridSelection.previous.fallback_policy.allow_time_shift?`${pendingGridSelection.previous.fallback_policy.allowed_start_time_range?.start||'未填写'}～${pendingGridSelection.previous.fallback_policy.allowed_start_time_range?.end||'未填写'}`:'关闭' }}</dd>
+      <dt>拟保存备用策略</dt><dd data-testid="grid-proposed-fallback">{{ pendingGridSelection.mode==='preserve'?'拟保存保留原备用策略':'拟保存不允许额外场地或时间浮动' }} · {{ fallbackSummary(proposedFallback) }}</dd>
+      <dt>原价格上限</dt><dd>{{ pendingGridSelection.previous.price||'未设置' }} {{ source.context.currency_code||'' }}；价格上限保持不变</dd>
+      <dt>新价格上限</dt><dd>{{ pendingGridSelection.previous.price||'未设置' }} {{ source.context.currency_code||'' }}；不自动提高或取消</dd>
+     </dl>
+     <fieldset class="grid-mode-options" :disabled="busy">
+      <legend>选择本次应用的备用范围</legend>
+      <label class="plan-checkbox"><input v-model="pendingGridSelection.mode" data-testid="grid-mode-strict" type="radio" value="strict" />严格按照本次网格选择（默认）：只按已确认顺序尝试所选场地，不扩展场地，不浮动时间。</label>
+      <label class="plan-checkbox"><input v-model="pendingGridSelection.mode" data-testid="grid-mode-preserve" type="radio" value="preserve" />保留原计划额外备用策略：{{ fallbackSummary(pendingGridSelection.previous.fallback_policy) }}</label>
+     </fieldset>
+     <div class="plan-actions"><button data-testid="confirm-grid-selection" class="primary-button" type="button" :disabled="busy||saveBlocked" @click="confirmGridSelection">确认应用到未保存表单</button><button data-testid="cancel-grid-selection" class="secondary-button" type="button" :disabled="busy" @click="cancelGridSelection">取消，不修改表单</button></div>
     </section>
     <div id="plan-fallback_policy" class="form-stack">
      <h3>基本备用策略</h3>

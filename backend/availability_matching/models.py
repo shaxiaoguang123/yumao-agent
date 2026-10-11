@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from backend.plans.validation import parse_target_date, IntentValidationError
 
 MAX_MINOR = 9007199254740991
+DISPLAY_STATES = frozenset({"selectable", "reserved", "activity_occupied", "unbookable", "unknown"})
 
 
 class AvailabilityError(ValueError):
@@ -43,6 +44,8 @@ class AvailabilitySlot:
     end_time: str
     status: str  # available / unavailable / unknown; no upstream status-code assumptions
     price_minor: int | None = None
+    display_state: str | None = None
+    display_label: str | None = None
 
     def __post_init__(self):
         _text(self.court_name, 100)
@@ -51,6 +54,12 @@ class AvailabilitySlot:
         if self.status not in ('available', 'unavailable', 'unknown'):
             raise AvailabilityError('invalid_availability_snapshot')
         if self.price_minor is not None and (type(self.price_minor) is not int or not 0 <= self.price_minor <= MAX_MINOR):
+            raise AvailabilityError('invalid_availability_snapshot')
+        if self.display_state is not None and self.display_state not in DISPLAY_STATES:
+            raise AvailabilityError('invalid_availability_snapshot')
+        if self.display_label is not None:
+            _text(self.display_label, 40)
+        if (self.display_state == 'activity_occupied') != (self.display_label is not None):
             raise AvailabilityError('invalid_availability_snapshot')
 
 
@@ -68,6 +77,7 @@ class AvailabilitySnapshot:
     catalog_version: str | None = None
     captured_at_utc_ms: int | None = None
     valid_until_utc_ms: int | None = None
+    time_bands: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self):
         try:
@@ -95,6 +105,18 @@ class AvailabilitySnapshot:
         _text(self.source, 100)
         if type(self.simulation) is not bool or type(self.slots) is not tuple or len(self.slots) > 2048:
             raise AvailabilityError('invalid_availability_snapshot')
+        if type(self.time_bands) is not tuple or len(self.time_bands) > 144:
+            raise AvailabilityError('invalid_availability_snapshot')
+        previous_end = -1
+        band_keys = set()
+        for band in self.time_bands:
+            if type(band) is not tuple or len(band) != 2:
+                raise AvailabilityError('invalid_availability_snapshot')
+            start, end = minutes(band[0]), minutes(band[1], end=True)
+            if start >= end or start < previous_end or (band[0], band[1]) in band_keys:
+                raise AvailabilityError('invalid_availability_snapshot')
+            previous_end = end
+            band_keys.add((band[0], band[1]))
         if self.venue_semantic_key is not None:
             _text(self.venue_semantic_key, 100)
         if self.catalog_version is not None:
@@ -120,6 +142,8 @@ class AvailabilitySnapshot:
         by_court = {}
         for slot in self.slots:
             if type(slot) is not AvailabilitySlot:
+                raise AvailabilityError('invalid_availability_snapshot')
+            if self.time_bands and (slot.start_time, slot.end_time) not in band_keys:
                 raise AvailabilityError('invalid_availability_snapshot')
             by_court.setdefault(slot.court_name, []).append(slot)
         if len(by_court) > 32:

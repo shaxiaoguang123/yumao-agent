@@ -40,6 +40,6 @@ def simulate(plan_id):
 @require_session
 @require_csrf
 def preview_grid():
-    body = _body({'target_date', 'duration_minutes', 'venue_preference', 'court_preferences'})
+    body = _body({'target_date', 'duration_minutes', 'venue_preference', 'court_preferences'}, {'scenario'})
     return jsonify(current_app.extensions['availability_simulation_service'].preview_grid(
         body, time.time_ns() // 1_000_000))

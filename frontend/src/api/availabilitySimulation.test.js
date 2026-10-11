@@ -12,4 +12,10 @@ describe('simulation API',()=>{
   expect(client.request).toHaveBeenCalledWith('/api/availability/simulation/grid',{method:'POST',body:manual});
   expect(JSON.stringify(client.request.mock.calls[0][1].body)).not.toMatch(/nodeid|coordinate|timeIndex|courtIndex|token/i);
  });
+ it('sends a user-selected historical response only to the read-only preview endpoint',async()=>{
+  const client={request:vi.fn(async()=>({}))};const api=createAvailabilitySimulationApi(client);
+  const response={success:true,resultData:{stepnumber:'1'}};
+  await api.historyPreview(response);
+  expect(client.request).toHaveBeenCalledWith('/api/availability/history/preview',{method:'POST',body:{response}});
+ });
 });
