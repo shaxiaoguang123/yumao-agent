@@ -40,11 +40,11 @@ export function usePlans(api, session) {
     suspendedDraft={userId:session.user.user_id,source:copy(source.value)};
     windowState.value=plan.booking_window;windowError.value='';
   }
-  function startNew() {
+  function startNew(targetDate=defaultWindow.value?.default_target_date) {
     if(!canCreate.value)return;
     sourceSelectionSequence++;
     windowSequence++;clearFeedback();
-    source.value={planId:null,baseVersion:null,intent:newIntent(defaultWindow.value.default_target_date),context:copy(context.value)};
+    source.value={planId:null,baseVersion:null,intent:newIntent(targetDate),context:copy(context.value)};
     suspendedDraft={userId:session.user.user_id,source:copy(source.value)};
     windowState.value=null;windowError.value='';
   }
@@ -133,7 +133,7 @@ export function usePlans(api, session) {
     }
   },{immediate:true,flush:'sync'});
   onBeforeUnmount(()=>{alive=false;epoch++;clearAll();});
-  return {plans,context,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain,rememberDraft};
+  return {plans,context,defaultWindow,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain,rememberDraft};
 }
 
 function typeOfDraft(value){return value&&typeof value==='object'&&!Array.isArray(value)?'object':typeof value;}

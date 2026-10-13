@@ -6,13 +6,48 @@ import { context, intent, plan, windowState } from '../components/plans/testFixt
 enableAutoUnmount(afterEach);
 const clone=(v)=>structuredClone(v);
 function apiFixture(overrides={}) { return {list:vi.fn(async()=>({plans:[plan()]})),options:vi.fn(async()=>({catalog_status:'not_configured',catalog_version:null,source_state:'protocol_evidence_partial',venues:[],capabilities:{display:false,plan_binding:false,historical_availability:false,live_availability:false},evidence_readiness:{venue_directory_display:false,venue_catalog:false,plan_binding:false,recorded_availability:false,price_aware_matching:false,live_read_only_query:false},blocking_evidence:['client_version_association','venue_list_response','venue_name_to_parent_scope'],binding_blocking_evidence:['client_version_association','venue_list_response','venue_name_to_parent_scope','court_to_venue_association'],availability_blocking_evidence:['client_version_association','venue_list_response','venue_name_to_parent_scope','court_to_venue_association','booking_by_time_scope_response_association','booking_by_time_response_structure','availability_status_semantics','conflict_list_semantics','time_atom_duration_continuity'],context:clone(context)})),window:vi.fn(async()=>clone(windowState)),get:vi.fn(async()=>({plan:plan(2,{venue_preference:'另一个窗口保存'})})),create:vi.fn(async(value)=>({plan:plan(1,value)})),update:vi.fn(async(_id,_version,value)=>({plan:plan(2,value)})),revisions:vi.fn(async()=>({revisions:[{...plan(2),revision_number:2,revision_id:'revision-2'},{...plan(),revision_number:1,revision_id:'revision-1'}]})),...overrides}; }
-async function mountView(api=apiFixture(),availabilityApi=null,extraProvide={}) { const m=await import('./PlansView.vue').catch(()=>null);expect(m).not.toBeNull();const session=reactive({status:'authenticated',user:{user_id:'a',username:'Alice'},csrfToken:'csrf-a',refresh:vi.fn()});const wrapper=mount(m.default,{global:{provide:{planApi:api,sessionStore:session,availabilitySimulationApi:availabilityApi,...extraProvide}}});await flushPromises();return {wrapper,api,session,availabilityApi}; }
+async function mountView(api=apiFixture(),availabilityApi=null,extraProvide={}) { const m=await import('./PlansView.vue').catch(()=>null);expect(m).not.toBeNull();const session=reactive({status:'authenticated',user:{user_id:'a',username:'Alice'},csrfToken:'csrf-a',refresh:vi.fn()});const wrapper=mount(m.default,{global:{stubs:{RouterLink:{template:"<a><slot /></a>"}},provide:{planApi:api,sessionStore:session,availabilitySimulationApi:availabilityApi,...extraProvide}}});await flushPromises();return {wrapper,api,session,availabilityApi}; }
 async function newDraft(wrapper) {await wrapper.get('[data-testid="new-plan"]').trigger('click');await flushPromises();await wrapper.get('[name="venue_preference"]').setValue('周末人工意向');await wrapper.get('[name="court_preferences"]').setValue('6号场\n5号场');await wrapper.get('[name="target_date"]').setValue('2026-10-20');await flushPromises();}
 async function edit(wrapper) { await wrapper.get('[data-testid="edit-plan"]').trigger('click');await flushPromises(); }
 function gridFixture(){return {options:vi.fn(async()=>({enabled:false,grid_preview_enabled:true,grid_scenarios:[{id:'partially_occupied',name:'部分占用'}]})),gridPreview:vi.fn(async(payload)=>({grid_version:'venue-time-grid-v2',simulation:true,source:{source:`synthetic-v1:${payload.scenario}`,simulation:true,data_state:'synthetic',trust_state:'synthetic'},scenario:payload.scenario,notice:'合成预览',target_date:payload.target_date,timezone_name:'Asia/Shanghai',venue:{display_name:payload.venue_preference,verification:'unverified_manual'},atom_minutes:30,duration_minutes:payload.duration_minutes,courts:payload.court_preferences.map(display_name=>({display_name,verification:'unverified_manual'})),rows:Array.from({length:12},(_,row)=>({start_time:`${String(17+Math.floor(row/2)).padStart(2,'0')}:${row%2?'30':'00'}`,end_time:`${String(17+Math.floor(row/2)+(row%2)).padStart(2,'0')}:${row%2?'00':'30'}`,cells:payload.court_preferences.map(()=>({state:row<8?'selectable':'unknown',selectable:row<8,reason_code:row<8?'synthetic_selectable':'synthetic_unknown',category_label:null}))})),can_query_upstream:false,can_book:false,can_pay:false,can_create_job:false})),match:vi.fn()};}
 async function chooseGridBlock(wrapper){await wrapper.get('[data-testid="grid-load"]').trigger('click');await flushPromises();for(const row of [0,1,2,3])await wrapper.get(`[data-testid="grid-cell-${row}-0"]`).trigger('click');await wrapper.get('[data-testid="grid-add-backup-1"]').trigger('click');await flushPromises();}
 
 describe('manual plans page',()=>{
+ it('opens manual view on the server third day and starts an intent on an explicitly chosen earlier day',async()=>{
+  const {wrapper,api}=await mountView();
+  expect(wrapper.get('#plan-panel-manual').isVisible()).toBe(true);
+  expect(wrapper.get('#plan-panel-current').isVisible()).toBe(false);
+  expect(wrapper.get('[data-testid="browse-date-2"]').attributes('aria-pressed')).toBe('true');
+  await wrapper.get('[data-testid="browse-date-0"]').trigger('click');
+  expect(wrapper.get('[data-testid="browse-date-0"]').attributes('aria-pressed')).toBe('true');
+  expect(api.create).not.toHaveBeenCalled();
+  await wrapper.get('[data-testid="manual-create"]').trigger('click');await flushPromises();
+  expect(wrapper.get('[name="target_date"]').element.value).toBe(windowState.queryable_target_dates[0]);
+  await wrapper.get('[data-testid="browse-date-1"]').trigger('click');
+  expect(wrapper.get('[name="target_date"]').element.value).toBe(windowState.queryable_target_dates[1]);
+  await wrapper.get('[data-testid="browse-more-date"]').setValue('');
+  expect(wrapper.get('[name="target_date"]').element.value).toBe('');
+ });
+ it('retains the manual draft and agent text while switching between all three sections',async()=>{
+  const {wrapper}=await mountView(apiFixture(),null,{planningProposalApi:{generate:vi.fn()}});
+  await newDraft(wrapper);
+  await wrapper.get('[data-testid="plan-tab-agent"]').trigger('click');
+  await wrapper.get('[data-testid="proposal-message"]').setValue('保留我正在补充的预约需求');
+  await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');
+  expect(wrapper.get('#plan-panel-current').isVisible()).toBe(true);
+  await wrapper.get('[data-testid="plan-tab-manual"]').trigger('click');
+  expect(wrapper.get('[name="venue_preference"]').element.value).toBe('周末人工意向');
+  expect(wrapper.get('[name="target_date"]').element.value).toBe('2026-10-20');
+  await wrapper.get('[data-testid="plan-tab-agent"]').trigger('click');
+  expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('保留我正在补充的预约需求');
+ });
+ it('supports arrow-key navigation and exposes tab selection to assistive technology',async()=>{
+  const {wrapper}=await mountView();
+  await wrapper.get('[data-testid="plan-tab-manual"]').trigger('keydown',{key:'ArrowRight'});
+  expect(wrapper.get('[data-testid="plan-tab-agent"]').attributes('aria-selected')).toBe('true');
+  await wrapper.get('[data-testid="plan-tab-agent"]').trigger('keydown',{key:'End'});
+  expect(wrapper.get('[data-testid="plan-tab-current"]').attributes('aria-selected')).toBe('true');
+ });
  it('passes the unsaved date to the independent official read-only panel',async()=>{
   const liveApi={options:vi.fn(async()=>({enabled:true})),categories:vi.fn(async()=>({data_state:'live_observed_unverified',source:'official_read_only',options:[{reference:'opaque-test-ref',label:'羽毛球',physical_venue_verified:false}]})),grid:vi.fn(async()=>null)};
   const credentialApi={list:vi.fn(async()=>({credentials:[{credential_id:'owned-credential',label:'Test',enabled:true,account_binding_state:'confirmed',requires_revalidation:false,last_confirmed_validation_state:'confirmed_valid',expiry_state:'expiry_ok'}]}))};

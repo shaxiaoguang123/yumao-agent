@@ -16,8 +16,8 @@ const observedTime = computed(() => new Intl.DateTimeFormat('zh-CN', {
 <template>
   <section class="observation-grid" data-testid="live-availability-grid" aria-labelledby="live-grid-title">
     <header class="observation-heading"><div><p class="eyebrow">官方响应 · 只读观察</p><h3 id="live-grid-title">{{ grid.query_scope.display_name }} · {{ grid.target_date }}</h3></div><span class="observation-badge">{{ expired ? '观察已过期' : '当前读取观察' }}</span></header>
-    <p class="observation-notice">{{ grid.notice }}</p>
-    <p class="muted">读取时间 {{ observedTime }}（{{ grid.timezone_name }}）。仅保留 60 秒显示新鲜度；这不是平台保证的库存有效期。价格单位尚未核验，金额已隐藏。</p>
+    <p class="observation-notice">只读观察 · 库存语义尚未核验，当前不能选格或下单。</p>
+    <p class="muted observation-time">读取时间 {{ observedTime }} · {{ grid.timezone_name }} · 价格未核验，已隐藏</p>
     <p v-if="expired" class="form-error" role="status" data-testid="live-grid-expired">观察已过期，请重新读取。旧格子仅供查看，不代表当前状态。</p>
     <div class="observation-legend" aria-label="官方观察显示状态"><span v-for="(label,state) in states" :key="state" :class="`cell-${state}`">{{ label }}</span></div>
     <div class="observation-scroll" role="region" aria-label="官方场地时间网格，只读" tabindex="0">
@@ -27,7 +27,7 @@ const observedTime = computed(() => new Intl.DateTimeFormat('zh-CN', {
         <tbody><tr v-for="(row,rowIndex) in grid.rows" :key="rowIndex"><th scope="row">{{ row.time_label }}<small>行标记 {{ row.time_status_code ?? '未知' }}</small></th><template v-if="row.time_status_code === '0'"><td v-for="(cell,courtIndex) in row.cells" :key="courtIndex"><span class="observation-cell" :class="`cell-${cell.state}`" :title="cell.label || states[cell.state]" :aria-label="`${grid.courts[courtIndex].display_name} ${row.time_label}：${states[cell.state]}`">{{ states[cell.state] }}</span></td></template><td v-else :colspan="grid.courts.length" class="muted">{{ row.time_status_code === '1' ? '官方客户端此行不展示场地格子（业务含义未核验）' : '未知行状态，不展示场地格子' }}</td></tr></tbody>
       </table>
     </div>
-    <p class="muted">“未标记占用”仅表示响应没有冲突标记。场馆归属、行标记业务含义和原子时长未核验，不能确认可预约；此观察不会参与 Matcher、保存计划或产生订单。</p>
+    <details class="observation-source-details"><summary>查看来源、过期规则和未核验字段</summary><p class="muted">{{ grid.notice }}</p><p class="muted">仅保留 60 秒显示新鲜度；这不是平台保证的库存有效期。价格单位尚未核验，金额已隐藏。“未标记占用”仅表示响应没有冲突标记。场馆归属、行标记业务含义和原子时长未核验，不能确认可预约；此观察不会参与 Matcher、保存计划或产生订单。</p></details>
   </section>
 </template>
 

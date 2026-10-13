@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, shallowRef, useTemplateRef, watch } from 'vue';
 import { copy, decimalToMinor, minorToDecimal } from '../../utils/planForm.js';
 import VenueTimeGrid from './VenueTimeGrid.vue';
-const props=defineProps({source:{type:Object,required:true},busy:Boolean,saveBlocked:Boolean,fields:{type:Object,default:()=>({})},gridApi:{type:Object,default:null},sessionKey:{type:String,default:''}});
+const props=defineProps({source:{type:Object,required:true},requestedDate:{type:String,default:''},busy:Boolean,saveBlocked:Boolean,fields:{type:Object,default:()=>({})},gridApi:{type:Object,default:null},sessionKey:{type:String,default:''}});
 const emit=defineEmits(['save','cancel','target-change','draft-change']);
 const form=ref(copy(props.source.intent)), courtsText=shallowRef(''), priceText=shallowRef(''), localError=shallowRef('');
 const rangeStart=shallowRef(''), rangeEnd=shallowRef('');
@@ -16,6 +16,7 @@ watch(()=>props.source,source=>{
  localError.value='';pendingGridSelection.value=null;gridReviewMessage.value='';
 },{immediate:true,flush:'sync'});
 watch(()=>form.value.target_date,date=>{pendingGridSelection.value=null;emit('target-change',date);},{immediate:true});
+watch(()=>props.requestedDate,date=>{if(!props.busy&&date!==form.value.target_date)form.value.target_date=date;},{flush:'sync'});
 const gridContextKey=computed(()=>JSON.stringify({
  source_plan:props.source.planId,base_version:props.source.baseVersion,session:props.sessionKey,blocked:props.saveBlocked,
  target_date:form.value.target_date,preferred_start_times:form.value.preferred_start_times,
