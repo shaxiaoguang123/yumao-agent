@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import date
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from backend.availability_matching.models import AvailabilityError
 
@@ -14,8 +15,8 @@ _MAX_ROWS = 48
 _MAX_CONFLICTS = 4096
 
 LIVE_OBSERVATION_NOTICE = (
-    "这是刚读取的官方预约类别时段显示，只是当前只读观察；场馆归属、时间长度和可预约语义尚未核验。"
-    "所有格子均不可用于下单，过期后请重新读取。"
+    "这是官方客户端状态观察；可按显示规则选择人工意向，不是已核验库存。"
+    "相邻时间标签仅用于表达意向边界，不证明上游原子时长。不会下单，过期后请重新读取。"
 )
 
 
@@ -138,8 +139,13 @@ class OfficialBookingByTimeObservationAdapter:
                 duplicate_conflict_count += 1
             observed.add(observation)
 
+        # Mirror the client's global booking-time display gate, independently of
+        # conflict semantics. Missing fields fail closed for intent selection.
+        selection_window = _client_selection_window(result, target_date, timezone_name, captured_at_utc_ms)
         rows = []
         for row_index, (label, status_code) in enumerate(time_rows):
+            next_label = time_rows[row_index + 1][0] if row_index + 1 < len(time_rows) else None
+            intent_end = next_label if label is not None and next_label is not None and label < next_label else None
             cells = []
             for court_index in range(len(courts)):
                 observed = cell_states.get((court_index, row_index), set())
@@ -157,10 +163,16 @@ class OfficialBookingByTimeObservationAdapter:
                     # The client initializes an unmarked cell as display state 1.
                     # This is an observation only; no claim of confirmed availability is made.
                     state, reason = "observed_clear_unmarked", "no_conflict_marker_in_response"
+                    if selection_window != "open":
+                        state = "observed_unbookable" if selection_window == "closed" else "observed_unknown"
+                        reason = "official_client_booking_window_closed" if selection_window == "closed" else "official_client_booking_window_unknown"
+                activity = next(iter(observed))[1] if len(observed) == 1 else None
                 cells.append({
                     "state": state,
                     "label": _activity_label(observed) if state == "observed_activity_occupied" else None,
                     "selectable": False,
+                    "intent_selectable": state == "observed_clear_unmarked" and intent_end is not None,
+                    "activity_type": activity if state == "observed_activity_occupied" else None,
                     "reason_code": reason,
                 })
             rows.append({
@@ -168,6 +180,9 @@ class OfficialBookingByTimeObservationAdapter:
                 "client_displays_cells": status_code == "0" and label is not None,
                 "time_status_code": status_code,
                 "time_status_semantics": "unverified",
+                "intent_start_time": label,
+                "intent_end_time": intent_end,
+                "intent_interval_basis": "adjacent_observed_time_labels" if intent_end else "unknown",
                 "cells": cells,
             })
 
@@ -193,6 +208,7 @@ class OfficialBookingByTimeObservationAdapter:
                 "semantics": "official_client_ui_limit_unverified",
             },
             "diagnostics": {"duplicate_conflict_count": duplicate_conflict_count},
+            "client_selection_window": selection_window,
             "source": {
                 "source": "official-bookingByTime-live-read",
                 "data_state": "live_observed_unverified",
@@ -208,6 +224,7 @@ class OfficialBookingByTimeObservationAdapter:
                 "client_version_state": "unknown",
             },
             "can_select": False,
+            "can_select_intent": True,
             "can_match": False,
             "can_bind": False,
             "can_query_upstream": False,
@@ -215,6 +232,28 @@ class OfficialBookingByTimeObservationAdapter:
             "can_pay": False,
             "can_create_job": False,
         }
+
+
+def _client_selection_window(result: dict, target: str, zone: str, captured_at: int) -> str:
+    is_new = result.get("isNew")
+    start, end = result.get("bookingstartdate"), result.get("bookingenddate")
+    try:
+        if (type(is_new) is not bool or type(start) is not str or type(end) is not str
+                or date.fromisoformat(start).isoformat() != start or date.fromisoformat(end).isoformat() != end
+                or start > end):
+            return "unknown"
+        if not start <= target <= end:
+            return "closed"
+        if is_new and target != end:
+            return "open"
+        opening, closing = result.get("bookingstarttime"), result.get("bookingendtime")
+        if (type(opening) is not str or type(closing) is not str
+                or not _TIME.fullmatch(opening) or not _TIME.fullmatch(closing) or opening > closing):
+            return "unknown"
+        current = datetime.fromtimestamp(captured_at / 1000, timezone.utc).astimezone(ZoneInfo(zone)).strftime("%H:%M")
+        return "open" if opening <= current <= closing else "closed"
+    except (ValueError, OverflowError):
+        return "unknown"
 
 
 def _activity_label(observations: set[tuple[str, int | None]]) -> str | None:

@@ -42,11 +42,16 @@ function validateGrid(value, targetDate, selectedLabel) {
       || !Array.isArray(value.rows) || !value.rows.length || value.rows.length > 48) return false;
   return value.rows.every((row) => Array.isArray(row.cells)
     && row.cells.length === value.courts.length
-    && row.cells.every((cell) => SAFE_STATES.has(cell.state) && cell.selectable === false));
+    && row.cells.every((cell) => SAFE_STATES.has(cell.state) && cell.selectable === false
+      && (cell.intent_selectable !== true || (cell.state === 'observed_clear_unmarked' && value.client_selection_window === 'open'
+        && value.can_select_intent === true && typeof row.intent_start_time==='string' && typeof row.intent_end_time==='string'
+        && row.intent_start_time < row.intent_end_time))));
 }
 
 export function useLiveAvailability({ api, credentialApi, session, targetDate, contextKey }) {
   const enabled = ref(false);
+  const autoLoading = ref(false);
+  let readInterval = 0, nextReadAt = 0, refreshTimer = null, running = false, pending = false, reloadPending = false, scopeRenewals = 0, rateRetries = 0;
   const optionsLoading = ref(true);
   const optionsError = ref('');
   const credentials = ref([]);
@@ -119,6 +124,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
       const result = await api.options();
       if (!alive || requestEpoch !== epoch) return;
       enabled.value = result?.enabled === true;
+      readInterval = Number.isSafeInteger(result?.min_read_interval_ms) && result.min_read_interval_ms > 0 ? result.min_read_interval_ms : 0;
       if (!enabled.value) return;
       const credentialResult = await credentialApi.list();
       if (!alive || requestEpoch !== epoch) return;
@@ -136,7 +142,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
         }
       }
     } finally {
-      if (alive && requestEpoch === epoch) optionsLoading.value = false;
+      if (alive && requestEpoch === epoch) { optionsLoading.value = false; if(enabled.value && selectedCredentialId.value) refreshAvailability(); }
     }
   }
 
@@ -185,10 +191,13 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
         return;
       }
       categories.value = result.options;
-      selectedScopeReference.value = result.options[0]?.reference || '';
+      const badminton = result.options.filter(item => item.label === '羽毛球');
+      if(badminton.length !== 1){ error.value='官方目录未返回唯一的羽毛球选项，请刷新场地。'; return; }
+      selectedScopeReference.value = badminton[0].reference;
       message.value = result.notice || '官方预约类别已读取。';
     } catch (requestError) {
       if (alive && requestEpoch === epoch && sequence === categorySequence) {
+        scheduleRateRetry(requestError);
         error.value = ERROR_MESSAGES[requestError?.code]
           || (requestError?.sessionInvalid
             ? '登录状态已失效，请重新登录后再查询。'
@@ -196,6 +205,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
       }
     } finally {
       if (alive && requestEpoch === epoch && sequence === categorySequence) categoriesLoading.value = false;
+      nextReadAt = Math.max(nextReadAt, Date.now() + readInterval);
     }
   }
 
@@ -208,7 +218,6 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
     const requestEpoch = epoch;
     const sequence = ++gridSequence;
     const requestedDate = targetDate();
-    const contextAtStart = contextKey();
     const scope = selectedCategory.value;
     if (!scope) { error.value = '查询类别已失效，请重新读取。'; return; }
     gridLoading.value = true;
@@ -220,7 +229,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
         targetDate: requestedDate,
       });
       if (!alive || requestEpoch !== epoch || sequence !== gridSequence
-          || targetDate() !== requestedDate || contextKey() !== contextAtStart) return;
+          || targetDate() !== requestedDate) return;
       if (!validateGrid(result, requestedDate, scope.label)) {
         error.value = '当前观察数据格式或来源标记无效，已停止展示。';
         return;
@@ -233,6 +242,9 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
       message.value = '';
     } catch (requestError) {
       if (alive && requestEpoch === epoch && sequence === gridSequence) {
+        scheduleRateRetry(requestError);
+        if(requestError?.code==='live_query_scope_expired'){categories.value=[];selectedScopeReference.value='';if(scopeRenewals<1){scopeRenewals++;pending=true;}}
+
         error.value = ERROR_MESSAGES[requestError?.code]
           || (requestError?.sessionInvalid
             ? '登录状态已失效，请重新登录后再查询。'
@@ -240,17 +252,56 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
       }
     } finally {
       if (alive && requestEpoch === epoch && sequence === gridSequence) gridLoading.value = false;
+      nextReadAt = Math.max(nextReadAt, Date.now() + readInterval);
     }
+  }
+
+  function scheduleRateRetry(requestError){
+    const delay=requestError?.retryAfterSeconds;
+    if(requestError?.code==='upstream_rate_limited' && Number.isSafeInteger(delay) && delay>0 && delay<=900 && rateRetries<1){
+      rateRetries++;nextReadAt=Math.max(nextReadAt,Date.now()+delay*1000);pending=true;
+    }
+  }
+  function refreshAvailability({ reload = false } = {}) {
+    if(!alive || !isAuthenticated() || !enabled.value || !selectedCredentialId.value || !targetDate())return;
+    pending = true; reloadPending ||= reload; scopeRenewals=0; rateRetries=0; autoLoading.value = true;
+    if(refreshTimer !== null){clearTimeout(refreshTimer);refreshTimer=null;}
+    drainRefresh();
+  }
+  function drainRefresh(){
+    if(!pending || running || !alive || !isAuthenticated())return;
+    refreshTimer=setTimeout(async()=>{
+      refreshTimer=null;
+      if(!alive || !isAuthenticated() || !enabled.value || !targetDate()) {pending=false;autoLoading.value=false;return;}
+      pending=false;running=true;
+      try {
+        if(reloadPending || !selectedScopeReference.value){
+          reloadPending=false;
+          await loadCategories();
+          // Category read and slot read share a gate. One delayed continuation,
+          // never polling; the next date selected wins while the read is pending.
+          if(selectedScopeReference.value && !error.value)pending=true;
+        }else await queryGrid();
+      }finally{
+        running=false;
+        if(alive && pending)drainRefresh();else autoLoading.value=false;
+      }
+    },Math.max(0,nextReadAt-Date.now()));
+  }
+  function cancelRefresh(){
+    pending=false;reloadPending=false;autoLoading.value=false;
+    if(refreshTimer!==null)clearTimeout(refreshTimer);refreshTimer=null;
   }
 
   function invalidateForContext() {
     ++epoch;
+    cancelRefresh();
     clearPrivateState();
     if (isAuthenticated()) void initialize();
   }
 
-  watch(() => [targetDate(), contextKey()], (next, previous) => {
-    if (previous && (next[0] !== previous[0] || next[1] !== previous[1])) clearGrid();
+  watch(() => targetDate(), (next, previous) => {
+    if(next!==previous){clearGrid();if(next)refreshAvailability();else cancelRefresh();}
   }, { flush: 'sync' });
 
   watch(selectedCredentialId, () => {
@@ -259,6 +310,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
     selectedScopeReference.value = '';
     categoriesLoading.value = false;
     clearGrid();
+    if(!optionsLoading.value)refreshAvailability();
   }, { flush: 'sync' });
   watch(selectedScopeReference, clearGrid, { flush: 'sync' });
 
@@ -271,6 +323,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
   onMounted(() => void initialize());
   onBeforeUnmount(() => {
     alive = false;
+    cancelRefresh();
     epoch += 1;
     categorySequence += 1;
     gridSequence += 1;
@@ -278,7 +331,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
   });
 
   return {
-    enabled, optionsLoading, optionsError, credentials, credentialsError,
+    enabled, autoLoading, refreshAvailability, optionsLoading, optionsError, credentials, credentialsError,
     eligibleCredentials, selectedCredentialId, categories, selectedScopeReference,
     selectedCategory, categoriesLoading, gridLoading, grid, gridExpired,
     error, message, initialize, refreshCredentials, loadCategories, queryGrid,

@@ -1,9 +1,9 @@
 <script setup>
-import { computed, nextTick, ref, shallowRef, useTemplateRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useTemplateRef, watch } from 'vue';
 import { copy, decimalToMinor, minorToDecimal } from '../../utils/planForm.js';
 import VenueTimeGrid from './VenueTimeGrid.vue';
 import AppIcon from '../AppIcon.vue';
-const props=defineProps({source:{type:Object,required:true},requestedDate:{type:String,default:''},busy:Boolean,saveBlocked:Boolean,fields:{type:Object,default:()=>({})},gridApi:{type:Object,default:null},sessionKey:{type:String,default:''}});
+const props=defineProps({observedSelection:{type:Object,default:null},source:{type:Object,required:true},requestedDate:{type:String,default:''},busy:Boolean,saveBlocked:Boolean,fields:{type:Object,default:()=>({})},gridApi:{type:Object,default:null},sessionKey:{type:String,default:''}});
 const emit=defineEmits(['save','cancel','target-change','draft-change']);
 const form=ref(copy(props.source.intent)), courtsText=shallowRef(''), priceText=shallowRef(''), localError=shallowRef('');
 const rangeStart=shallowRef(''), rangeEnd=shallowRef('');
@@ -37,6 +37,21 @@ function reviewGridSelection(selection){
  pendingGridSelection.value={...selection,mode:'strict',previous:{target_date:form.value.target_date,preferred_start_times:[...form.value.preferred_start_times],duration_minutes:form.value.duration_minutes,court_preferences:[...currentCourts.value],fallback_policy:currentFallback(),price:priceText.value}};
  gridReviewMessage.value='';
 }
+watch(()=>props.observedSelection,value=>{
+ if(!value)return;
+ if(value.observation_expires_at_utc_ms<=Date.now() || value.observation_timezone_name!==props.source.context.timezone_name){
+  gridReviewMessage.value='场地选择已过期或时区不一致，请重新查询。';return;
+ }
+ reviewGridSelection(value);
+},{immediate:true,flush:'post'});
+let observedExpiryTimer=null;
+watch(pendingGridSelection,value=>{
+ if(observedExpiryTimer!==null)clearTimeout(observedExpiryTimer);
+ if(value?.observation_expires_at_utc_ms)observedExpiryTimer=setTimeout(()=>{
+  if(pendingGridSelection.value===value){pendingGridSelection.value=null;gridReviewMessage.value='场地选择已过期，请重新查询并确认。';}
+ },Math.max(0,value.observation_expires_at_utc_ms-Date.now()));
+},{immediate:true,flush:'sync'});
+onBeforeUnmount(()=>{if(observedExpiryTimer!==null)clearTimeout(observedExpiryTimer);});
 function cancelGridSelection(){pendingGridSelection.value=null;}
 function currentFallback(){
  return {allow_any_court_in_venue:form.value.fallback_policy.allow_any_court_in_venue,
@@ -67,6 +82,7 @@ function fallbackSummary(value){
 }
 function confirmGridSelection(){
  const selection=pendingGridSelection.value;if(!selection||props.busy||props.saveBlocked)return;
+ if(selection.observation_expires_at_utc_ms&&selection.observation_expires_at_utc_ms<=Date.now()){pendingGridSelection.value=null;gridReviewMessage.value='场地选择已过期，请重新查询。';return;}
  const nextFallback=proposedFallback.value;
  pendingGridSelection.value=null;
  form.value.target_date=selection.target_date;

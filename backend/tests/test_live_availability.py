@@ -31,6 +31,8 @@ def envelope():
         'timeList': [{'time': '18:00', 'status': '0'}, {'time': '19:00', 'status': '0'}],
         'conflictList': ['0-0', '0-0', '1-0-3', '0-1-7'],
         'priceList': [{'x': '0', 'y': '0', 'price': 'fixture-unverified-price'}],
+        'isNew': True, 'bookingstartdate': '2026-10-13', 'bookingenddate': '2026-10-15',
+        'bookingstarttime': '00:00', 'bookingendtime': '23:59',
         'mintimeselect': '1', 'maxtimeselect': '4', 'maxAppointmentNodeNum': '2',
     }}
 
@@ -84,6 +86,30 @@ class LiveObservationAdapterTests(unittest.TestCase):
         body['resultData']['conflictList'] = []
         result = self.adapt(body)
         self.assertTrue(all(cell['state'] == 'observed_unknown' for cell in result['rows'][1]['cells']))
+
+    def test_intent_selectability_is_separate_from_inventory_and_uses_observed_boundaries(self):
+        body = envelope()
+        body['resultData']['conflictList'] = ['1-0-3']
+        result = self.adapt(body)
+        self.assertTrue(result['can_select_intent'])
+        self.assertFalse(result['can_select'])
+        self.assertTrue(result['rows'][0]['cells'][0]['intent_selectable'])
+        self.assertFalse(result['rows'][0]['cells'][1]['intent_selectable'])
+        self.assertEqual(result['rows'][0]['cells'][1]['activity_type'], 3)
+        self.assertEqual(result['rows'][0]['intent_end_time'], '19:00')
+        self.assertFalse(result['rows'][1]['cells'][0]['intent_selectable'])
+        self.assertEqual(result['source']['time_atom_state'], 'unknown')
+
+    def test_official_booking_window_closed_or_unknown_never_enables_selection(self):
+        body = envelope()
+        body['resultData']['bookingendtime'] = '19:00'
+        result = self.adapt(body)  # observed clock is 20:00 in Shanghai
+        self.assertEqual(result['client_selection_window'], 'closed')
+        self.assertTrue(all(not cell['intent_selectable'] for row in result['rows'] for cell in row['cells']))
+        body['resultData'].pop('isNew')
+        result = self.adapt(body)
+        self.assertEqual(result['client_selection_window'], 'unknown')
+        self.assertTrue(all(not cell['intent_selectable'] for row in result['rows'] for cell in row['cells']))
 
     def test_invalid_structure_and_out_of_range_conflicts_are_rejected(self):
         for mutate in (lambda data: data.update(stepnumber=3),

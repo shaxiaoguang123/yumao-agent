@@ -133,10 +133,12 @@ class OfficialReadOnlyAvailabilityService:
     def options(self) -> dict:
         return {
             "enabled": self._enabled,
+            "min_read_interval_ms": self._credentials.gate.minimum_interval_ms,
             "source": "official_read_only",
             "physical_venue_catalog_configured": False,
             "can_bind_venue": False,
             "can_select_inventory": False,
+            "can_select_intent": self._enabled,
             "can_match": False,
             "can_book": False,
             "can_pay": False,

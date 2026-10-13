@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, shallowRef, watch } from 'vue';
+import { computed, inject, nextTick, shallowRef, watch } from 'vue';
 import AppIcon from '../AppIcon.vue';
 import PlanForm from './PlanForm.vue';
 import PlanHistory from './PlanHistory.vue';
@@ -17,17 +17,27 @@ const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('p
 const simulationApi=inject('availabilitySimulationApi',null);
 const liveApi=inject('liveAvailabilityApi',null),credentialApi=inject('credentialApi',null);
 const {plans,defaultWindow,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain,rememberDraft}=usePlans(api,session);
+const observedSelection=shallowRef(null),liveRefreshKey=shallowRef(0);
 const liveDraft=shallowRef(null),activeSection=shallowRef('manual'),manualDate=shallowRef('');
 watch(defaultWindow,value=>{
  if(!value){manualDate.value='';activeSection.value='manual';}
  else if(!source.value)manualDate.value=value.default_target_date||value.queryable_target_dates?.[2]||'';
 },{flush:'sync',immediate:true});
 watch(source,value=>{
- liveDraft.value=null;
+ liveDraft.value=null;observedSelection.value=null;
  if(value){manualDate.value=value.draftState?.form?.target_date||value.intent.target_date;activeSection.value='manual';}
 },{flush:'sync'});
 function rememberLiveDraft(draft){rememberDraft(draft);liveDraft.value=draft;manualDate.value=draft.form.target_date;}
 function createManualPlan(){activeSection.value='manual';startNew(manualDate.value||undefined);}
+async function applyObservedSelection(selection){
+ if(!authorized.value||saving.value||conflict.value||uncertain.value||selection.target_date!==manualDate.value
+  ||selection.observation_expires_at_utc_ms<=Date.now())return;
+ if(!source.value)startNew(selection.target_date);
+ await nextTick();
+ if(!authorized.value||!source.value||saving.value||conflict.value||uncertain.value
+  ||selection.target_date!==manualDate.value||selection.observation_expires_at_utc_ms<=Date.now())return;
+ observedSelection.value={...selection};
+}
 const liveContextKey=computed(()=>JSON.stringify({source:source.value,draft:liveDraft.value,date:manualDate.value,conflict:conflict.value,uncertain:uncertain.value}));
 </script>
 <template>
@@ -42,10 +52,10 @@ const liveContextKey=computed(()=>JSON.stringify({source:source.value,draft:live
    <p v-if="latestError" class="form-error" role="alert">{{ latestError }}</p>
    <section v-if="latest" class="panel latest-plan" aria-label="最新版本预览"><h2>最新版本 {{ latest.version }}（独立预览）</h2><PlanSnapshotDetails :snapshot="latest" /><p class="muted">采用最新版本将替换下方未保存内容，请先比较并保留需要的文字。</p><button data-testid="adopt-latest" class="secondary-button" type="button" :disabled="saving" @click="adoptLatest">采用最新版本，替换表单</button></section>
    <section v-show="activeSection==='manual'" id="plan-panel-manual" role="tabpanel" aria-labelledby="plan-tab-manual" class="plan-workspace-section">
-    <div class="manual-layout" :class="{'is-editing':source}"><section class="manual-observation"><BookingDateStrip v-model="manualDate" :state="defaultWindow" :busy="saving" />
-    <LiveAvailabilityPanel v-if="liveApi && credentialApi" :api="liveApi" :credential-api="credentialApi" :session="session" :target-date="manualDate" :context-key="liveContextKey" />
+    <div class="manual-layout" :class="{'is-editing':source}"><section class="manual-observation"><BookingDateStrip v-model="manualDate" :state="defaultWindow" :busy="saving" @refresh="liveRefreshKey++" />
+    <LiveAvailabilityPanel v-if="liveApi && credentialApi" :api="liveApi" :credential-api="credentialApi" :session="session" :target-date="manualDate" :refresh-key="liveRefreshKey" :context-key="liveContextKey" :selection-disabled="saving || conflict || uncertain" @apply="applyObservedSelection" />
 
-    </section><div v-if="source" class="plan-edit-section"><PlanForm :source="source" :requested-date="manualDate" :busy="saving" :save-blocked="conflict || uncertain" :fields="fields" :grid-api="simulationApi" :session-key="session?.user?.user_id||''" @save="save" @cancel="cancel" @target-change="updateWindow" @draft-change="rememberLiveDraft" /><details class="window-details"><summary>日期窗口</summary><BookingWindowStatus :state="windowState" :error="windowError" /></details></div></div>
+    </section><div v-if="source" class="plan-edit-section"><PlanForm :observed-selection="observedSelection" :source="source" :requested-date="manualDate" :busy="saving" :save-blocked="conflict || uncertain" :fields="fields" :grid-api="simulationApi" :session-key="session?.user?.user_id||''" @save="save" @cancel="cancel" @target-change="updateWindow" @draft-change="rememberLiveDraft" /><details class="window-details"><summary>日期窗口</summary><BookingWindowStatus :state="windowState" :error="windowError" /></details></div></div>
     <details class="plan-reference-details"><summary aria-label="目录来源与历史数据预览" title="目录来源与历史数据预览"><AppIcon name="info" />数据资料</summary><VenueCatalogStatus v-if="catalog" :catalog="catalog" /><OfficialHistoryPreview v-if="simulationApi" :api="simulationApi" :session="session" /></details>
    </section>
    <section v-show="activeSection==='agent'" id="plan-panel-agent" role="tabpanel" aria-labelledby="plan-tab-agent" class="plan-workspace-section">

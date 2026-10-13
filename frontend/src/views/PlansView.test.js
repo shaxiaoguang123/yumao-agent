@@ -50,6 +50,23 @@ describe('manual plans page',()=>{
   expect(wrapper.get('[data-testid="add-time"]').attributes('aria-label')).toBe('添加开始时间');
   expect(wrapper.get('.plan-reference-details').attributes('open')).toBeUndefined();
  });
+ it('reviews an observed semantic selection and saves no inventory metadata',async()=>{
+  const {wrapper,api}=await mountView(apiFixture(),null,{liveAvailabilityApi:{options:vi.fn(async()=>({enabled:false}))},credentialApi:{list:vi.fn(async()=>({credentials:[]}))}});
+  await wrapper.get('[data-testid="new-plan"]').trigger('click');
+  await wrapper.get('[name="venue_preference"]').setValue('用户填写的场馆意向');
+  const selection={target_date:windowState.default_target_date,start_time:'18:00',end_time:'19:00',duration_minutes:60,court_preferences:['查询中选择的任意场'],observation_expires_at_utc_ms:Date.now()+60000,observation_timezone_name:'Asia/Shanghai'};
+  // Props/event boundary is tested here; actual cell clicks are covered by LiveAvailabilityGrid.
+  const observed={...selection};
+  wrapper.findComponent({name:'LiveAvailabilityPanel'}).vm.$emit('apply',observed);
+  await flushPromises();
+  expect(wrapper.find('[data-testid="grid-apply-confirmation"]').exists()).toBe(true);
+  expect(api.create).not.toHaveBeenCalled();
+  await wrapper.get('[data-testid="confirm-grid-selection"]').trigger('click');
+  expect(wrapper.get('[name="duration_minutes"]').element.value).toBe('60');
+  await wrapper.get('form').trigger('submit');await flushPromises();
+  expect(api.create.mock.calls[0][0].court_preferences).toEqual(['查询中选择的任意场']);
+  expect(JSON.stringify(api.create.mock.calls[0][0])).not.toContain('observation_');
+ });
  it('supports arrow-key navigation and exposes tab selection to assistive technology',async()=>{
   const {wrapper}=await mountView();
   await wrapper.get('[data-testid="plan-tab-manual"]').trigger('keydown',{key:'ArrowRight'});
@@ -61,7 +78,7 @@ describe('manual plans page',()=>{
   const liveApi={options:vi.fn(async()=>({enabled:true})),categories:vi.fn(async()=>({data_state:'live_observed_unverified',source:'official_read_only',options:[{reference:'opaque-test-ref',label:'羽毛球',physical_venue_verified:false}]})),grid:vi.fn(async()=>null)};
   const credentialApi={list:vi.fn(async()=>({credentials:[{credential_id:'owned-credential',label:'Test',enabled:true,account_binding_state:'confirmed',requires_revalidation:false,last_confirmed_validation_state:'confirmed_valid',expiry_state:'expiry_ok'}]}))};
   const {wrapper}=await mountView(apiFixture(),null,{liveAvailabilityApi:liveApi,credentialApi});
-  await newDraft(wrapper);await wrapper.get('[data-testid="load-live-categories"]').trigger('click');await flushPromises();
+  await newDraft(wrapper);await new Promise(resolve=>setTimeout(resolve,20));await flushPromises();
   expect(wrapper.get('[data-testid="live-target-date"]').text()).toBe('2026-10-20');
   await wrapper.get('[name="target_date"]').setValue('2026-10-21');await flushPromises();
   expect(wrapper.get('[data-testid="live-target-date"]').text()).toBe('2026-10-21');

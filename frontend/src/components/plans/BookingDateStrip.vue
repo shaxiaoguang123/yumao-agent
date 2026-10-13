@@ -2,8 +2,9 @@
 import { computed } from 'vue';
 import AppIcon from '../AppIcon.vue';
 const props=defineProps({state:{type:Object,default:null},modelValue:{type:String,default:''},busy:Boolean});
-const emit=defineEmits(['update:modelValue']);
+const emit=defineEmits(['update:modelValue','refresh']);
 const dates=computed(()=>(props.state?.queryable_target_dates||[]).slice(0,3));
+function choose(date){if(date===props.modelValue)emit('refresh');else emit('update:modelValue',date);}
 const labels=['今天','明天','后天'];
 function weekday(value){return new Intl.DateTimeFormat('zh-CN',{weekday:'short',timeZone:'UTC'}).format(new Date(`${value}T12:00:00Z`));}
 </script>
@@ -11,8 +12,8 @@ function weekday(value){return new Intl.DateTimeFormat('zh-CN',{weekday:'short',
  <section class="booking-date-strip" aria-label="人工查看日期">
   <p v-if="!state" class="muted" role="status">正在读取日期…</p>
   <div class="date-strip-options">
-   <button v-for="(date,index) in dates" :key="date" type="button" :data-testid="`browse-date-${index}`" :aria-pressed="modelValue===date" :disabled="busy" :title="`${date} ${weekday(date)}${index===2?'（默认）':''}`" @click="emit('update:modelValue',date)"><span>{{ labels[index] }}</span><strong>{{ date.slice(5).replace('-','/') }}</strong></button>
-   <label class="more-date" :title="state?.business_timezone_name"><AppIcon name="calendar" /><input data-testid="browse-more-date" type="date" aria-label="更多查看日期" :value="modelValue" :disabled="busy || !state" @input="emit('update:modelValue',$event.target.value)" /></label>
+   <button v-for="(date,index) in dates" :key="date" type="button" :data-testid="`browse-date-${index}`" :aria-pressed="modelValue===date" :disabled="busy" :title="`${date} ${weekday(date)}${index===2?'（默认）':''}`" @click="choose(date)"><span>{{ labels[index] }}</span><strong>{{ date.slice(5).replace('-','/') }}</strong></button>
+   <label class="more-date" :title="state?.business_timezone_name"><AppIcon name="calendar" /><input data-testid="browse-more-date" type="date" aria-label="更多查看日期" :value="modelValue" :disabled="busy || !state" @input="choose($event.target.value)" /></label>
   </div>
  </section>
 </template>

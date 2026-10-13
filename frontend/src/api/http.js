@@ -16,6 +16,7 @@ export class HttpError extends Error {
     fields = {},
     sessionInvalid = false,
     cause = undefined,
+    retryAfterSeconds = null,
   } = {}) {
     super(message, { cause });
     this.name = 'HttpError';
@@ -23,6 +24,7 @@ export class HttpError extends Error {
     this.code = code;
     this.kind = kind;
     this.fields = fields;
+    this.retryAfterSeconds = Number.isSafeInteger(retryAfterSeconds) && retryAfterSeconds > 0 && retryAfterSeconds <= 900 ? retryAfterSeconds : null;
     this.sessionInvalid = sessionInvalid || INVALID_SESSION_CODES.has(code);
   }
 }
@@ -102,6 +104,7 @@ export function createHttpClient({
         code,
         kind: 'http',
         fields: payload?.fields || {},
+        retryAfterSeconds: payload?.retry_after_seconds,
         sessionInvalid: isSessionInvalid,
       });
     }
