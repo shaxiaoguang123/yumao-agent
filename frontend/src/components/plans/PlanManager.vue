@@ -1,5 +1,5 @@
 <script setup>
-import { inject } from 'vue';
+import { computed, inject, shallowRef, watch } from 'vue';
 import PageHeader from '../PageHeader.vue';
 import PlanForm from './PlanForm.vue';
 import PlanHistory from './PlanHistory.vue';
@@ -9,15 +9,22 @@ import ProposalAssistant from './ProposalAssistant.vue';
 import AvailabilitySimulationPanel from './AvailabilitySimulationPanel.vue';
 import VenueCatalogStatus from './VenueCatalogStatus.vue';
 import OfficialHistoryPreview from './OfficialHistoryPreview.vue';
+import LiveAvailabilityPanel from './LiveAvailabilityPanel.vue';
 import { usePlans } from '../../composables/usePlans.js';
 const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('planningProposalApi');
 const simulationApi=inject('availabilitySimulationApi',null);
+const liveApi=inject('liveAvailabilityApi',null),credentialApi=inject('credentialApi',null);
 const {plans,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain,rememberDraft}=usePlans(api,session);
+const liveDraft=shallowRef(null);
+watch(source,()=>{liveDraft.value=null;},{flush:'sync'});
+function rememberLiveDraft(draft){rememberDraft(draft);liveDraft.value=draft;}
+const liveTargetDate=computed(()=>liveDraft.value?.form?.target_date || source.value?.intent?.target_date || '');
+const liveContextKey=computed(()=>JSON.stringify({source:source.value,draft:liveDraft.value,conflict:conflict.value,uncertain:uncertain.value}));
 </script>
 <template>
  <div class="plans-page">
   <PageHeader eyebrow="预约意向" title="我的预约计划" description="提前整理日期、时间和人工场地偏好，保存每一次明确的修改。"><button data-testid="new-plan" class="primary-button" type="button" :disabled="!canCreate" @click="startNew">新建预约计划</button></PageHeader>
-  <p class="plan-notice">当前仅保存预约意向，场馆和场地尚未核验，不会自动查询或预约。</p>
+  <p class="plan-notice">当前仅保存预约意向，场馆和场地尚未核验。官方只读查询需手动触发，不会自动预约。</p>
   <div v-if="!authorized" class="panel"><p role="alert">{{ session?.status==='unauthenticated' ? '登录状态已失效，请重新登录。' : '暂时无法确认登录状态，请重试。' }}</p></div>
   <template v-else>
    <ProposalAssistant v-if="proposalApi" :plans="plans" :plan-api="api" :proposal-api="proposalApi" :session="session" @refresh-request="refresh" />
@@ -27,7 +34,7 @@ const {plans,catalog,source,listStatus,metadataError,saving,message,saveError,fi
    <div v-if="saveError" class="plan-feedback" :class="conflict?'plan-conflict':''" role="alert"><p>{{ saveError }}</p><button v-if="source?.planId && (conflict || uncertain)" class="secondary-button" data-testid="view-latest" type="button" @click="viewLatest">查看最新版本</button><template v-if="uncertain"><button class="secondary-button" type="button" @click="refresh">读取计划列表核对</button><button class="secondary-button" type="button" @click="acknowledgeUncertain">已核对，允许再次保存</button></template></div>
    <p v-if="latestError" class="form-error" role="alert">{{ latestError }}</p>
    <section v-if="latest" class="panel latest-plan" aria-label="最新版本预览"><h2>最新版本 {{ latest.version }}（独立预览）</h2><PlanSnapshotDetails :snapshot="latest" /><p class="muted">采用最新版本将替换下方未保存内容，请先比较并保留需要的文字。</p><button data-testid="adopt-latest" class="secondary-button" type="button" :disabled="saving" @click="adoptLatest">采用最新版本，替换表单</button></section>
-   <div v-if="source" class="plan-edit-section"><PlanForm :source="source" :busy="saving" :save-blocked="conflict || uncertain" :fields="fields" :grid-api="simulationApi" :session-key="session?.user?.user_id||''" @save="save" @cancel="cancel" @target-change="updateWindow" @draft-change="rememberDraft" /><BookingWindowStatus :state="windowState" :error="windowError" /></div>
+   <div v-if="source" class="plan-edit-section"><PlanForm :source="source" :busy="saving" :save-blocked="conflict || uncertain" :fields="fields" :grid-api="simulationApi" :session-key="session?.user?.user_id||''" @save="save" @cancel="cancel" @target-change="updateWindow" @draft-change="rememberLiveDraft" /><BookingWindowStatus :state="windowState" :error="windowError" /></div>
    <section class="panel" aria-labelledby="plans-list-title"><div class="plan-section-heading"><h2 id="plans-list-title">已保存的预约意向</h2><button data-testid="refresh-plans" class="secondary-button" type="button" :disabled="saving || listStatus==='loading'" @click="refresh">刷新计划</button></div>
     <p v-if="listStatus==='loading'" class="muted" role="status">正在读取计划…</p>
     <p v-else-if="listStatus==='error'" class="form-error" role="alert">计划读取失败，请检查网络后刷新重试。</p>
@@ -35,6 +42,7 @@ const {plans,catalog,source,listStatus,metadataError,saving,message,saveError,fi
     <div v-else class="plan-list"><article v-for="plan in plans" :key="plan.plan_id" class="plan-card"><div><span class="plan-draft-tag">未绑定草稿</span><h3>{{ plan.intent.venue_preference }}</h3><p>{{ plan.intent.target_date }} · {{ plan.intent.preferred_start_times.join(' → ') }} · {{ plan.intent.duration_minutes }} 分钟</p><p class="muted">版本 {{ plan.version }} · {{ plan.context.timezone_name }} · {{ plan.booking_window.can_query ? '处于日历窗口，尚未核验' : '当前不可查询' }}</p></div><div class="plan-actions"><button data-testid="edit-plan" class="secondary-button" type="button" :disabled="saving" @click="edit(plan)">编辑计划</button><button data-testid="history-plan" class="text-button" type="button" :disabled="saving" @click="showHistory(plan.plan_id)">版本历史</button></div></article></div>
    </section>
    <PlanHistory v-if="historyPlanId" :revisions="history" :status="historyStatus" @close="closeHistory" @retry="showHistory(historyPlanId)" />
+   <LiveAvailabilityPanel v-if="liveApi && credentialApi" :api="liveApi" :credential-api="credentialApi" :session="session" :target-date="liveTargetDate" :context-key="liveContextKey" />
    <OfficialHistoryPreview v-if="simulationApi" :api="simulationApi" :session="session" />
    <AvailabilitySimulationPanel v-if="simulationApi" :plans="plans" :api="simulationApi" :session="session" @refresh-request="refresh" />
   </template>

@@ -28,8 +28,8 @@ const sourceStateLabel=computed(()=>props.catalog.source_state==='protocol_evide
 <template>
   <section class="panel venue-catalog-status" data-testid="venue-catalog-status" aria-labelledby="venue-catalog-title">
     <div><p class="eyebrow">目录与数据来源</p><h2 id="venue-catalog-title">{{ catalogConfigured?`可信场馆目录 ${catalog.catalog_version}`:'可信场馆目录尚未配置' }}</h2></div>
-    <p v-if="catalogConfigured">目录项来自已核验的版本。现有计划仍是未绑定草稿，本版本没有开放计划绑定或真实时段查询。</p>
-    <p v-else>计划里手工填写的物理场馆和场地仍是未核验偏好。当前只有预约分类节点的代码路径证据，不能据此绑定场馆，也不会查询真实时段。</p>
+    <p v-if="catalogConfigured">目录项来自已核验的版本。现有计划仍是未绑定草稿，本版本没有开放计划绑定。</p>
+    <p v-else>计划里手工填写的物理场馆和场地仍是未核验偏好。预约分类节点不能据此绑定场馆，也不能确认真实可预约库存。</p>
     <p class="catalog-version">目录版本：{{ catalog.catalog_version||'未配置' }} · 来源状态：{{ sourceStateLabel }}</p>
     <details v-if="blockers.length">
       <summary>查看尚缺的协议证据</summary>

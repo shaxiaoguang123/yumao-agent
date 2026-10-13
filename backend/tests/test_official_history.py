@@ -11,7 +11,7 @@ def response(**changes):
             {"nodeid": "synthetic-node-secret-a", "sitename": "合成场地甲"},
             {"nodeid": "synthetic-node-secret-b", "sitename": "合成场地乙"},
         ],
-        "timeList": [{"time": "18:00", "status": "1"}, {"time": "18:30", "status": "0"}],
+        "timeList": [{"time": "18:00", "status": "0"}, {"time": "18:30", "status": "0"}],
         "conflictList": ["1-0", "0-1-3", "1-1-7"],
         "priceList": [{"x": "0", "y": "1", "price": "synthetic-price-secret"}],
     }
@@ -48,6 +48,12 @@ class OfficialBookingByTimeHistoryAdapterTests(unittest.TestCase):
         cell = grid["rows"][0]["cells"][1]
         self.assertEqual(cell["state"], "historical_unknown")
         self.assertFalse(cell["selectable"])
+
+    def test_client_hidden_time_row_does_not_claim_historical_selectability(self):
+        payload = response()
+        payload['resultData']['timeList'][0]['status'] = '1'
+        grid = self.adapter.preview(payload)
+        self.assertTrue(all(cell['state'] == 'historical_unknown' for cell in grid['rows'][0]['cells']))
 
     def test_distinct_activity_categories_at_one_coordinate_become_unknown(self):
         grid = self.adapter.preview(response(conflictList=["0-0-0", "0-0-1"]))

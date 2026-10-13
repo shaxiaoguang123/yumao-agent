@@ -22,7 +22,8 @@ const labels={
         <tbody>
           <tr v-for="(row,index) in preview.rows" :key="index">
             <th scope="row">{{ row.time_label }}<small v-if="row.time_status.state==='recognized_unverified'">官方行标记 {{ row.time_status.code }} · 含义未核验</small><small v-else>行标记未知</small></th>
-            <td v-for="(cell,courtIndex) in row.cells" :key="`${index}-${courtIndex}`"><span class="historical-cell" :class="`state-${cell.state}`" :aria-label="`${preview.courts[courtIndex].display_name} ${row.time_label}：${labels[cell.state]||labels.historical_unknown}`">{{ labels[cell.state]||labels.historical_unknown }}</span></td>
+            <template v-if="row.time_status.code==='0'"><td v-for="(cell,courtIndex) in row.cells" :key="`${index}-${courtIndex}`"><span class="historical-cell" :class="`state-${cell.state}`" :aria-label="`${preview.courts[courtIndex].display_name} ${row.time_label}：${labels[cell.state]||labels.historical_unknown}`">{{ labels[cell.state]||labels.historical_unknown }}</span></td></template>
+            <td v-else :colspan="preview.courts.length">{{ row.time_status.code==='1'?'官方客户端此行不展示场地格子（业务含义未核验）':'未知行状态，不展示场地格子' }}</td>
           </tr>
         </tbody>
       </table>

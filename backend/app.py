@@ -16,6 +16,8 @@ from backend.api.planning import planning_bp
 from backend.ai.planning import PlanningService
 from backend.api.availability_simulation import availability_simulation_bp
 from backend.api.availability_history import availability_history_bp
+from backend.api.availability_live import availability_live_bp
+from backend.availability_matching.live import OfficialReadOnlyAvailabilityService
 from backend.availability_matching.service import SimulationAvailabilityService
 from backend.venue_catalog import VenueCatalogService
 from backend.ai.call_guard import AICallGuard
@@ -46,6 +48,10 @@ _SECRET_CONFIG_KEYS = {
     "APP_UPSTREAM_FINGERPRINT_KEYS",
     "APP_UPSTREAM_FINGERPRINT_ACTIVE_KEY_ID",
     "LLM_API_KEY",
+    "UPSTREAM_ITEM_AES_KEY_ASCII",
+    "UPSTREAM_ITEM_AES_IV_ASCII",
+    "AES_KEY_ASCII",
+    "AES_IV_ASCII",
 }
 
 
@@ -121,6 +127,16 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         token_expiring_soon_window_seconds=settings.token_expiring_soon_window_seconds,
     )
     cipher = credential_service.cipher
+    booking_window_policy = BookingWindowPolicy(settings.booking_timezone_name)
+    live_availability_service = OfficialReadOnlyAvailabilityService(
+        credential_service=credential_service,
+        transport=transport,
+        booking_window_policy=booking_window_policy,
+        item_aes_key_ascii=settings.upstream_item_aes_key_ascii,
+        item_aes_iv_ascii=settings.upstream_item_aes_iv_ascii,
+        enabled=settings.live_availability_enabled,
+        timezone_name=settings.booking_timezone_name,
+    )
 
     app = Flask(__name__)
     app.config.update(flask_overrides)
@@ -152,10 +168,11 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
     app.extensions["credential_upstream_adapter"] = adapter
     app.extensions["upstream_request_gate"] = gate
     app.extensions["credential_service"] = credential_service
+    app.extensions["live_availability_service"] = live_availability_service
     app.extensions["dummy_password_hash"] = create_dummy_password_hash()
     app.extensions["plan_service"] = PlanService(
         settings.database_path, settings.sqlite_busy_timeout_ms,
-        BookingWindowPolicy(settings.booking_timezone_name),
+        booking_window_policy,
         settings.booking_currency_code, settings.booking_currency_minor_unit_exponent,
     )
     app.extensions["ai_provider_service"] = AIProviderService(
@@ -181,6 +198,7 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
     app.register_blueprint(planning_bp)
     app.register_blueprint(availability_simulation_bp)
     app.register_blueprint(availability_history_bp)
+    app.register_blueprint(availability_live_bp)
     app.register_blueprint(booking_window_bp)
     app.register_blueprint(ai_models_bp)
     return app

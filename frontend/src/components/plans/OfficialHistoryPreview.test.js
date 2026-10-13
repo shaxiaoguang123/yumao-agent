@@ -1,6 +1,7 @@
 import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import OfficialHistoryPreview from './OfficialHistoryPreview.vue';
+import HistoricalBookingGrid from './HistoricalBookingGrid.vue';
 
 enableAutoUnmount(afterEach);
 
@@ -12,7 +13,7 @@ function preview() {
     notice:'只读历史显示。',target_date:null,timezone_name:null,
     venue:{display_name:'场馆查询范围未知',verification:'unverified'},
     courts:[{display_name:'合成场地甲',verification:'historical_unverified'},{display_name:'合成场地乙',verification:'historical_unverified'}],
-    rows:[{time_label:'18:00',time_status:{state:'recognized_unverified',code:'1'},cells:[cell('selectable'),cell('reserved')]},
+    rows:[{time_label:'18:00',time_status:{state:'recognized_unverified',code:'0'},cells:[cell('selectable'),cell('reserved')]},
       {time_label:'18:30',time_status:{state:'unknown',code:null},cells:[cell('unknown'),cell('unknown')]}],
     price_state:'omitted_unit_unverified',can_select:false,can_match:false,can_bind:false,
     can_query_upstream:false,can_book:false,can_pay:false,can_create_job:false,
@@ -22,6 +23,12 @@ function preview() {
 function envelope(){return {success:true,message:'synthetic',resultData:{stepnumber:'1',nodeList:[{nodeid:'private-node',sitename:'合成场地甲'}],timeList:[{time:'18:00',status:'1'}],conflictList:[],priceList:[{x:'0',y:'0',price:'private-price'}]}};}
 
 describe('official history preview',()=>{
+  it('hides court cells on the official status-one time-heading branch',()=>{
+    const value=preview();value.rows[0].time_status.code='1';
+    const wrapper=mount(HistoricalBookingGrid,{props:{preview:value}});
+    expect(wrapper.findAll('tbody tr')[0].findAll('.historical-cell')).toHaveLength(0);
+    expect(wrapper.text()).toContain('官方客户端此行不展示场地格子');
+  });
   it('parses an explicitly selected local response and renders a non-interactive historical grid',async()=>{
     const api={options:vi.fn(async()=>({history_preview_enabled:true})),historyPreview:vi.fn(async()=>preview())};
     const wrapper=mount(OfficialHistoryPreview,{props:{api,session:{status:'authenticated',user:{user_id:'user-a'},csrfToken:'csrf-a'}}});
