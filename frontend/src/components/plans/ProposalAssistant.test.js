@@ -17,7 +17,7 @@ async function mountAssistant(config=fixture()) {const {default:component}=await
 describe('proposal assistant',()=>{
  it('previews a ready result and waits for explicit confirmation before saving',async()=>{
   const {wrapper,planApi,proposalApi}=await mountAssistant();await wrapper.get('[data-testid="proposal-message"]').setValue('新建周末意向');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-  expect(proposalApi.generate).toHaveBeenCalledWith('新建周末意向',null,null);expect(wrapper.text()).toContain('建议预览');expect(wrapper.text()).toContain('AI场馆意向');expect(wrapper.text()).toContain('预约、付款、创建任务和上游查询均不可用');expect(planApi.create).not.toHaveBeenCalled();
+  expect(proposalApi.generate).toHaveBeenCalledWith('新建周末意向',null,null);expect(wrapper.text()).toContain('建议预览');expect(wrapper.text()).toContain('AI场馆意向');expect(wrapper.text()).toContain('确认后仅保存预约意向，不会预约或付款。');expect(planApi.create).not.toHaveBeenCalled();
   await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.create).toHaveBeenCalledWith(proposal.intent);expect(wrapper.text()).toContain('预约意向已保存');
  });
  it('keeps the save notice when the parent list refreshes to the version just saved',async()=>{

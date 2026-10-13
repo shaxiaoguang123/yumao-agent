@@ -44,6 +44,14 @@ describe('official read-only observation flow', () => {
     expect(table.text()).toContain('价格单位尚未核验');
     expect(table.findAll('button,input').length).toBe(0);
   });
+  it('provides a named settings disclosure without triggering upstream reads', async () => {
+    const { wrapper, api } = await setup();
+    expect(wrapper.get('.query-settings').attributes('open')).toBeUndefined();
+    expect(wrapper.get('.query-settings>summary').attributes('aria-label')).toBe('查询设置');
+    expect(wrapper.get('[aria-label="刷新凭据"]').exists()).toBe(true);
+    expect(api.categories).not.toHaveBeenCalled();
+    expect(api.grid).not.toHaveBeenCalled();
+  });
   it('clears observations on plan/date change and ignores late responses', async () => {
     let finish;
     const { wrapper } = await setup({ grid: vi.fn(() => new Promise((resolve) => { finish = resolve; })) });
