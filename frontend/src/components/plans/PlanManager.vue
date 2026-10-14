@@ -7,10 +7,11 @@ import PlanSnapshotDetails from './PlanSnapshotDetails.vue';
 import BookingWindowStatus from './BookingWindowStatus.vue';
 import ProposalAssistant from './ProposalAssistant.vue';
 import AvailabilitySimulationPanel from './AvailabilitySimulationPanel.vue';
+import VenueCatalogStatus from './VenueCatalogStatus.vue';
 import { usePlans } from '../../composables/usePlans.js';
 const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('planningProposalApi');
 const simulationApi=inject('availabilitySimulationApi',null);
-const {plans,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain}=usePlans(api,session);
+const {plans,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain}=usePlans(api,session);
 </script>
 <template>
  <div class="plans-page">
@@ -20,6 +21,7 @@ const {plans,source,listStatus,metadataError,saving,message,saveError,fields,con
   <template v-else>
    <ProposalAssistant v-if="proposalApi" :plans="plans" :plan-api="api" :proposal-api="proposalApi" :session="session" @refresh-request="refresh" />
    <p v-if="metadataError" class="form-error" role="alert">{{ metadataError }} <button class="secondary-button" type="button" @click="initialize">重新读取配置</button></p>
+   <VenueCatalogStatus v-if="catalog" :catalog="catalog" />
    <p v-if="message" class="form-success" role="status">{{ message }}</p>
    <div v-if="saveError" class="plan-feedback" :class="conflict?'plan-conflict':''" role="alert"><p>{{ saveError }}</p><button v-if="source?.planId && (conflict || uncertain)" class="secondary-button" data-testid="view-latest" type="button" @click="viewLatest">查看最新版本</button><template v-if="uncertain"><button class="secondary-button" type="button" @click="refresh">读取计划列表核对</button><button class="secondary-button" type="button" @click="acknowledgeUncertain">已核对，允许再次保存</button></template></div>
    <p v-if="latestError" class="form-error" role="alert">{{ latestError }}</p>

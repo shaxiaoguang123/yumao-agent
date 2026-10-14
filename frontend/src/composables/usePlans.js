@@ -2,7 +2,7 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { copy, newIntent } from '../utils/planForm.js';
 
 export function usePlans(api, session) {
-  const plans=ref([]), context=shallowRef(null), defaultWindow=shallowRef(null), source=shallowRef(null);
+  const plans=ref([]), context=shallowRef(null), defaultWindow=shallowRef(null), catalog=shallowRef(null), source=shallowRef(null);
   const listStatus=shallowRef('idle'), metadataError=shallowRef(''), saving=shallowRef(false), message=shallowRef('');
   const saveError=shallowRef(''), fields=shallowRef({}), conflict=shallowRef(false), latest=shallowRef(null), latestError=shallowRef('');
   const history=ref([]), historyPlanId=shallowRef(null), historyStatus=shallowRef('idle');
@@ -13,7 +13,7 @@ export function usePlans(api, session) {
   const valid=(generation)=>alive && generation===epoch && authorized.value;
   function clearFeedback() { message.value='';saveError.value='';fields.value={};conflict.value=false;latest.value=null;latestError.value='';uncertain.value=false;latestSequence++; }
   function clearAll() {
-    plans.value=[];context.value=null;defaultWindow.value=null;source.value=null;listStatus.value='idle';metadataError.value='';saving.value=false;
+    plans.value=[];context.value=null;defaultWindow.value=null;catalog.value=null;source.value=null;listStatus.value='idle';metadataError.value='';saving.value=false;
     history.value=[];historyPlanId.value=null;historyStatus.value='idle';windowState.value=null;windowError.value='';clearFeedback();
     listSequence++;windowSequence++;historySequence++;
   }
@@ -27,7 +27,7 @@ export function usePlans(api, session) {
   async function initialize() {
     const generation=epoch;
     await Promise.all([refresh(), (async()=>{
-      try { const [options,window]=await Promise.all([api.options(),api.window()]);if(valid(generation)){context.value=options.context;defaultWindow.value=window;metadataError.value='';} }
+      try { const [options,window]=await Promise.all([api.options(),api.window()]);if(valid(generation)){context.value=options.context;defaultWindow.value=window;catalog.value=options;metadataError.value='';} }
       catch {if(valid(generation))metadataError.value='计划配置读取失败，请重新读取后再新建。';}
     })()]);
   }
@@ -89,5 +89,5 @@ export function usePlans(api, session) {
   function acknowledgeUncertain(){if(authorized.value)uncertain.value=false;}
   watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken],()=>{epoch++;clearAll();if(authorized.value)void initialize();},{immediate:true,flush:'sync'});
   onBeforeUnmount(()=>{alive=false;epoch++;clearAll();});
-  return {plans,context,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain};
+  return {plans,context,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain};
 }

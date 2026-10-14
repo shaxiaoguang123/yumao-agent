@@ -75,7 +75,8 @@ def list_plans():
 def options():
     if request.args:
         raise PlanError("invalid_request", 400)
-    return jsonify({"catalog_status": "not_configured", "venues": [], "context": _service().active_context.to_dict()})
+    catalog = current_app.extensions["venue_catalog_service"].public_options()
+    return jsonify({**catalog, "context": _service().active_context.to_dict()})
 
 
 @plans_bp.post("")
