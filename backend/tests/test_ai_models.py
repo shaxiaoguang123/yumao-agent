@@ -208,10 +208,14 @@ class AIModelTests(unittest.TestCase):
             def request(self,*_args,**_kwargs): pass
             def getresponse(self): return SlowResponse()
         transport = PinnedChatCompletionsTransport(resolver=lambda _host:["93.184.216.34"],total_timeout=0.03)
-        with patch("backend.ai.provider._PinnedHTTPSConnection", SlowConnection):
+        # The fake connection does not use TLS. Exclude machine certificate-load
+        # latency so the 30ms budget actually tests the slow read/abort path.
+        with patch("backend.ai.provider._PinnedHTTPSConnection", SlowConnection), \
+                patch("backend.ai.provider.ssl.create_default_context", return_value=object()):
             with self.assertRaises(ProviderFailure) as caught:
                 transport.chat(ProviderConfig("m","m","https://vendor.example/v1","model","none"), [{"role":"user","content":"x"}])
         self.assertEqual(caught.exception.code,"provider_timeout")
+        self.assertEqual(len(SlowConnection.instances), 1)
         self.assertTrue(SlowConnection.instances[0].closed)
 
     def test_transport_no_auth_redirect_or_oversize_body_leak(self):
