@@ -1,0 +1,25 @@
+<script setup>
+import { nextTick, useTemplateRef } from 'vue';
+import AppIcon from '../AppIcon.vue';
+const props=defineProps({modelValue:{type:String,default:'manual'},planCount:{type:Number,default:0}});
+const emit=defineEmits(['update:modelValue']);
+const nav=useTemplateRef('nav');
+const tabs=[{id:'manual',label:'人工预约',icon:'court'},{id:'agent',label:'Agent 预约',icon:'bot'},{id:'current',label:'当前计划',icon:'list'}];
+async function navigate(event,index){
+ let next=index;
+ if(event.key==='ArrowRight')next=(index+1)%tabs.length;
+ else if(event.key==='ArrowLeft')next=(index+tabs.length-1)%tabs.length;
+ else if(event.key==='Home')next=0;
+ else if(event.key==='End')next=tabs.length-1;
+ else return;
+ event.preventDefault();emit('update:modelValue',tabs[next].id);await nextTick();nav.value?.querySelectorAll('[role="tab"]')[next]?.focus();
+}
+</script>
+<template>
+ <nav ref="nav" class="plan-section-tabs" role="tablist" aria-label="预约计划功能">
+  <button v-for="(tab,index) in tabs" :id="`plan-tab-${tab.id}`" :key="tab.id" type="button" role="tab" :data-testid="`plan-tab-${tab.id}`" :aria-selected="modelValue===tab.id" :aria-controls="`plan-panel-${tab.id}`" :tabindex="modelValue===tab.id?0:-1" @click="emit('update:modelValue',tab.id)" @keydown="navigate($event,index)"><AppIcon :name="tab.icon" /><span class="tab-title">{{ tab.label }}<span v-if="tab.id==='current'" class="tab-count">{{ planCount }}</span></span></button>
+ </nav>
+</template>
+<style scoped>
+.plan-section-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 0 16px}.plan-section-tabs button{display:flex;align-items:center;justify-content:center;gap:8px;min-width:0;min-height:48px;padding:10px 20px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;cursor:pointer}.plan-section-tabs button[aria-selected=true]{color:var(--brand-dark);border-bottom-color:var(--brand)}.plan-section-tabs button:hover{background:var(--brand-soft)}.tab-title{display:flex;align-items:center;gap:8px;font-weight:650}.tab-count{padding:1px 6px;border-radius:999px;background:var(--brand-soft);font-size:12px}@media(max-width:600px){.plan-section-tabs button{flex:1;padding:10px 4px;gap:5px}.tab-title{font-size:14px;gap:4px}.plan-section-tabs .app-icon{width:17px;height:17px}.tab-count{padding:1px 4px}}
+</style>

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { RouterLink } from 'vue-router';
+import AppIcon from '../AppIcon.vue';
 import PlanSnapshotDetails from './PlanSnapshotDetails.vue';
 import BookingWindowStatus from './BookingWindowStatus.vue';
 import ConversationFollowUp from './ConversationFollowUp.vue';
@@ -140,11 +141,11 @@ onBeforeUnmount(()=>{alive=false;epoch++;requestId++;});
 
 <template>
  <section class="panel proposal-assistant" aria-labelledby="proposal-title">
-  <div class="proposal-heading"><div><p class="eyebrow">AI辅助整理</p><h2 id="proposal-title">用自然语言整理预约意向</h2></div><span class="proposal-scope">仅生成草案</span></div>
-  <p class="muted">描述你想保存的日期、时间、场馆或场地偏好。AI只会生成待确认的意向草案，不会预约、付款、创建任务或查询上游。</p>
+  <div class="proposal-heading"><h2 id="proposal-title">描述预约需求</h2><RouterLink class="proposal-settings" :to="{name:'ai-models'}" aria-label="模型设置" title="模型设置"><AppIcon name="settings" /></RouterLink></div>
+
   <label class="field">要整理的内容<textarea v-model="message" data-testid="proposal-message" rows="4" maxlength="4000" :disabled="busySaving||uncertainSave" placeholder="例如：把日期改成下周六晚上，优先 18:30，想约城北球馆的 6 号场。" /></label>
   <label class="field">应用到<select v-model="targetId" data-testid="proposal-target" :disabled="busySaving||uncertainSave"><option value="">新建预约计划</option><option v-for="plan in plans" :key="plan.plan_id" :value="plan.plan_id">编辑：{{ plan.intent.venue_preference }} · {{ plan.intent.target_date }} · 版本 {{ plan.version }}</option></select></label>
-  <div class="proposal-actions"><button class="primary-button" data-testid="generate-proposal" type="button" :disabled="status==='generating'||busySaving||uncertainSave||needsRegeneration||!message.trim()" @click="generate()">{{ status==='generating'?'正在生成…':'生成建议预览' }}</button><button class="secondary-button" data-testid="restart-conversation" type="button" :disabled="busySaving||uncertainSave" @click="restartConversation">重新开始</button><RouterLink class="action-link" :to="{name:'ai-models'}">模型设置</RouterLink></div>
+  <div class="proposal-actions"><button class="primary-button" data-testid="generate-proposal" type="button" :disabled="status==='generating'||busySaving||uncertainSave||needsRegeneration||!message.trim()" @click="generate()">{{ status==='generating'?'正在生成…':'生成建议预览' }}</button><button class="secondary-button" data-testid="restart-conversation" type="button" :disabled="busySaving||uncertainSave" @click="restartConversation">重新开始</button></div>
   <p v-if="error" class="proposal-feedback error" role="alert">{{ error }} <RouterLink v-if="error.includes('尚未配置')||error.includes('模型设置')||error.includes('密钥')" :to="{name:'ai-models'}">前往设置AI模型</RouterLink></p>
   <p v-if="latestError" class="proposal-feedback error" role="alert">{{ latestError }}</p><p v-if="savedNotice" class="proposal-feedback success" role="status">{{ savedNotice }}</p>
   <section v-if="uncertainSave" class="verification-panel" aria-label="保存结果核对">
@@ -166,7 +167,7 @@ onBeforeUnmount(()=>{alive=false;epoch++;requestId++;});
    <p v-else class="muted">AI生成了完整预约意向草案。</p>
    <p v-if="proposal.context?.timezone_name" class="muted">业务时区：{{ proposal.context.timezone_name }}</p>
    <BookingWindowStatus v-if="proposal.booking_window" :state="proposal.booking_window" />
-   <p class="proposal-safety">预约、付款、创建任务和上游查询均不可用。保存只会记录未绑定的人工意向。</p>
+   <p class="proposal-safety">确认后仅保存预约意向，不会预约或付款。</p>
    <p v-if="targetChanged" class="proposal-feedback error" role="status">描述、目标计划或计划版本已变化。请重新生成后再保存。</p>
    <p v-if="needsRegeneration&&targetId" class="proposal-conflict-action"><button class="secondary-button" data-testid="read-latest-regenerate" type="button" :disabled="status==='generating'||busySaving" @click="readLatestAndRegenerate">读取最新并重新生成</button></p>
    <div class="proposal-actions"><button class="primary-button" data-testid="confirm-save-proposal" type="button" :disabled="!canSave" @click="saveProposal">{{ busySaving?'正在保存…':'确认并保存预约意向' }}</button><button class="secondary-button" data-testid="cancel-proposal" type="button" :disabled="busySaving||uncertainSave" @click="cancelProposal">取消建议</button></div>
@@ -177,4 +178,5 @@ onBeforeUnmount(()=>{alive=false;epoch++;requestId++;});
 
 <style scoped>
 .proposal-assistant{display:grid;gap:18px;margin-bottom:22px}.proposal-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}.proposal-heading h2,.proposal-heading h3{margin:0}.proposal-heading h3{font-size:17px}.proposal-scope,.proposal-provider{color:var(--brand-dark);background:var(--brand-soft);padding:5px 10px;border-radius:999px;font-size:12px}.field textarea{width:100%;resize:vertical;border:1px solid #d5dfd7;border-radius:9px;padding:12px;background:var(--surface);color:var(--ink);font:inherit;line-height:1.6}.field textarea:focus-visible{outline:3px solid var(--brand);outline-offset:2px}.proposal-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px}.proposal-result,.verification-panel{padding:18px;border:1px solid var(--line);border-radius:12px;background:#fbfcfb}.proposal-result h3,.verification-panel h3{margin:0}.verification-panel{display:grid;gap:12px;border-color:var(--warning);background:var(--warning-soft)}.verification-panel p{margin:0}.proposal-result>p{margin:10px 0}.proposal-diff{display:grid;grid-template-columns:minmax(110px,1fr) minmax(0,3fr);gap:10px 16px}.proposal-diff dt{color:var(--muted)}.proposal-diff dd{margin:0;overflow-wrap:anywhere}.diff-before{color:var(--muted)}.proposal-safety{padding:12px;border-radius:9px;background:var(--brand-soft);color:var(--brand-dark)}.proposal-feedback{padding:12px 14px;margin:0;border-radius:10px}.proposal-feedback.error{background:var(--danger-soft);color:var(--danger)}.proposal-feedback.success{background:var(--brand-soft);color:var(--brand-dark)}.latest-proposal{margin:18px 0;padding:16px;border:1px solid var(--warning);border-radius:10px;background:var(--warning-soft)}.latest-proposal h4{margin:0}.latest-proposal p{margin-bottom:0}.proposal-conflict-action{margin:0!important}@media(max-width:600px){.proposal-diff{grid-template-columns:1fr;gap:4px}.proposal-diff dd{margin-bottom:10px}}
+.proposal-assistant{gap:14px}.proposal-heading h2{font-size:18px}.proposal-settings{display:grid;place-items:center;width:44px;height:44px;border:1px solid var(--line);border-radius:8px;color:var(--muted)}.proposal-settings:hover{color:var(--brand);background:var(--brand-soft)}.proposal-safety{font-size:13px;padding:8px 12px}
 </style>

@@ -94,3 +94,10 @@ conda run -n test python -m unittest discover -s backend/tests -v
 npm test -- --run
 npm run build
 ```
+
+
+## 官方时段只读观察（本地显式授权后启用）
+
+现代 Flask API 支持独立的官方只读观察面板。默认不开启；仅开发环境可通过 `LIVE_AVAILABILITY_ENABLED=true` 启用，同时由服务端注入 `UPSTREAM_ITEM_AES_KEY_ASCII`、`UPSTREAM_ITEM_AES_IV_ASCII` 和既有有界 HTTP/请求门控配置。密钥和 Token 不进入 Vue 配置、Git 或启动日志。生产环境始终关闭该功能。
+
+先在应用内使用自己的已验证预约凭据，再在 `/plans` 打开或新建计划，手动读取官方查询类别与目标日期的时段显示。只读类别不是可信实体场馆目录，真实观察不开放选格、匹配、绑定、下单或支付。人工网格仍保存语义意向。取证和来源限制见 `docs/superpowers/evidence/2026-10-13-live-read-only-observation.md`。

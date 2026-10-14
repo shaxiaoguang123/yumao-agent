@@ -33,6 +33,8 @@ class AppSettings:
     upstream_fingerprint_keys: Mapping[str, bytes] = field(repr=False)
     upstream_fingerprint_active_key_id: str = field(repr=False)
     upstream_origin: str
+    upstream_item_aes_key_ascii: str | None = field(repr=False)
+    upstream_item_aes_iv_ascii: str | None = field(repr=False)
     upstream_get_user_info_min_interval_ms: int | None
     upstream_connect_timeout_seconds: float
     upstream_read_timeout_seconds: float
@@ -44,6 +46,7 @@ class AppSettings:
     booking_timezone_name: str
     booking_currency_code: str | None
     booking_currency_minor_unit_exponent: int | None
+    live_availability_enabled: bool = False
     llm_service_default: Mapping[str, str] | None = field(default=None, repr=False)
     availability_simulation_enabled: bool = False
     token_expiring_soon_window_seconds: int = 604800
@@ -178,6 +181,17 @@ def _https_origin(env: Mapping[str, str]) -> str:
     return f"https://{authority}"
 
 
+def _upstream_item_cipher(env: Mapping[str, str]) -> tuple[str | None, str | None]:
+    key = env.get("UPSTREAM_ITEM_AES_KEY_ASCII", env.get("AES_KEY_ASCII"))
+    iv = env.get("UPSTREAM_ITEM_AES_IV_ASCII", env.get("AES_IV_ASCII"))
+    if (key is None or key == "") and (iv is None or iv == ""):
+        return None, None
+    if (not isinstance(key, str) or not isinstance(iv, str)
+            or len(key.encode("utf-8")) != 16 or len(iv.encode("utf-8")) != 16):
+        raise ValueError("official read-only request cipher configuration is invalid")
+    return key, iv
+
+
 def _decode_csrf_secret(env: Mapping[str, str]) -> bytes:
     encoded = env.get("CSRF_HMAC_SECRET")
     if not isinstance(encoded, str) or not encoded or encoded != encoded.strip():
@@ -213,6 +227,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
     simulation_flag = source.get('AVAILABILITY_SIMULATION_ENABLED', 'false')
     if simulation_flag not in ('true', 'false'):
         raise ValueError('AVAILABILITY_SIMULATION_ENABLED must be true or false')
+    live_availability_flag = source.get("LIVE_AVAILABILITY_ENABLED", "false")
+    if live_availability_flag not in {"true", "false"}:
+        raise ValueError("LIVE_AVAILABILITY_ENABLED must be true or false")
 
     raw_origins = source.get("APP_ALLOWED_ORIGINS", "")
     allowed_origins = tuple(origin.strip().rstrip("/") for origin in raw_origins.split(",") if origin.strip())
@@ -224,6 +241,11 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
     csrf_hmac_secret = _decode_csrf_secret(source)
     booking_timezone_name = _booking_timezone_name(source)
     booking_currency_code, booking_currency_minor_unit_exponent = _booking_currency_metadata(source)
+    upstream_item_aes_key_ascii, upstream_item_aes_iv_ascii = _upstream_item_cipher(source)
+    if live_availability_flag == "true" and not (
+        upstream_item_aes_key_ascii and upstream_item_aes_iv_ascii
+    ):
+        raise ValueError("LIVE_AVAILABILITY_ENABLED requires the official read-only request cipher")
     encryption_keyring = parse_credential_keyring(
         source.get("APP_CREDENTIAL_ENCRYPTION_KEYS"),
         source.get("APP_CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID"),
@@ -280,6 +302,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         llm_service_default=llm_service_default,
         availability_simulation_enabled=app_env == 'development' and simulation_flag == 'true',
         upstream_origin=_https_origin(source),
+        upstream_item_aes_key_ascii=upstream_item_aes_key_ascii,
+        upstream_item_aes_iv_ascii=upstream_item_aes_iv_ascii,
         upstream_get_user_info_min_interval_ms=_optional_positive_int(
             source, "UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS"
         ),
@@ -293,6 +317,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         booking_timezone_name=booking_timezone_name,
         booking_currency_code=booking_currency_code,
         booking_currency_minor_unit_exponent=booking_currency_minor_unit_exponent,
+        live_availability_enabled=(app_env == "development" and live_availability_flag == "true"),
         token_expiring_soon_window_seconds=_positive_int(
             source, "TOKEN_EXPIRING_SOON_WINDOW_SECONDS", 604800
         ),

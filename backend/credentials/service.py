@@ -207,19 +207,30 @@ class CredentialService:
             or row["current_token_revision_id"] != context.current_token_revision_snapshot_id
         ):
             return GatePreflightDenial("credential_version_conflict")
-        if (
-            context.operation_kind == "validate_current"
-            and row["last_confirmed_validation_state"] == "confirmed_invalid"
-        ):
+        if (context.operation_kind in {"validate_current", "availability_read"}
+                and row["last_confirmed_validation_state"] == "confirmed_invalid"):
             return GatePreflightDenial("credential_token_invalid")
-        if (
-            context.operation_kind == "validate_current"
-            and row["token_expires_at_utc_ms"] is not None
-            and row["token_expires_at_utc_ms"] <= self._now()
-        ):
+        if (context.operation_kind in {"validate_current", "availability_read"}
+                and row["token_expires_at_utc_ms"] is not None
+                and row["token_expires_at_utc_ms"] <= self._now()):
             return GatePreflightDenial("credential_token_expired")
         if not row["secret_material_active"]:
             return GatePreflightDenial("credential_token_invalid")
+        if context.operation_kind == "availability_read":
+            if row["requires_revalidation"]:
+                return GatePreflightDenial("credential_requires_revalidation")
+            if row["account_binding_state"] == "unresolved":
+                return GatePreflightDenial(
+                    "credential_account_binding_unresolved",
+                    account_binding_outcome="unresolved",
+                )
+            if row["account_binding_state"] == "needs_reconfirmation":
+                return GatePreflightDenial(
+                    "credential_account_reconfirmation_required",
+                    account_binding_outcome="mismatch",
+                )
+            if row["last_confirmed_validation_state"] != "confirmed_valid":
+                return GatePreflightDenial("credential_requires_revalidation")
         if context.operation_kind == "token_rotation_candidate":
             if row["account_binding_state"] == "unresolved":
                 return GatePreflightDenial(
@@ -317,6 +328,76 @@ class CredentialService:
             raise CredentialOperationError("credential_secret_unavailable", 503) from exc
         except UnicodeDecodeError as exc:
             raise CredentialOperationError("credential_secret_unavailable", 503) from exc
+
+    def with_availability_read_token(
+        self,
+        user_id: str,
+        credential_id: str,
+        operation: Callable[[str], object],
+    ) -> object:
+        """Use an owned, recently confirmed Credential for one gated read request.
+
+        The plaintext Token exists only during this callback and is never returned,
+        serialized, logged, or written by this method.
+        """
+        self._validate_user_id(user_id)
+        if not isinstance(credential_id, str) or not credential_id or not callable(operation):
+            raise CredentialOperationError("credential_not_found", 404)
+        row, _revision = self._snapshot(user_id, credential_id)
+        now = self._now()
+        if not row["enabled"]:
+            raise CredentialOperationError("credential_disabled", 409)
+        if row["requires_revalidation"] or row["last_confirmed_validation_state"] != "confirmed_valid":
+            raise CredentialOperationError("credential_requires_revalidation", 409)
+        if row["account_binding_state"] == "unresolved":
+            raise CredentialOperationError("credential_account_binding_unresolved", 409)
+        if row["account_binding_state"] == "needs_reconfirmation":
+            raise CredentialOperationError("credential_account_reconfirmation_required", 409)
+        if row["token_expires_at_utc_ms"] is not None and row["token_expires_at_utc_ms"] <= now:
+            raise CredentialOperationError("credential_token_expired", 422)
+        if not row["secret_material_active"]:
+            raise CredentialOperationError("credential_token_invalid", 422)
+
+        context = GateOperationContext(
+            user_id=user_id,
+            credential_id=credential_id,
+            operation_kind="availability_read",
+            credential_version_snapshot=row["credential_version"],
+            current_token_revision_snapshot_id=row["current_token_revision_id"],
+            token_revision_id=None,
+        )
+        decision = self.gate.acquire_read_only(context, now, self._existing_preflight)
+        if not decision.allowed or decision.permit is None:
+            code = decision.denial_code or "upstream_read_unavailable"
+            status = 503 if code == "upstream_read_not_configured" else 429 if code == "upstream_read_rate_limited" else 409
+            if code in {"credential_token_expired", "credential_token_invalid"}:
+                status = 422
+            raise CredentialOperationError(code, status, decision.retry_after_seconds)
+
+        permit = decision.permit
+        response = None
+        try:
+            token = self._decrypt_snapshot_token(row, user_id, credential_id)
+            response = operation(token)
+        except CredentialOperationError:
+            raise
+        except Exception:
+            raise CredentialOperationError("upstream_read_failed", 502) from None
+        finally:
+            status_code = getattr(response, "status_code", None)
+            retry_after = getattr(response, "retry_after_header", None)
+            completion = self.gate.complete_read_only(
+                permit, self._now(),
+                upstream_status_code=status_code if type(status_code) is int else None,
+                retry_after_header=retry_after if type(retry_after) is str else None,
+            )
+        if completion.state == "stale":
+            raise CredentialOperationError("credential_version_conflict", 409)
+        current, _current_revision = self._snapshot(user_id, credential_id)
+        if (current["credential_version"] != row["credential_version"]
+                or current["current_token_revision_id"] != row["current_token_revision_id"]):
+            raise CredentialOperationError("credential_version_conflict", 409)
+        return response
 
     def _identity(self, result: AdapterValidationResult) -> tuple[bytes, str] | None:
         if not self.account_continuity_capability:

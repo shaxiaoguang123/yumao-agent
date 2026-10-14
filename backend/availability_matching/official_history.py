@@ -97,7 +97,7 @@ class OfficialBookingByTimeHistoryAdapter:
             cells = []
             for court_index in range(len(courts)):
                 observed_states = by_cell.get((court_index, row_index), set())
-                if not row_status_known or len(observed_states) > 1:
+                if not row_status_known or row_status != "0" or len(observed_states) > 1:
                     state = "unknown"
                 elif observed_states:
                     state = next(iter(observed_states))[0]

@@ -17,6 +17,7 @@ _OPERATION_KINDS = {
     "create_candidate",
     "validate_current",
     "token_rotation_candidate",
+    "availability_read",
 }
 _ATTEMPT_RESULTS = {
     "success",
@@ -246,7 +247,10 @@ class UpstreamRequestGate:
             return False
         if context.operation_kind == "validate_current":
             return context.token_revision_id == context.current_token_revision_snapshot_id
-        return context.operation_kind == "token_rotation_candidate" and context.token_revision_id is None
+        return (
+            context.operation_kind in {"token_rotation_candidate", "availability_read"}
+            and context.token_revision_id is None
+        )
 
     @staticmethod
     def _insert_observation(connection: sqlite3.Connection, observation: GateAttemptObservation) -> bool:
@@ -605,6 +609,184 @@ class UpstreamRequestGate:
                 context=context,
             )
             return GateDecision(next_attempt_id, permit, None, None)
+        except BaseException:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        finally:
+            connection.close()
+
+    def acquire_read_only(
+        self,
+        context: GateOperationContext,
+        now_utc_ms: int,
+        preflight_check: Callable[
+            [sqlite3.Connection, GateOperationContext], GatePreflightDenial | None
+        ],
+    ) -> GateDecision:
+        """Acquire the same shared upstream lease for one read-only availability call.
+
+        Availability reads share the existing global minimum interval, lease and
+        backoff with Credential validation. They do not write Credential validation
+        observations because no validation request was made.
+        """
+        if context.operation_kind != "availability_read" or not self._context_is_valid(context):
+            raise ValueError("invalid read-only gate operation context")
+        if (
+            isinstance(now_utc_ms, bool)
+            or not isinstance(now_utc_ms, int)
+            or not 0 <= now_utc_ms <= _MAX_SQLITE_INTEGER
+        ):
+            raise ValueError("now_utc_ms must be a non-negative integer")
+
+        connection = connect_database(self.database_path, self.busy_timeout_ms)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM upstream_request_gate WHERE endpoint_key='getUserInfo'"
+            ).fetchone()
+            if row is None:
+                raise GateUnavailableError("the shared upstream request-gate row is missing")
+            attempt_id = row["next_validation_attempt_id"]
+            if attempt_id >= _MAX_SQLITE_INTEGER:
+                raise GateUnavailableError("the shared request sequence is exhausted")
+            connection.execute(
+                "UPDATE upstream_request_gate SET next_validation_attempt_id=? WHERE endpoint_key='getUserInfo'",
+                (attempt_id + 1,),
+            )
+
+            denial = self._run_preflight(connection, context, preflight_check)
+            if denial is not None:
+                connection.execute("COMMIT")
+                return GateDecision(attempt_id, None, denial.denial_code, None)
+            if self.minimum_interval_ms is None:
+                connection.execute("COMMIT")
+                return GateDecision(attempt_id, None, "upstream_read_not_configured", None)
+
+            row = connection.execute(
+                "SELECT * FROM upstream_request_gate WHERE endpoint_key='getUserInfo'"
+            ).fetchone()
+            epoch = row["lease_epoch"]
+            reclaimed = False
+            if row["lease_owner_id"] is not None:
+                if row["lease_expires_at_utc_ms"] > now_utc_ms:
+                    retry_at = max(
+                        row["lease_expires_at_utc_ms"],
+                        row["next_allowed_at_utc_ms"] or 0,
+                        row["upstream_backoff_until_utc_ms"] or 0,
+                    )
+                    connection.execute("COMMIT")
+                    return GateDecision(
+                        attempt_id, None, "upstream_read_rate_limited",
+                        _retry_seconds_until(retry_at, now_utc_ms),
+                    )
+                epoch += 1
+                connection.execute(
+                    """UPDATE upstream_request_gate SET lease_owner_id=NULL,
+                       lease_expires_at_utc_ms=NULL, active_validation_attempt_id=NULL,
+                       active_started_at_utc_ms=NULL, active_user_id=NULL, active_credential_id=NULL,
+                       active_operation_kind=NULL, active_credential_version_snapshot=NULL,
+                       active_token_revision_snapshot_id=NULL, lease_epoch=?
+                       WHERE endpoint_key='getUserInfo'""",
+                    (epoch,),
+                )
+                reclaimed = True
+
+            retry_at = max(
+                row["next_allowed_at_utc_ms"] or 0,
+                row["upstream_backoff_until_utc_ms"] or 0,
+            )
+            if retry_at > now_utc_ms:
+                connection.execute("COMMIT")
+                return GateDecision(
+                    attempt_id, None, "upstream_read_rate_limited",
+                    _retry_seconds_until(retry_at, now_utc_ms),
+                )
+
+            owner_id = secrets.token_urlsafe(24)
+            if not reclaimed:
+                epoch += 1
+            lease_duration_ms = math.ceil(
+                (self.total_deadline_seconds + self.lease_safety_margin_seconds) * 1000
+            )
+            if (lease_duration_ms > _MAX_SQLITE_INTEGER - now_utc_ms
+                    or self.minimum_interval_ms > _MAX_SQLITE_INTEGER - now_utc_ms):
+                raise GateUnavailableError("configured request interval exceeds the SQLite timestamp range")
+            lease_expires = now_utc_ms + lease_duration_ms
+            next_allowed = max(
+                row["next_allowed_at_utc_ms"] or 0,
+                now_utc_ms + self.minimum_interval_ms,
+            )
+            connection.execute(
+                """UPDATE upstream_request_gate SET lease_owner_id=?, lease_epoch=?,
+                   lease_expires_at_utc_ms=?, active_validation_attempt_id=?,
+                   active_started_at_utc_ms=?, active_user_id=?, active_credential_id=?,
+                   active_operation_kind=?, active_credential_version_snapshot=?,
+                   active_token_revision_snapshot_id=?, next_allowed_at_utc_ms=?
+                   WHERE endpoint_key='getUserInfo'""",
+                (
+                    owner_id, epoch, lease_expires, attempt_id, now_utc_ms,
+                    context.user_id, context.credential_id, context.operation_kind,
+                    context.credential_version_snapshot,
+                    context.current_token_revision_snapshot_id, next_allowed,
+                ),
+            )
+            connection.execute("COMMIT")
+            permit = GatePermit(
+                validation_attempt_id=attempt_id,
+                owner_id=owner_id,
+                epoch=epoch,
+                started_at_utc_ms=now_utc_ms,
+                lease_expires_at_utc_ms=lease_expires,
+                context=context,
+            )
+            return GateDecision(attempt_id, permit, None, None)
+        except BaseException:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        finally:
+            connection.close()
+
+    def complete_read_only(
+        self,
+        permit: GatePermit,
+        now_utc_ms: int,
+        *,
+        upstream_status_code: int | None,
+        retry_after_header: str | None = None,
+    ) -> GateCompletion:
+        """Release an availability-read lease and apply upstream retry backoff."""
+        if (not isinstance(permit, GatePermit)
+                or permit.context.operation_kind != "availability_read"):
+            raise ValueError("invalid read-only gate permit")
+        if (isinstance(now_utc_ms, bool) or not isinstance(now_utc_ms, int)
+                or not 0 <= now_utc_ms <= _MAX_SQLITE_INTEGER):
+            raise ValueError("now_utc_ms must be a non-negative integer")
+        connection = connect_database(self.database_path, self.busy_timeout_ms)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM upstream_request_gate WHERE endpoint_key='getUserInfo'"
+            ).fetchone()
+            if not self._lease_matches(row, permit, now_utc_ms):
+                connection.execute("ROLLBACK")
+                return GateCompletion("stale")
+            delay_ms = self._retry_after_delay_ms(
+                retry_after_header, upstream_status_code, now_utc_ms
+            )
+            self._extend_backoff_in_transaction(connection, now_utc_ms, delay_ms)
+            connection.execute(
+                """UPDATE upstream_request_gate SET lease_owner_id=NULL,
+                   lease_expires_at_utc_ms=NULL, active_validation_attempt_id=NULL,
+                   active_started_at_utc_ms=NULL, active_user_id=NULL, active_credential_id=NULL,
+                   active_operation_kind=NULL, active_credential_version_snapshot=NULL,
+                   active_token_revision_snapshot_id=NULL
+                   WHERE endpoint_key='getUserInfo' AND lease_owner_id=? AND lease_epoch=?""",
+                (permit.owner_id, permit.epoch),
+            )
+            connection.execute("COMMIT")
+            return GateCompletion("completed")
         except BaseException:
             if connection.in_transaction:
                 connection.execute("ROLLBACK")

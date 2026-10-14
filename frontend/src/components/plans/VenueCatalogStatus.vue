@@ -6,6 +6,7 @@ const findingLabels={
   client_version_association:'尚未确认场馆数据与官方客户端版本的对应关系。',
   venue_list_response:'尚未取得可核验的官方场馆列表响应。',
   venue_name_to_parent_scope:'尚未确认场馆显示名到查询范围的对应关系。',
+  physical_venue_label_to_parent_scope:'尚未确认用户可见的物理场馆名与查询范围；预约分类节点不能代替场馆。',
   court_to_venue_association:'尚未确认返回场地属于所选场馆。',
   booking_by_time_scope_response_association:'尚未确认时段响应属于哪个已选场馆。',
   booking_by_time_response_structure:'时段、冲突和价格字段结构尚未完整核实。',
@@ -27,8 +28,8 @@ const sourceStateLabel=computed(()=>props.catalog.source_state==='protocol_evide
 <template>
   <section class="panel venue-catalog-status" data-testid="venue-catalog-status" aria-labelledby="venue-catalog-title">
     <div><p class="eyebrow">目录与数据来源</p><h2 id="venue-catalog-title">{{ catalogConfigured?`可信场馆目录 ${catalog.catalog_version}`:'可信场馆目录尚未配置' }}</h2></div>
-    <p v-if="catalogConfigured">目录项来自已核验的版本。现有计划仍是未绑定草稿，本版本没有开放计划绑定或真实时段查询。</p>
-    <p v-else>计划里手工填写的场馆和场地仍是未核验偏好。当前没有可绑定的目录版本，也不会查询真实时段。</p>
+    <p v-if="catalogConfigured">目录项来自已核验的版本。现有计划仍是未绑定草稿，本版本没有开放计划绑定。</p>
+    <p v-else>计划里手工填写的物理场馆和场地仍是未核验偏好。预约分类节点不能据此绑定场馆，也不能确认真实可预约库存。</p>
     <p class="catalog-version">目录版本：{{ catalog.catalog_version||'未配置' }} · 来源状态：{{ sourceStateLabel }}</p>
     <details v-if="blockers.length">
       <summary>查看尚缺的协议证据</summary>

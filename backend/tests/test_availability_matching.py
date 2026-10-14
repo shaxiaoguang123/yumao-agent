@@ -252,7 +252,7 @@ class SimulationApiTests(unittest.TestCase):
         self.assertEqual(result.status_code,200)
         grid=result.get_json()
         self.assertEqual(grid['source']['data_state'],'historical_unverified')
-        self.assertEqual([row['cells'][0]['state'] for row in grid['rows']],['historical_selectable','historical_activity_occupied'])
+        self.assertEqual([row['cells'][0]['state'] for row in grid['rows']],['historical_unknown','historical_activity_occupied'])
         self.assertFalse(grid['can_select']);self.assertFalse(grid['can_match']);self.assertFalse(grid['can_bind'])
         for forbidden in ('synthetic-private-a','synthetic-private-price','nodeid','priceList','coordinatesList'):
             self.assertNotIn(forbidden,str(grid))
