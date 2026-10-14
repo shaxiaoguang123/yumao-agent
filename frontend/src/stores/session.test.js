@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+afterEach(()=>vi.unstubAllGlobals());
 
 async function loadSessionStore() {
   const module = await import('./session.js').catch(() => null);
@@ -189,5 +191,18 @@ describe('Session store', () => {
     expect(store.user).toBeNull();
     expect(store.csrfToken).toBe('');
     expect(store.logoutUnconfirmed).toBe(false);
+  });
+
+  it('records the owner of an invalidated Session before clearing identity', async()=>{
+    const createSessionStore=await loadSessionStore();
+    const response=(status,body)=>({status,ok:status>=200&&status<300,json:async()=>body});
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValueOnce(response(200,authenticatedResponse)).mockResolvedValueOnce(response(401,{error:'session_invalid'})));
+    const store=createSessionStore();
+    await store.refresh();
+    await expect(store.request('/api/plans')).rejects.toMatchObject({sessionInvalid:true,status:401});
+    expect(store.invalidationEpoch).toBe(1);
+    expect(store.invalidatedUserId).toBe('user-1');
+    expect(store.status).toBe('unauthenticated');
+    expect(store.user).toBeNull();
   });
 });

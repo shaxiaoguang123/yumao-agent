@@ -1,7 +1,8 @@
 from backend.availability_matching.matcher import AvailabilityMatcher
 from backend.availability_matching.models import AvailabilityError
 from backend.availability_matching.synthetic import SyntheticAvailabilitySource, SCENARIOS
-from backend.availability_matching.venue_time_grid import SyntheticVenueTimeGridSource
+from backend.availability_matching.venue_time_grid import AvailabilityGridProjector
+from backend.availability_matching.official_history import OfficialBookingByTimeHistoryAdapter
 from backend.plans.service import PlanError
 from backend.plans.validation import IntentValidationError, parse_manual_intent
 
@@ -9,23 +10,34 @@ NOTICE = '当前为模拟时段匹配，使用合成数据，并非真实场馆�
 
 
 class SimulationAvailabilityService:
-    def __init__(self, plans, *, enabled=False, grid_preview_enabled=False):
+    def __init__(self, plans, *, enabled=False, grid_preview_enabled=False, history_preview_enabled=False):
         self.plans, self.enabled = plans, enabled
         self.grid_preview_enabled = grid_preview_enabled
+        self.history_preview_enabled = history_preview_enabled
         self.source, self.matcher = SyntheticAvailabilitySource(), AvailabilityMatcher()
-        self.grid_source = SyntheticVenueTimeGridSource()
+        self.grid_projector = AvailabilityGridProjector()
+        self.history_adapter = OfficialBookingByTimeHistoryAdapter()
 
     def options(self):
         return {'enabled': self.enabled, 'grid_preview_enabled': self.grid_preview_enabled,
                 'mode': 'simulation', 'notice': NOTICE,
-                'scenarios': [dict(item) for item in SCENARIOS] if self.enabled else []}
+                'scenarios': [dict(item) for item in SCENARIOS] if self.enabled else [],
+                'grid_scenarios': [dict(item) for item in SCENARIOS] if self.grid_preview_enabled else [],
+                'history_preview_enabled': self.history_preview_enabled}
+
+    def preview_history(self, response):
+        if not self.history_preview_enabled:
+            raise AvailabilityError('history_preview_not_enabled', 404)
+        return self.history_adapter.preview(response)
 
     def preview_grid(self, payload, now_utc_ms):
         if not self.grid_preview_enabled:
             raise AvailabilityError('grid_preview_not_enabled', 404)
-        if type(payload) is not dict or payload.keys() != {
-                'target_date', 'duration_minutes', 'venue_preference', 'court_preferences'}:
+        required = {'target_date', 'duration_minutes', 'venue_preference', 'court_preferences'}
+        if (type(payload) is not dict or not required.issubset(payload)
+                or payload.keys() - required - {'scenario'}):
             raise AvailabilityError('invalid_request', 400)
+        scenario = payload.get('scenario', 'partially_occupied')
         intent = {
             'target_date': payload['target_date'],
             'preferred_start_times': ['18:00'],
@@ -47,13 +59,14 @@ class SimulationAvailabilityService:
             ).value['intent']
         except IntentValidationError as exc:
             raise PlanError('invalid_plan', 400, exc.fields) from None
-        return self.grid_source.preview(
-            target_date=normalized['target_date'],
-            timezone_name=self.plans.active_context.timezone_name,
-            venue_preference=normalized['venue_preference'],
-            court_preferences=normalized['court_preferences'],
-            duration_minutes=normalized['duration_minutes'],
-        )
+        ephemeral_plan = {'intent': normalized,
+                          'context': self.plans.active_context.to_dict()}
+        snapshot = self.source.snapshot(ephemeral_plan, scenario)
+        if snapshot.simulation is not True:
+            raise AvailabilityError('simulation_source_invalid', 503)
+        return self.grid_projector.project(snapshot, court_names=normalized['court_preferences'],
+                                           duration_minutes=normalized['duration_minutes'], scenario=scenario,
+                                           window_start='17:00', window_end='23:00')
 
     def simulate(self, user_id, plan_id, base_version, scenario, now):
         if not self.enabled:

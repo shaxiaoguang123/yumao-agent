@@ -12,6 +12,8 @@ export function createSessionStore({ client: providedClient } = {}) {
     errorMessage: '',
     logoutUnconfirmed: false,
     logoutMessage: '',
+    invalidationEpoch: 0,
+    invalidatedUserId: null,
   });
 
   function clearAuth() {
@@ -23,12 +25,16 @@ export function createSessionStore({ client: providedClient } = {}) {
     store.errorMessage = '';
   }
 
+  function invalidateSession() {
+    store.invalidatedUserId = store.user?.user_id || null;
+    store.invalidationEpoch += 1;
+    clearAuth();
+    store.initialRefreshComplete = true;
+  }
+
   const client = providedClient || createHttpClient({
     getCsrfToken: () => store.csrfToken,
-    onSessionInvalid: () => {
-      clearAuth();
-      store.initialRefreshComplete = true;
-    },
+    onSessionInvalid: invalidateSession,
   });
 
   store.request = (path, options) => client.request(path, options);
@@ -37,6 +43,7 @@ export function createSessionStore({ client: providedClient } = {}) {
     store.user = payload.user;
     store.csrfToken = payload.csrf_token;
     store.status = 'authenticated';
+    store.invalidatedUserId = null;
     store.initialRefreshComplete = true;
     store.errorMessage = '';
     store.logoutUnconfirmed = false;

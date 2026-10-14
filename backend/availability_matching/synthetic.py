@@ -30,8 +30,24 @@ class SyntheticAvailabilitySource:
             for start in range(0, 1440, 30):
                 if scenario == 'time_gap' and start == 1110:
                     continue
-                status = 'unavailable' if scenario == 'no_match' or (scenario == 'partially_occupied' and i == 0 and start == 1110) else 'available'
+                status, display_state, display_label = 'available', 'selectable', None
+                if scenario == 'no_match':
+                    status, display_state = 'unavailable', 'unbookable'
+                elif scenario == 'partially_occupied':
+                    if i == 0 and start == 1110:
+                        status, display_state, display_label = 'unavailable', 'activity_occupied', '合成活动'
+                    elif i == 0 and start == 1260:
+                        status, display_state = 'unavailable', 'reserved'
+                    elif i == 1 and start == 1290:
+                        status, display_state, display_label = 'unavailable', 'activity_occupied', '合成活动'
+                    elif start == 1320:
+                        status, display_state = 'unavailable', 'unbookable'
+                    elif i == 0 and start == 1350:
+                        status, display_state = 'unknown', 'unknown'
                 price = None if scenario == 'price_unknown' else (999900 if scenario == 'high_price' else 1500 + i * 300)
-                slots.append(AvailabilitySlot(court, clock(start), clock(start + 30), status, price))
+                slots.append(AvailabilitySlot(court, clock(start), clock(start + 30), status, price,
+                                              display_state, display_label))
+        time_bands = tuple((clock(start), clock(start + 30)) for start in range(0, 1440, 30))
         return AvailabilitySnapshot(intent['target_date'], plan['context']['timezone_name'], intent['venue_preference'],
-                                    tuple(slots), 'synthetic-v1:' + scenario, True, 'CNY', 2)
+                                    tuple(slots), 'synthetic-v1:' + scenario, True, 'CNY', 2,
+                                    time_bands=time_bands)

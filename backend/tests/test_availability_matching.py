@@ -119,6 +119,15 @@ class AvailabilityMatcherTests(unittest.TestCase):
         with self.assertRaises(AvailabilityError): snapshot(hourly(),simulation='true')
         with self.assertRaises(AvailabilityError): snapshot(hourly(),currency_minor_unit_exponent=True)
 
+    def test_snapshot_time_axis_preserves_gaps_and_rejects_misaligned_slots(self):
+        bands=(('18:00','18:30'),('19:00','19:30'))
+        valid=snapshot([Slot('6号场','18:00','18:30','available'),Slot('6号场','19:00','19:30','available')],time_bands=bands)
+        self.assertEqual(valid.time_bands,bands)
+        with self.assertRaises(AvailabilityError):
+            snapshot([Slot('6号场','18:00','19:00','available')],time_bands=bands)
+        with self.assertRaises(AvailabilityError):
+            snapshot([Slot('6号场','18:00','18:30','available')],time_bands=(('18:00','19:00'),('18:30','19:30')))
+
     def test_midnight_endpoint_and_different_atom_lengths(self):
         slots=[Slot('6号场','22:00','23:00','available',100),Slot('6号场','23:00','23:30','available',50),Slot('6号场','23:30','24:00','available',50)]
         result=self.matcher.match(plan(preferred_start_times=['22:00']),snapshot(slots))
@@ -227,6 +236,36 @@ class SimulationApiTests(unittest.TestCase):
             self.assertNotIn(forbidden,str(grid))
         self.network.assert_not_called()
 
+    def test_official_history_preview_is_read_only_unverified_and_development_only(self):
+        endpoint='/api/availability/history/preview'
+        response={"success":True,"message":"synthetic","resultData":{
+            "stepnumber":"2",
+            "nodeList":[{"nodeid":"synthetic-private-a","sitename":"合成场地甲"},{"nodeid":"synthetic-private-b","sitename":"合成场地乙"}],
+            "timeList":[{"time":"18:00","status":"1"},{"time":"18:30","status":"0"}],
+            "conflictList":["1-0","0-1-3","1-1-7"],
+            "priceList":[{"x":"0","y":"1","price":"synthetic-private-price"}],
+        }}
+        self.assertEqual(self.app.test_client().post(endpoint,json={"response":response},headers={'Origin':ORIGIN}).status_code,401)
+        self.assertEqual(self.a.post(endpoint,json={"response":response},headers={'Origin':ORIGIN}).status_code,403)
+        before=self.app.extensions['plan_service'].list_revisions('a',self.saved['plan_id'],NOW)
+        result=self.a.post(endpoint,json={"response":response},headers=self.headers['a'])
+        self.assertEqual(result.status_code,200)
+        grid=result.get_json()
+        self.assertEqual(grid['source']['data_state'],'historical_unverified')
+        self.assertEqual([row['cells'][0]['state'] for row in grid['rows']],['historical_selectable','historical_activity_occupied'])
+        self.assertFalse(grid['can_select']);self.assertFalse(grid['can_match']);self.assertFalse(grid['can_bind'])
+        for forbidden in ('synthetic-private-a','synthetic-private-price','nodeid','priceList','coordinatesList'):
+            self.assertNotIn(forbidden,str(grid))
+        self.assertEqual(self.app.extensions['plan_service'].list_revisions('a',self.saved['plan_id'],NOW),before)
+        self.assertEqual(self.a.post(endpoint,data='x'*(128*1024+1),content_type='application/json',headers=self.headers['a']).status_code,413)
+        production=create_app({**self.config,'APP_ENV':'production'})
+        production_client=production.test_client();cookie,csrf=production.extensions['session_service'].create('a',time.time_ns()//1_000_000)
+        production_client.set_cookie('yumao_session',cookie)
+        self.assertFalse(production_client.get('/api/availability/simulation/options').get_json()['history_preview_enabled'])
+        disabled=production_client.post(endpoint,json={"response":response},headers={'Origin':ORIGIN,'X-CSRF-Token':csrf})
+        self.assertEqual((disabled.status_code,disabled.get_json()['error']),(404,'history_preview_not_enabled'))
+        self.network.assert_not_called()
+
     def test_grid_preview_validates_contract_and_stays_disabled_outside_development(self):
         endpoint='/api/availability/simulation/grid'
         for body in (
@@ -249,11 +288,20 @@ class SimulationApiTests(unittest.TestCase):
         cookie,csrf=app.extensions['session_service'].create('a',time.time_ns()//1_000_000);client.set_cookie('yumao_session',cookie)
         options=client.get('/api/availability/simulation/options').get_json()
         self.assertFalse(options['enabled']);self.assertTrue(options['grid_preview_enabled'])
+        self.assertEqual({item['id'] for item in options['grid_scenarios']},{'complete','partially_occupied','time_gap','no_match','high_price','price_unknown'})
         result=client.post('/api/availability/simulation/grid',json={
-            'target_date':'2026-10-20','duration_minutes':120,'venue_preference':'人工场馆','court_preferences':['6号场']},
+            'target_date':'2026-10-20','duration_minutes':120,'venue_preference':'人工场馆','court_preferences':['6号场'],'scenario':'partially_occupied'},
             headers={'Origin':ORIGIN,'X-CSRF-Token':csrf})
         self.assertEqual(result.status_code,200)
-        self.assertTrue(result.get_json()['simulation'])
+        grid=result.get_json()
+        self.assertTrue(grid['simulation']);self.assertEqual(grid['scenario'],'partially_occupied')
+        self.assertEqual(grid['grid_version'],'venue-time-grid-v2')
+        row=next(item for item in grid['rows'] if item['start_time']=='18:30')
+        self.assertEqual(row['cells'][0]['state'],'activity_occupied')
+        self.assertFalse(row['cells'][0]['selectable'])
+        same_snapshot=app.extensions['availability_simulation_service'].source.snapshot(self.saved,'partially_occupied')
+        matched=app.extensions['availability_simulation_service'].matcher.match(self.saved,same_snapshot)
+        self.assertFalse(any(item['court_name']=='6号场' and item['start_time']=='18:00' for item in matched['candidates']))
 
     def test_cross_user_and_missing_plan_are_identical_and_do_not_call_source(self):
         source=self.app.extensions['availability_simulation_service'].source

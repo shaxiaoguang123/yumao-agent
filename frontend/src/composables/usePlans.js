@@ -9,10 +9,12 @@ export function usePlans(api, session) {
   const windowState=shallowRef(null), windowError=shallowRef(''), uncertain=shallowRef(false);
   const authorized=computed(()=>session?.status==='authenticated' && Boolean(session.user?.user_id));
   const canCreate=computed(()=>authorized.value && context.value && defaultWindow.value && !saving.value);
-  let alive=true, epoch=0, listSequence=0, windowSequence=0, historySequence=0, latestSequence=0;
+  let alive=true, epoch=0, sourceSelectionSequence=0, listSequence=0, windowSequence=0, historySequence=0, latestSequence=0;
+  let suspendedDraft=null,recoveryUserId=null,lastInvalidationEpoch=session?.invalidationEpoch??0;
   const valid=(generation)=>alive && generation===epoch && authorized.value;
   function clearFeedback() { message.value='';saveError.value='';fields.value={};conflict.value=false;latest.value=null;latestError.value='';uncertain.value=false;latestSequence++; }
   function clearAll() {
+    sourceSelectionSequence++;
     plans.value=[];context.value=null;defaultWindow.value=null;catalog.value=null;source.value=null;listStatus.value='idle';metadataError.value='';saving.value=false;
     history.value=[];historyPlanId.value=null;historyStatus.value='idle';windowState.value=null;windowError.value='';clearFeedback();
     listSequence++;windowSequence++;historySequence++;
@@ -32,18 +34,27 @@ export function usePlans(api, session) {
     })()]);
   }
   function setSource(plan) {
+    sourceSelectionSequence++;
     windowSequence++;clearFeedback();
     source.value={planId:plan.plan_id,baseVersion:plan.version,intent:copy(plan.intent),context:copy(plan.context)};
+    suspendedDraft={userId:session.user.user_id,source:copy(source.value)};
     windowState.value=plan.booking_window;windowError.value='';
   }
   function startNew() {
     if(!canCreate.value)return;
+    sourceSelectionSequence++;
     windowSequence++;clearFeedback();
     source.value={planId:null,baseVersion:null,intent:newIntent(defaultWindow.value.default_target_date),context:copy(context.value)};
+    suspendedDraft={userId:session.user.user_id,source:copy(source.value)};
     windowState.value=null;windowError.value='';
   }
   function edit(plan) {if(authorized.value&&!saving.value)setSource(plan);}
-  function cancel() {if(!saving.value){source.value=null;windowState.value=null;windowSequence++;clearFeedback();}}
+  function cancel() {if(!saving.value){sourceSelectionSequence++;source.value=null;windowState.value=null;windowSequence++;suspendedDraft=null;recoveryUserId=null;clearFeedback();}}
+  function rememberDraft(draftState){
+    if(!authorized.value||!source.value||typeOfDraft(draftState)!=='object')return;
+    const updated=copy(source.value);updated.draftState=copy(draftState);source.value.draftState=updated.draftState;
+    suspendedDraft={userId:session.user.user_id,source:updated};
+  }
   async function updateWindow(targetDate) {
     if(!authorized.value || !source.value)return;
     const generation=epoch, sequence=++windowSequence, selected=source.value;
@@ -87,7 +98,42 @@ export function usePlans(api, session) {
   }
   function closeHistory(){historyPlanId.value=null;history.value=[];historySequence++;}
   function acknowledgeUncertain(){if(authorized.value)uncertain.value=false;}
-  watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken],()=>{epoch++;clearAll();if(authorized.value)void initialize();},{immediate:true,flush:'sync'});
+  watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken,session?.invalidationEpoch],()=>{
+    const userId=session?.user?.user_id||null;
+    const invalidationEpoch=session?.invalidationEpoch??0;
+    const invalidated=invalidationEpoch!==lastInvalidationEpoch;
+    lastInvalidationEpoch=invalidationEpoch;
+    if(invalidated&&authorized.value&&session?.invalidatedUserId===userId){
+      if(source.value){const preserved=copy(source.value);suspendedDraft={userId,source:preserved};}
+      recoveryUserId=userId;
+      return;
+    }
+    if(userId&&suspendedDraft&&userId!==suspendedDraft.userId)suspendedDraft=null;
+    if(userId&&recoveryUserId&&userId!==recoveryUserId)recoveryUserId=null;
+    if(!userId&&recoveryUserId===null)suspendedDraft=null;
+    if(authorized.value&&recoveryUserId===userId&&!suspendedDraft)recoveryUserId=null;
+    const restore=recoveryUserId===userId&&suspendedDraft?.userId===userId?copy(suspendedDraft):null;
+    if(userId&&!restore&&recoveryUserId===null) suspendedDraft=null;
+    const generation=++epoch;clearAll();
+    const restoreSelectionSequence=sourceSelectionSequence;
+    if(authorized.value){
+      void initialize().then(()=>{
+        if(!valid(generation))return;
+        if(restore){
+          if(sourceSelectionSequence!==restoreSelectionSequence||source.value!==null){
+            recoveryUserId=null;
+            return;
+          }
+          source.value=copy(restore.source);windowState.value=null;windowError.value='';
+          message.value='登录已恢复，未保存表单已恢复；请重新生成网格并保存时确认版本。';
+          recoveryUserId=null;suspendedDraft=null;
+          void updateWindow(source.value.intent.target_date);
+        }
+      });
+    }
+  },{immediate:true,flush:'sync'});
   onBeforeUnmount(()=>{alive=false;epoch++;clearAll();});
-  return {plans,context,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain};
+  return {plans,context,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain,rememberDraft};
 }
+
+function typeOfDraft(value){return value&&typeof value==='object'&&!Array.isArray(value)?'object':typeof value;}

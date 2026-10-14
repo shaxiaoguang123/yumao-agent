@@ -33,7 +33,7 @@ async function context(name,width=1440,height=900){
  const page=await ctx.newPage();page.on('pageerror',e=>report.errors.push(e.message));return {ctx,page};
 }
 async function login(page,user){await page.goto(origin+'/login');await page.getByLabel('用户名').fill(user);await page.getByLabel('密码',{exact:true}).fill('Synthetic-only-password-42');await page.getByRole('button',{name:'登录',exact:true}).click();await page.getByRole('link',{name:'预约计划',exact:true}).click();await page.getByRole('heading',{name:'我的预约计划'}).waitFor();}
-async function choosePlan(page){const value=await page.getByTestId('simulation-plan').locator('option').evaluateAll(options=>options.find(o=>o.value)?.value);await page.getByTestId('simulation-plan').selectOption(value);}
+async function choosePlan(page){const select=page.getByTestId('simulation-plan');const firstSavedPlan=select.locator('option:not([value=""])').first();await firstSavedPlan.waitFor({state:'attached',timeout:10000});const value=await firstSavedPlan.getAttribute('value');if(!value)throw new Error('saved plan did not appear in the simulation selector');await select.selectOption(value);}
 async function runMatch(page,scenario){await page.getByTestId('simulation-scenario').selectOption(scenario);await page.getByTestId('simulate-matches').click();await page.getByRole('region',{name:'模拟匹配结果',exact:true}).waitFor();}
 async function screenshot(page,name){const file=path.join(output,name+'.jpg');await page.screenshot({path:file,fullPage:true});report.screenshots.push(file);}
 try{
