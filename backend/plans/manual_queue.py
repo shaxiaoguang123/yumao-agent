@@ -7,13 +7,13 @@ QUEUE_KIND = 'manual_queue_draft'
 PRIORITY = (120, 60)
 
 
-def parse_queue(payload, context: PlanInterpretationContext, today: date):
+def parse_queue(payload, context: PlanInterpretationContext, today: date, *, allow_past=False):
     def fail(message):
         raise IntentValidationError('queue', message)
     if type(payload) is not dict or payload.keys() != {'target_date', 'entries'}:
         fail('请提交日期与语义候选队列；不接受坐标、凭据或执行参数。')
     target = parse_target_date(payload['target_date'])
-    if target < today:
+    if target < today and not allow_past:
         fail('目标日期不能早于当前业务日期。')
     entries = payload['entries']
     if type(entries) is not list or len(entries) > 32:
@@ -31,7 +31,7 @@ def parse_queue(payload, context: PlanInterpretationContext, today: date):
             'court_preferences': [entry['court_preference']],
             'fallback_policy': {'allow_any_court_in_venue': False, 'allow_time_shift': False, 'allowed_start_time_range': None},
             'price_ceiling_minor': None,
-        }, today_business_date=today, context=context).value['intent']
+        }, today_business_date=min(today, target) if allow_past else today, context=context).value['intent']
         start = intent['preferred_start_times'][0]
         if not start.endswith(':00'):
             fail('当前小时队列须从整点开始。')

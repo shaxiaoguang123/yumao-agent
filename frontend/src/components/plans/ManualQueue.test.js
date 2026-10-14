@@ -20,13 +20,14 @@ async function setup(overrides={},account=session()){
 describe('manual queue interactions',()=>{
  it('adds a full continuous two-hour block from one start cell and cancels exact candidate',async()=>{
   const wrapper=mount(ManualQueueGrid,{props:{courtNames:['已占用观察场','活动观察场'],entries:[],duration:120}});
-  await wrapper.get('[data-testid="queue-cell-2-0"]').trigger('click');
+  await wrapper.get('[data-testid="queue-cell-18-0"]').trigger('click');
+  expect(wrapper.findAll('tbody tr')).toHaveLength(24);
   expect(wrapper.emitted('change')[0][0]).toEqual([entry('已占用观察场')]);
   await wrapper.setProps({entries:[entry('已占用观察场')]});
-  expect(wrapper.get('[data-testid="queue-cell-3-0"]').attributes('aria-pressed')).toBe('true');
-  await wrapper.get('[data-testid="queue-cell-2-0"]').trigger('click');expect(wrapper.emitted('change').at(-1)[0]).toEqual([]);
-  await wrapper.get('[data-testid="queue-cell-5-1"]').trigger('click');expect(wrapper.text()).toContain('两个连续小时');
-  await wrapper.setProps({duration:60});await wrapper.get('[data-testid="queue-cell-5-1"]').trigger('click');expect(wrapper.emitted('change').at(-1)[0]).toContainEqual(entry('活动观察场',60,'21:00'));
+  expect(wrapper.get('[data-testid="queue-cell-19-0"]').attributes('aria-pressed')).toBe('true');
+  await wrapper.get('[data-testid="queue-cell-18-0"]').trigger('click');expect(wrapper.emitted('change').at(-1)[0]).toEqual([]);
+  await wrapper.get('[data-testid="queue-cell-23-1"]').trigger('click');expect(wrapper.text()).toContain('两个连续小时');
+  await wrapper.setProps({duration:60});await wrapper.get('[data-testid="queue-cell-23-1"]').trigger('click');expect(wrapper.emitted('change').at(-1)[0]).toContainEqual(entry('活动观察场',60,'23:00'));
  });
  it('reorders only inside its group and removes one candidate without affecting the other queue',async()=>{
   const wrapper=mount(ManualQueuePreview,{props:{entries:[entry('首选'),entry('备选'),entry('一小时',60)]}});

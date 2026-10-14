@@ -62,3 +62,37 @@ class ManualQueueTests(unittest.TestCase):
         self.assertEqual(self.a.put('/api/plans/manual-queues/2026-10-20',json={'base_version':1,'entries':[]}).status_code,403)
         self.assertEqual(self.app.test_client().get('/api/plans/manual-queues').status_code,401)
         self.network.assert_not_called()
+
+    def test_archive_delete_is_owned_versioned_and_preserves_history(self):
+        q=self.save_queue([entry()]).get_json()['queue']
+        url='/api/plans/manual-queues/2026-10-20'
+        self.assertEqual(self.b.delete(url,json={'base_version':1},headers=self.headers['b']).status_code,404)
+        self.assertEqual(self.a.delete(url,json={'base_version':0},headers=self.headers['a']).status_code,400)
+        removed=self.a.delete(url,json={'base_version':1},headers=self.headers['a'])
+        self.assertEqual(removed.status_code,200)
+        self.assertTrue(removed.get_json()['queue']['deleted'])
+        self.assertEqual(self.a.get('/api/plans/manual-queues').get_json()['queues'],[])
+        history=self.a.get(url+'/revisions').get_json()['revisions']
+        self.assertEqual([r['revision_number'] for r in history],[2,1])
+        self.assertEqual(len(history[1]['candidates']),1)
+        self.assertEqual(self.a.delete(url,json={'base_version':1},headers=self.headers['a']).status_code,409)
+        revived=self.save_queue([entry('重新选择')],base=2).get_json()['queue']
+        self.assertEqual(revived['plan_id'],q['plan_id'])
+        self.assertEqual(revived['version'],3)
+        self.assertNotIn('deleted',revived)
+        self.network.assert_not_called()
+
+    def test_past_queue_can_be_viewed_edited_and_deleted_but_not_opened_for_selection(self):
+        with patch('backend.api.plans._now_utc_ms',return_value=1791500000000):
+            q=self.save_queue([entry()],date='2026-10-12').get_json()['queue']
+        url='/api/plans/manual-queues/2026-10-12'
+        q=self.a.get(url).get_json()['queue']
+        self.assertEqual(q['plan_status'],'expired')
+        self.assertFalse(q['can_open_selection'])
+        self.assertEqual(q['execution_state'],'not_started')
+        updated=self.save_queue([entry('历史语义修改')],base=1,date='2026-10-12')
+        self.assertEqual(updated.status_code,200)
+        self.assertEqual(updated.get_json()['queue']['version'],2)
+        self.assertEqual(self.save_queue([entry()],date='2026-10-11').status_code,400)
+        self.assertEqual(self.a.delete(url,json={'base_version':2},headers=self.headers['a']).status_code,200)
+        self.network.assert_not_called()

@@ -146,3 +146,20 @@ def save_manual_queue(target_date):
 @require_session
 def manual_queue_revisions(target_date):
     return jsonify({"revisions": _service().manual_queue_revisions(_user_id(), _queue_date(target_date))})
+
+
+@plans_bp.delete("/<plan_id>")
+@require_session
+@require_csrf
+def delete_plan(plan_id):
+    body = _body({"base_version"})
+    _service().delete_plan(_user_id(), plan_id, body["base_version"], _now_utc_ms())
+    return jsonify({"deleted": True})
+
+
+@plans_bp.delete("/manual-queues/<target_date>")
+@require_session
+@require_csrf
+def delete_manual_queue(target_date):
+    body = _body({"base_version"})
+    return jsonify({"queue": _service().delete_manual_queue(_user_id(), _queue_date(target_date), body["base_version"], _now_utc_ms())})

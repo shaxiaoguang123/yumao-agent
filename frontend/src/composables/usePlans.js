@@ -97,6 +97,16 @@ export function usePlans(api, session) {
     catch {if(valid(generation)&&sequence===historySequence)historyStatus.value='error';}
   }
   function closeHistory(){historyPlanId.value=null;history.value=[];historySequence++;}
+  async function remove(plan){
+    if(!authorized.value||saving.value)return;
+    const generation=epoch;saving.value=true;saveError.value='';message.value='';
+    try{await api.remove(plan.plan_id,plan.version);if(!valid(generation))return;
+      plans.value=plans.value.filter(item=>item.plan_id!==plan.plan_id);
+      if(source.value?.planId===plan.plan_id){source.value=null;suspendedDraft=null;}
+      message.value='计划已删除，历史修订已保留。';
+    }catch(error){if(valid(generation))saveError.value=error?.status===409?'版本冲突：计划已更新，请重新读取后删除。':'删除结果未确认，请重新读取计划核对。';}
+    finally{if(valid(generation))saving.value=false;}
+  }
   function acknowledgeUncertain(){if(authorized.value)uncertain.value=false;}
   watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken,session?.invalidationEpoch],()=>{
     const userId=session?.user?.user_id||null;
@@ -133,7 +143,7 @@ export function usePlans(api, session) {
     }
   },{immediate:true,flush:'sync'});
   onBeforeUnmount(()=>{alive=false;epoch++;clearAll();});
-  return {plans,context,defaultWindow,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain,rememberDraft};
+  return {plans,context,defaultWindow,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,remove,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain,rememberDraft};
 }
 
 function typeOfDraft(value){return value&&typeof value==='object'&&!Array.isArray(value)?'object':typeof value;}

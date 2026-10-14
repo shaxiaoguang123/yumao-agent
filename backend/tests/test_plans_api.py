@@ -53,6 +53,18 @@ class PlansApiTests(unittest.TestCase):
         for key in ('can_book','can_pay','can_create_job','can_query_upstream'):self.assertIs(p[key],False)
         self.network.assert_not_called()
 
+    def test_plan_delete_preserves_history_and_rejects_foreign_or_stale_requests(self):
+        p=self.create();url='/api/plans/'+p['plan_id']
+        self.assertEqual(self.b.delete(url,json={'base_version':1},headers=self.headers['b']).status_code,404)
+        self.assertEqual(self.a.delete(url,json={'base_version':2},headers=self.headers['a']).status_code,409)
+        self.assertEqual(self.a.delete(url,json={'base_version':1},headers=self.headers['a']).status_code,200)
+        self.assertEqual(self.a.get('/api/plans').get_json()['plans'],[])
+        self.assertEqual(self.a.get(url).status_code,404)
+        history=self.a.get(url+'/revisions').get_json()['revisions']
+        self.assertTrue(history[0]['deleted']);self.assertEqual(history[1]['intent'],p['intent'])
+        self.assertEqual(self.a.patch(url,json={'base_version':2,'intent':draft()},headers=self.headers['a']).status_code,404)
+        self.network.assert_not_called()
+
     def test_security_session_csrf_and_origin(self):
         self.assertEqual(self.app.test_client().get('/api/plans').status_code,401)
         self.assertEqual(self.app.test_client().get('/api/plans/options').status_code,401)

@@ -49,9 +49,12 @@ class PlanService:
                     db.execute("ROLLBACK")
                 raise
 
-    def _parse(self, payload, context, now):
+    def _parse(self, payload, context, now, saved_target=None):
         try:
-            return parse_manual_intent(payload, today_business_date=BookingWindowPolicy(context.timezone_name).business_date_at_utc(now), context=context)
+            today = BookingWindowPolicy(context.timezone_name).business_date_at_utc(now)
+            if saved_target and isinstance(payload, dict) and payload.get("target_date") == saved_target:
+                today = min(today, date.fromisoformat(saved_target))
+            return parse_manual_intent(payload, today_business_date=today, context=context)
         except IntentValidationError as exc:
             raise PlanError("invalid_plan", 400, exc.fields) from exc
 
@@ -83,13 +86,13 @@ class PlanService:
     def list_plans(self, user_id: str, now_utc_ms: int | None = None) -> list[dict]:
         now = now_utc_ms if now_utc_ms is not None else time.time_ns() // 1_000_000
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
-            return [self._dto(row, now) for row in db.execute(_CURRENT + " ORDER BY p.updated_at_utc_ms DESC,p.plan_id", (user_id,)) if json.loads(row["intent_json"])["kind"] != QUEUE_KIND]
+            return [self._dto(row, now) for row in db.execute(_CURRENT + " ORDER BY p.updated_at_utc_ms DESC,p.plan_id", (user_id,)) if json.loads(row["intent_json"])["kind"] != QUEUE_KIND and not json.loads(row["intent_json"]).get("deleted", False)]
 
     def get_plan(self, user_id: str, plan_id: str, now_utc_ms: int | None = None) -> dict:
         now = now_utc_ms if now_utc_ms is not None else time.time_ns() // 1_000_000
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
             row = self._owned(db, user_id, plan_id)
-            if json.loads(row["intent_json"])["kind"] == QUEUE_KIND:
+            if json.loads(row["intent_json"])["kind"] == QUEUE_KIND or json.loads(row["intent_json"]).get("deleted", False):
                 raise PlanError("plan_not_found", 404)
             return self._dto(row, now)
 
@@ -108,11 +111,11 @@ class PlanService:
             current = self._owned(db, user_id, plan_id)
             if current["version"] != base_version:
                 raise PlanError("plan_version_conflict", 409)
-            if json.loads(current["intent_json"])["kind"] == QUEUE_KIND:
+            if json.loads(current["intent_json"])["kind"] == QUEUE_KIND or json.loads(current["intent_json"]).get("deleted", False):
                 raise PlanError("plan_not_found", 404)
             saved = json.loads(current["intent_json"])["context"]
             context = PlanInterpretationContext(saved["timezone_name"], saved["currency_code"], saved["currency_minor_unit_exponent"])
-            snapshot = self._parse(payload, context, now_utc_ms)
+            snapshot = self._parse(payload, context, now_utc_ms, json.loads(current["intent_json"])["intent"]["target_date"])
             if snapshot.canonical_json == current["intent_json"]:
                 return self._dto(current, now_utc_ms)
             revision_id = str(uuid.uuid4())
@@ -130,9 +133,18 @@ class PlanService:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"yumao:manual-queue:v1:{user_id}:{target_date}"))
 
     def _queue_dto(self, row):
+        snapshot = json.loads(row["intent_json"])
+        now = time.time_ns() // 1_000_000
+        today = BookingWindowPolicy(snapshot["context"]["timezone_name"]).business_date_at_utc(now)
+        within_window = date.fromisoformat(snapshot["target_date"]) in self.policy.queryable_target_dates(now)
+        state = ("deleted" if snapshot.get("deleted") else "expired" if snapshot["target_date"] < today.isoformat()
+                 else "draft" if within_window else "outside_window")
         return {"plan_id": row["plan_id"], "version": row["version"],
                 "current_revision_id": row["current_revision_id"], "intent_sha256": row["intent_sha256"],
-                "updated_at_utc_ms": row["updated_at_utc_ms"], **json.loads(row["intent_json"]),
+                "updated_at_utc_ms": row["updated_at_utc_ms"], **snapshot,
+                "plan_status": state, "execution_state": "not_started",
+                "can_open_selection": (within_window and snapshot["context"]["timezone_name"] == self.policy.timezone_name
+                                       and not snapshot.get("deleted", False)),
                 "can_query_upstream": False, "can_book": False, "can_pay": False, "can_create_job": False}
 
     def get_manual_queue(self, user_id, target_date):
@@ -143,7 +155,7 @@ class PlanService:
     def list_manual_queues(self, user_id):
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
             return [self._queue_dto(row) for row in db.execute(_CURRENT + " ORDER BY p.updated_at_utc_ms DESC,p.plan_id", (user_id,))
-                    if json.loads(row["intent_json"])["kind"] == QUEUE_KIND]
+                    if json.loads(row["intent_json"])["kind"] == QUEUE_KIND and not json.loads(row["intent_json"]).get("deleted", False)]
 
     def manual_queue_revisions(self, user_id, target_date):
         identifier = self._queue_id(user_id, target_date)
@@ -164,7 +176,7 @@ class PlanService:
             saved = json.loads(row["intent_json"])["context"] if row else self.active_context.to_dict()
             context = PlanInterpretationContext(saved["timezone_name"], saved["currency_code"], saved["currency_minor_unit_exponent"])
             try:
-                snapshot = parse_queue({"target_date": target_date, "entries": entries}, context, BookingWindowPolicy(context.timezone_name).business_date_at_utc(now))
+                snapshot = parse_queue({"target_date": target_date, "entries": entries}, context, BookingWindowPolicy(context.timezone_name).business_date_at_utc(now), allow_past=bool(row))
             except IntentValidationError as exc:
                 raise PlanError("invalid_plan", 400, exc.fields) from exc
             encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -179,3 +191,38 @@ class PlanService:
                 if changed.rowcount != 1:
                     raise PlanError("plan_version_conflict", 409)
             return self._queue_dto(self._owned(db, user_id, identifier))
+
+
+    def delete_plan(self, user_id, plan_id, base_version, now):
+        if type(base_version) is not int or not 1 <= base_version <= 9007199254740991:
+            raise PlanError("invalid_plan", 400)
+        with self._transaction() as db:
+            row = self._owned(db, user_id, plan_id)
+            snapshot = json.loads(row["intent_json"])
+            if snapshot["kind"] == QUEUE_KIND or snapshot.get("deleted"):
+                raise PlanError("plan_not_found", 404)
+            self._delete_snapshot(db, row, snapshot, base_version, now)
+
+    def delete_manual_queue(self, user_id, target_date, base_version, now):
+        if type(base_version) is not int or not 1 <= base_version <= 9007199254740991:
+            raise PlanError("invalid_plan", 400)
+        with self._transaction() as db:
+            row = self._owned(db, user_id, self._queue_id(user_id, target_date))
+            snapshot = json.loads(row["intent_json"])
+            if snapshot.get("deleted") and row["version"] == base_version:
+                return self._queue_dto(row)
+            snapshot["candidates"] = []
+            self._delete_snapshot(db, row, snapshot, base_version, now)
+            return self._queue_dto(self._owned(db, user_id, row["plan_id"]))
+
+    def _delete_snapshot(self, db, row, snapshot, base_version, now):
+        if row["version"] != base_version:
+            raise PlanError("plan_version_conflict", 409)
+        snapshot["deleted"] = True
+        snapshot["deleted_at_utc_ms"] = now
+        encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        revision_id = str(uuid.uuid4())
+        db.execute("INSERT INTO booking_plan_revisions VALUES (?,?,?,?,?,?,?,?)", (revision_id, row["plan_id"], row["user_id"], base_version + 1, encoded, hashlib.sha256(encoded.encode()).hexdigest(), row["user_id"], now))
+        changed = db.execute("UPDATE booking_plans SET current_revision_id=?, version=version+1,updated_at_utc_ms=? WHERE user_id=? AND plan_id=? AND version=?", (revision_id, now, row["user_id"], row["plan_id"], base_version))
+        if changed.rowcount != 1:
+            raise PlanError("plan_version_conflict", 409)

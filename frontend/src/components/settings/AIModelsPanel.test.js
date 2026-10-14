@@ -12,6 +12,14 @@ describe('AI models settings',()=>{
   const {wrapper}=await mountPanel(fixture({list:vi.fn(async()=>({models:[],service_default:{...model,id:'service_default'},selected_model_id:null,default_model_id:null,effective_model_id:'service_default'}))}));
   expect(wrapper.text()).toContain('还没有配置可用模型');expect(wrapper.text()).toContain('服务提供');expect(wrapper.findAll('option').some(option=>option.text().includes('服务默认'))).toBe(true);
  });
+ it('prefills verified provider presets without sending a model request and clears a typed key on provider change',async()=>{
+  const {wrapper,api}=await mountPanel();await wrapper.get('[data-testid="preset-deepseek"]').trigger('click');
+  expect(wrapper.get('[name="base_url"]').element.value).toBe('https://api.deepseek.com');expect(wrapper.get('[name="model"]').element.value).toBe('deepseek-flash');
+  expect(api.create).not.toHaveBeenCalled();expect(api.test).not.toHaveBeenCalled();
+  await wrapper.get('[name="api_key"]').setValue('private-pending-key');await wrapper.get('[name="model_preset"]').setValue('openai');
+  expect(wrapper.get('[name="api_key"]').element.value).toBe('');expect(wrapper.get('[name="base_url"]').element.value).toBe('https://api.openai.com/v1');
+  expect(wrapper.get('.model-quick-guide a').attributes('href')).toBe('https://api-docs.deepseek.com/quick_start');
+ });
  it('creates a model and never displays a saved secret or echoes it into the edit form',async()=>{
   const {wrapper,api}=await mountPanel();
   await wrapper.get('.add-model').trigger('click');await wrapper.get('[name="name"]').setValue('New provider');await wrapper.get('[name="base_url"]').setValue('https://new.test/v1');await wrapper.get('[name="model"]').setValue('new-chat');await wrapper.get('[name="api_key"]').setValue('do-not-echo-this');await wrapper.get('form').trigger('submit');await flushPromises();

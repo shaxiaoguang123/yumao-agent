@@ -15,7 +15,7 @@ async function chooseGridBlock(wrapper){await wrapper.get('[data-testid="grid-lo
 describe('manual plans page',()=>{
  it('defaults to third-day query and exposes four ordered sections without the redundant header',async()=>{
   const {wrapper,api}=await mountView();
-  expect(wrapper.findAll('[role="tab"]').map(tab=>tab.text().replace(/\s+/g,''))).toEqual(['查询场地','选择预约','Agent预约','当前计划1']);
+  expect(wrapper.findAll('[role="tab"]').map(tab=>tab.text().replace(/\s+/g,''))).toEqual(['查询场地','选择预约','Agent预约','抢票计划1']);
   expect(wrapper.get('#plan-panel-query').isVisible()).toBe(true);
   expect(wrapper.get('#plan-panel-manual').isVisible()).toBe(false);
   expect(wrapper.find('.plans-heading').exists()).toBe(false);

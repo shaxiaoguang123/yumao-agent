@@ -4,7 +4,7 @@ import AppIcon from '../AppIcon.vue';
 const props=defineProps({modelValue:{type:String,default:'query'},planCount:{type:Number,default:0}});
 const emit=defineEmits(['update:modelValue']);
 const nav=useTemplateRef('nav');
-const tabs=[{id:'query',label:'查询场地',icon:'search'},{id:'manual',label:'选择预约',icon:'court'},{id:'agent',label:'Agent 预约',icon:'bot'},{id:'current',label:'当前计划',icon:'list'}];
+const tabs=[{id:'query',label:'查询场地',icon:'search'},{id:'manual',label:'选择预约',icon:'court'},{id:'agent',label:'Agent 预约',icon:'bot'},{id:'current',label:'抢票计划',icon:'list'}];
 async function navigate(event,index){
  let next=index;
  if(event.key==='ArrowRight')next=(index+1)%tabs.length;

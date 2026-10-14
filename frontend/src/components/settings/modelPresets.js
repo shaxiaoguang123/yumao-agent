@@ -1,0 +1,7 @@
+// Verified against linked official documentation on 2026-10-15. Editable examples,
+// not a guarantee of account access or parsing capability; no preset sends a request.
+export const MODEL_PRESETS = [
+ {id:'deepseek',label:'DeepSeek',name:'DeepSeek Flash',base_url:'https://api.deepseek.com',model:'deepseek-flash',docs:'https://api-docs.deepseek.com/quick_start',console:'https://platform.deepseek.com',hint:'在 DeepSeek 开放平台创建 API Key。模型名称可按账户权限调整。'},
+ {id:'openai',label:'OpenAI',name:'GPT-4.1 mini',base_url:'https://api.openai.com/v1',model:'gpt-4.1-mini',docs:'https://developers.openai.com/api/docs/models/gpt-4.1-mini',console:'https://platform.openai.com/api-keys',hint:'在 OpenAI API 平台创建 API Key，确认账户有对应模型权限。'},
+ {id:'qwen',label:'通义千问',name:'Qwen Plus',base_url:'https://dashscope.aliyuncs.com/compatible-mode/v1',model:'qwen-plus',docs:'https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope',console:'https://bailian.console.aliyun.com',hint:'在百炼北京地域获取 API Key；可将地址替换为控制台提供的业务空间专属域名。'},
+];

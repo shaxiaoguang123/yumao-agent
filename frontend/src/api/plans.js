@@ -2,6 +2,8 @@ const path = (id) => `/api/plans/${encodeURIComponent(id)}`;
 export function createPlanApi(client) {
   if (typeof client?.request !== 'function') throw new TypeError('an authenticated HTTP client is required');
   return {
+    remove: (id, base_version) => client.request(path(id), {method:'DELETE',body:{base_version}}),
+    removeQueue: (date, base_version) => client.request(`/api/plans/manual-queues/${encodeURIComponent(date)}`, {method:'DELETE',body:{base_version}}),
     queues: () => client.request('/api/plans/manual-queues'),
     queue: (date) => client.request(`/api/plans/manual-queues/${encodeURIComponent(date)}`),
     saveQueue: (date, base_version, entries) => client.request(`/api/plans/manual-queues/${encodeURIComponent(date)}`, {method:'PUT',body:{base_version,entries}}),

@@ -14,6 +14,7 @@ import LiveAvailabilityPanel from './LiveAvailabilityPanel.vue';
 import PlanSectionTabs from './PlanSectionTabs.vue';
 import BookingDateStrip from './BookingDateStrip.vue';
 import ManualQueueWorkspace from './ManualQueueWorkspace.vue';
+import TicketQueuePlans from './TicketQueuePlans.vue';
 import ManualQueuePreview from './ManualQueuePreview.vue';
 import PlanCredentialControl from './PlanCredentialControl.vue';
 import { useManualQueue, queueEntries } from '../../composables/useManualQueue.js';
@@ -21,9 +22,12 @@ import { usePlans } from '../../composables/usePlans.js';
 const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('planningProposalApi',null);
 const simulationApi=inject('availabilitySimulationApi',null);
 const liveApi=inject('liveAvailabilityApi',null),credentialApi=inject('credentialApi',null);
-const {plans,defaultWindow,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain,rememberDraft}=usePlans(api,session);
-const courtOptions=shallowRef([]),queryDate=shallowRef(''),selectedCredentialId=shallowRef(''),credentialRefreshKey=shallowRef(0);
+const {plans,defaultWindow,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,remove,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain,rememberDraft}=usePlans(api,session);
+const courtOptions=shallowRef([]),queryDate=shallowRef(''),selectedCredentialId=shallowRef(''),credentialRefreshKey=shallowRef(0),planDateFilter=shallowRef(''),pendingDeletePlan=shallowRef(null);
 const liveDraft=shallowRef(null),activeSection=shallowRef('query'),manualDate=shallowRef('');
+const visiblePlans=computed(()=>plans.value.filter(plan=>!planDateFilter.value||plan.intent.target_date===planDateFilter.value));
+function queueChanged(date){queueState.refreshList();if(date===manualDate.value&&!queueState.dateLocked)queueState.load();}
+function selectQueue(date){if(!(defaultWindow.value?.queryable_target_dates||[]).includes(date)||queueState.dateLocked)return;manualDate.value=date;activeSection.value='manual';}
 const queueState=useManualQueue(api,session,()=>manualDate.value);
 onBeforeRouteLeave(async()=>{if(!authorized.value||!queueState.dirty)return true;await queueState.flush();return !queueState.dirty;});
 watch(defaultWindow,value=>{
@@ -38,7 +42,7 @@ function rememberLiveDraft(draft){rememberDraft(draft);liveDraft.value=draft;}
 function createManualPlan(){activeSection.value='current';startNew(manualDate.value||undefined);}
 
 function rememberCourtLabels(names){if(JSON.stringify(courtOptions.value)!==JSON.stringify(names))courtOptions.value=[...names];}
-watch(()=>[session?.status,session?.user?.user_id,session?.invalidationEpoch],()=>{courtOptions.value=[];},{flush:'sync'});
+watch(()=>[session?.status,session?.user?.user_id,session?.invalidationEpoch],()=>{courtOptions.value=[];pendingDeletePlan.value=null;planDateFilter.value='';},{flush:'sync'});
 const queryContextKey=computed(()=>JSON.stringify({user:session?.user?.user_id,epoch:session?.invalidationEpoch}));
 </script>
 <template>
@@ -66,16 +70,19 @@ const queryContextKey=computed(()=>JSON.stringify({user:session?.user?.user_id,e
     <p v-else class="panel muted">Agent 服务当前未配置，请先检查模型设置。</p>
    </section>
    <section v-show="activeSection==='current'" id="plan-panel-current" role="tabpanel" aria-labelledby="plan-tab-current" class="plan-workspace-section">
+   <div class="ticket-filter-bar"><label><AppIcon name="calendar" /><input v-model="planDateFilter" type="date" aria-label="抢票计划日期" /></label><button type="button" class="text-button" @click="planDateFilter=''">全部日期</button><span class="ticket-filter-count">{{ visiblePlans.length+queueState.queues.filter(q=>(q.candidates.length||planDateFilter)&&(!planDateFilter||q.target_date===planDateFilter)).length }} 份计划</span><button type="button" class="text-button" :disabled="saving||queueState.dateLocked" aria-label="重新读取抢票计划" @click="refresh();queueState.refreshList()"><AppIcon name="refresh" /></button></div>
+
        <div v-if="source" class="plan-edit-section"><PlanForm :court-options="courtOptions" :source="source"  :busy="saving" :save-blocked="conflict || uncertain" :fields="fields" :grid-api="simulationApi" :session-key="session?.user?.user_id||''" @save="save" @cancel="cancel" @target-change="updateWindow" @draft-change="rememberLiveDraft" /><details class="window-details"><summary>日期窗口</summary><BookingWindowStatus :state="windowState" :error="windowError" /></details></div>
 
    <section v-if="plans.length||!queueState.queues.some(q=>q.candidates.length)" class="panel" aria-labelledby="plans-list-title"><div class="plan-section-heading"><h2 id="plans-list-title">我的计划</h2><button data-testid="new-plan" class="secondary-button" type="button" :disabled="!canCreate" @click="createManualPlan"><AppIcon name="plus" />新建计划</button><button data-testid="refresh-plans" class="secondary-button" type="button" :disabled="saving || listStatus==='loading'" @click="refresh();queueState.refreshList()" aria-label="刷新计划" title="刷新计划"><AppIcon name="refresh" /></button></div>
     <p v-if="listStatus==='loading'" class="muted" role="status">正在读取计划…</p>
     <p v-else-if="listStatus==='error'" class="form-error" role="alert">计划读取失败，请检查网络后刷新重试。</p>
-    <p v-else-if="listStatus==='ready' && !plans.length" class="plan-empty">还没有预约计划。可以先保存未来日期的人工意向。</p>
-    <div v-else class="plan-list"><article v-for="plan in plans" :key="plan.plan_id" class="plan-card"><div><span class="plan-draft-tag">未绑定</span><h3>{{ plan.intent.venue_preference }}</h3><p>{{ plan.intent.target_date }} · {{ plan.intent.preferred_start_times.join(' → ') }} · {{ plan.intent.duration_minutes }} 分钟</p><p class="muted">版本 {{ plan.version }} · {{ plan.intent.court_preferences.join(' → ') || '场地未指定' }}</p></div><div class="plan-actions"><button data-testid="edit-plan" class="secondary-button" type="button" :disabled="saving" @click="edit(plan)">编辑计划</button><button data-testid="history-plan" class="text-button" type="button" :disabled="saving" @click="showHistory(plan.plan_id)">版本历史</button></div></article></div>
+    <p v-else-if="listStatus==='ready' && !visiblePlans.length" class="plan-empty">{{ planDateFilter ? '当天没有普通计划。' : '还没有预约计划。可以先保存未来日期的人工意向。' }}</p>
+    <div v-else class="plan-list"><article v-for="plan in visiblePlans" :key="plan.plan_id" class="plan-card"><div><span class="plan-draft-tag">{{ plan.intent.target_date<(defaultWindow?.business_date||'')?'已过期 · 未绑定':(defaultWindow?.queryable_target_dates||[]).includes(plan.intent.target_date)?'未执行 · 未绑定':'窗口外 · 未绑定' }}</span><h3>{{ plan.intent.venue_preference }}</h3><p>{{ plan.intent.target_date }} · {{ plan.intent.preferred_start_times.join(' → ') }} · {{ plan.intent.duration_minutes }} 分钟</p><p class="muted">版本 {{ plan.version }} · {{ plan.intent.court_preferences.join(' → ') || '场地未指定' }}</p></div><div class="plan-actions"><button data-testid="edit-plan" class="secondary-button" type="button" :disabled="saving" @click="edit(plan)">编辑计划</button><button data-testid="history-plan" class="text-button" type="button" :disabled="saving" @click="showHistory(plan.plan_id)">版本历史</button><button class="text-button" type="button" :disabled="saving" :aria-label="`删除计划${plan.intent.venue_preference}`" @click="pendingDeletePlan=plan">删除</button></div></article></div>
+   <div v-if="pendingDeletePlan" class="ticket-delete-plan"><span>删除“{{ pendingDeletePlan.intent.venue_preference }}”？历史会保留。</span><button type="button" class="danger-button" :disabled="saving" @click="remove(pendingDeletePlan);pendingDeletePlan=null">确认删除</button><button type="button" class="text-button" @click="pendingDeletePlan=null">取消</button></div>
    </section>
-   <section v-if="queueState.queues.some(q=>q.candidates.length)" class="panel current-queues" aria-label="人工候选队列"><h2>人工候选队列</h2><article v-for="queue in queueState.queues.filter(q=>q.candidates.length)" :key="queue.plan_id"><div class="plan-section-heading"><h3>{{ queue.target_date }} · v{{ queue.version }}</h3><button type="button" class="secondary-button" :disabled="queueState.dateLocked" @click="manualDate=queue.target_date;activeSection='manual'">继续选择</button><button type="button" class="text-button" @click="queueState.showHistory(queue.target_date)">版本历史</button></div><ManualQueuePreview :entries="queueEntries(queue)" readonly /></article></section>
-   <section v-if="queueState.history" class="panel queue-history"><div class="plan-section-heading"><h2>队列版本历史</h2><button type="button" class="text-button" @click="queueState.history=null">关闭历史</button></div><details v-for="revision in queueState.history" :key="revision.revision_id"><summary>版本 {{ revision.revision_number }} · {{ revision.target_date }}</summary><ManualQueuePreview :entries="queueEntries(revision)" readonly /></details></section><p v-if="queueState.historyError" class="form-error" role="alert">{{ queueState.historyError }}</p>
+   <TicketQueuePlans :queues="queueState.queues" :date-filter="planDateFilter" :calendar-state="defaultWindow" :court-names="courtOptions" :api="api" :session="session" :busy="queueState.dateLocked" @changed="queueChanged" @select="selectQueue" @history="queueState.showHistory" />
+   <section v-if="queueState.history" class="panel queue-history"><div class="plan-section-heading"><h2>队列版本历史</h2><button type="button" class="text-button" @click="queueState.history=null">关闭历史</button></div><details v-for="revision in queueState.history" :key="revision.revision_id"><summary>版本 {{ revision.revision_number }} · {{ revision.target_date }}{{ revision.deleted?' · 已删除':'' }}</summary><ManualQueuePreview :entries="queueEntries(revision)" readonly /></details></section><p v-if="queueState.historyError" class="form-error" role="alert">{{ queueState.historyError }}</p>
    <PlanHistory v-if="historyPlanId" :revisions="history" :status="historyStatus" @close="closeHistory" @retry="showHistory(historyPlanId)" />
    <details class="plan-reference-details" data-testid="simulation-disclosure"><summary><AppIcon name="court" />模拟匹配</summary><AvailabilitySimulationPanel v-if="simulationApi" :plans="plans" :api="simulationApi" :session="session" @refresh-request="refresh" /></details>
    </section>
@@ -93,4 +100,8 @@ const queryContextKey=computed(()=>JSON.stringify({user:session?.user?.user_id,e
 
 <style scoped>
 .current-queues{margin-top:12px}.current-queues h2,.queue-history h2{font-size:18px}.current-queues article{padding:12px 0;border-top:1px solid var(--line)}.current-queues article :deep(.queue-preview){grid-template-columns:repeat(2,minmax(0,1fr))}.current-queues h3{font-size:14px}.queue-history details>summary{min-height:44px;display:flex;align-items:center;cursor:pointer}.queue-history :deep(.queue-preview){margin:10px 0}@media(max-width:600px){.current-queues article :deep(.queue-preview){grid-template-columns:minmax(0,1fr)}}
+</style>
+
+<style scoped>
+.ticket-filter-bar{display:flex;gap:8px;align-items:center;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);margin-bottom:10px}.ticket-filter-bar label{display:flex;align-items:center;gap:6px;min-width:0}.ticket-filter-bar input{min-height:36px;width:145px;padding:5px;border:1px solid var(--line);border-radius:5px;color:var(--ink);background:var(--surface);font:inherit;font-size:13px}.ticket-filter-bar>button{min-height:36px;font-size:12px;padding:4px}.ticket-filter-count{margin-left:auto;font-size:12px;color:var(--muted);white-space:nowrap}.ticket-delete-plan{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px}.plan-card{padding:10px 0}.plan-card h3{font-size:15px;margin:4px 0}.plan-card p{font-size:12px}.plan-actions button{min-height:36px;padding:5px 8px;font-size:12px}@media(max-width:600px){.ticket-filter-bar{flex-wrap:wrap;padding:8px}.ticket-filter-bar input{min-height:44px}.ticket-filter-bar button{min-height:44px}.ticket-filter-count{margin-left:0}.ticket-filter-bar>button:last-child{margin-left:auto}}
 </style>
