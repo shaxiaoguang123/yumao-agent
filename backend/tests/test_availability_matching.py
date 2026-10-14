@@ -1,5 +1,6 @@
 import random
 import tempfile
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -180,8 +181,9 @@ class SimulationApiTests(unittest.TestCase):
             for user in ('a','b'):
                 db.execute("INSERT INTO users(user_id,username,normalized_username,password_hash,role,status,created_at_utc_ms,updated_at_utc_ms) VALUES(?,?,?,'synthetic','user','active',1,1)",(user,user,user))
         self.a,self.b=self.app.test_client(),self.app.test_client();self.headers={}
+        session_now=time.time_ns()//1_000_000
         for user,client in (('a',self.a),('b',self.b)):
-            cookie,csrf=self.app.extensions['session_service'].create(user,NOW);client.set_cookie('yumao_session',cookie)
+            cookie,csrf=self.app.extensions['session_service'].create(user,session_now);client.set_cookie('yumao_session',cookie)
             self.headers[user]={'Origin':ORIGIN,'X-CSRF-Token':csrf}
         self.saved=self.app.extensions['plan_service'].create_plan('a',plan()['intent'],NOW)
         self.endpoint='/api/availability/simulation/plans/'+self.saved['plan_id']
@@ -192,6 +194,7 @@ class SimulationApiTests(unittest.TestCase):
 
     def test_owned_saved_plan_matching_is_read_only_and_explicitly_synthetic(self):
         self.assertTrue(self.a.get('/api/availability/simulation/options').get_json()['enabled'])
+        self.assertTrue(self.a.get('/api/availability/simulation/options').get_json()['grid_preview_enabled'])
         result=self.match().get_json()
         self.assertTrue(result['simulation']);self.assertEqual(result['source']['trust_state'],'synthetic')
         self.assertEqual(result['base_version'],1);self.assertEqual(result['candidates'][0]['court_name'],'6号场')
@@ -200,6 +203,57 @@ class SimulationApiTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM booking_plan_revisions').fetchone()[0],1)
             self.assertEqual(db.execute('SELECT max(version) FROM schema_migrations').fetchone()[0],6)
         self.network.assert_not_called()
+
+    def test_manual_grid_preview_is_synthetic_ephemeral_and_never_saves_coordinates(self):
+        body={'target_date':'2026-10-20','duration_minutes':120,'venue_preference':'人工场馆标签','court_preferences':['6号场','5号场']}
+        endpoint='/api/availability/simulation/grid'
+        self.assertEqual(self.app.test_client().post(endpoint,json=body,headers={'Origin':ORIGIN}).status_code,401)
+        self.assertEqual(self.a.post(endpoint,json=body,headers={'Origin':ORIGIN}).status_code,403)
+        before=len(self.a.get('/api/plans').get_json()['plans'])
+        with closing(connect_database(self.path,5000)) as db:
+            before_revisions=db.execute('SELECT count(*) FROM booking_plan_revisions').fetchone()[0]
+        response=self.a.post(endpoint,json=body,headers=self.headers['a'])
+        self.assertEqual(response.status_code,200)
+        grid=response.get_json()
+        self.assertTrue(grid['simulation'])
+        self.assertEqual(grid['source']['data_state'],'synthetic')
+        self.assertEqual(grid['venue'],{'display_name':'人工场馆标签','verification':'unverified_manual'})
+        self.assertEqual([court['display_name'] for court in grid['courts']],body['court_preferences'])
+        self.assertFalse(grid['can_query_upstream']);self.assertFalse(grid['can_book']);self.assertFalse(grid['can_pay']);self.assertFalse(grid['can_create_job'])
+        self.assertEqual(len(self.a.get('/api/plans').get_json()['plans']),before)
+        with closing(connect_database(self.path,5000)) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM booking_plan_revisions').fetchone()[0],before_revisions)
+        for forbidden in ('nodeid','coordinatesList','courtIndex','timeIndex','price_minor'):
+            self.assertNotIn(forbidden,str(grid))
+        self.network.assert_not_called()
+
+    def test_grid_preview_validates_contract_and_stays_disabled_outside_development(self):
+        endpoint='/api/availability/simulation/grid'
+        for body in (
+            {'target_date':'2026-10-20','duration_minutes':120,'venue_preference':'场馆','court_preferences':['6号场'],'nodeid':'bad'},
+            {'target_date':'bad','duration_minutes':120,'venue_preference':'场馆','court_preferences':['6号场']},
+            {'target_date':'2026-10-20','duration_minutes':45,'venue_preference':'场馆','court_preferences':['6号场']},
+            {'target_date':'2026-10-20','duration_minutes':120,'venue_preference':'场馆','court_preferences':[]},
+        ):
+            self.assertEqual(self.a.post(endpoint,json=body,headers=self.headers['a']).status_code,400)
+        self.assertEqual(self.a.post(endpoint,data='x'*16385,content_type='application/json',headers=self.headers['a']).status_code,413)
+        app=create_app({**self.config,'APP_ENV':'production','AVAILABILITY_SIMULATION_ENABLED':'false'})
+        client=app.test_client();cookie,csrf=app.extensions['session_service'].create('a',time.time_ns()//1_000_000);client.set_cookie('yumao_session',cookie)
+        self.assertFalse(client.get('/api/availability/simulation/options').get_json()['grid_preview_enabled'])
+        response=client.post(endpoint,json={'target_date':'2026-10-20','duration_minutes':120,'venue_preference':'场馆','court_preferences':['6号场']},headers={'Origin':ORIGIN,'X-CSRF-Token':csrf})
+        self.assertEqual((response.status_code,response.get_json()['error']),(404,'grid_preview_not_enabled'))
+
+    def test_development_grid_preview_is_independent_from_saved_plan_matching_scenarios(self):
+        config={**self.config,'AVAILABILITY_SIMULATION_ENABLED':'false'}
+        app=create_app(config);client=app.test_client()
+        cookie,csrf=app.extensions['session_service'].create('a',time.time_ns()//1_000_000);client.set_cookie('yumao_session',cookie)
+        options=client.get('/api/availability/simulation/options').get_json()
+        self.assertFalse(options['enabled']);self.assertTrue(options['grid_preview_enabled'])
+        result=client.post('/api/availability/simulation/grid',json={
+            'target_date':'2026-10-20','duration_minutes':120,'venue_preference':'人工场馆','court_preferences':['6号场']},
+            headers={'Origin':ORIGIN,'X-CSRF-Token':csrf})
+        self.assertEqual(result.status_code,200)
+        self.assertTrue(result.get_json()['simulation'])
 
     def test_cross_user_and_missing_plan_are_identical_and_do_not_call_source(self):
         source=self.app.extensions['availability_simulation_service'].source
@@ -221,7 +275,7 @@ class SimulationApiTests(unittest.TestCase):
     def test_production_and_default_development_do_not_serve_simulation(self):
         for config in ({**self.config,'APP_ENV':'production'},{**self.config,'AVAILABILITY_SIMULATION_ENABLED':'false'}):
             app=create_app(config);client=app.test_client()
-            cookie,csrf=app.extensions['session_service'].create('a',NOW);client.set_cookie('yumao_session',cookie)
+            cookie,csrf=app.extensions['session_service'].create('a',time.time_ns()//1_000_000);client.set_cookie('yumao_session',cookie)
             self.assertFalse(client.get('/api/availability/simulation/options').get_json()['enabled'])
             response=client.post(self.endpoint,json={'base_version':1,'scenario':'complete'},headers={'Origin':ORIGIN,'X-CSRF-Token':csrf})
             self.assertEqual(response.get_json()['error'],'simulation_not_enabled')

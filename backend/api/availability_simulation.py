@@ -34,3 +34,12 @@ def simulate(plan_id):
     body = _body({'base_version', 'scenario'})
     return jsonify(current_app.extensions['availability_simulation_service'].simulate(
         g.session_context.user.user_id, plan_id, body['base_version'], body['scenario'], time.time_ns() // 1_000_000))
+
+
+@availability_simulation_bp.post('/grid')
+@require_session
+@require_csrf
+def preview_grid():
+    body = _body({'target_date', 'duration_minutes', 'venue_preference', 'court_preferences'})
+    return jsonify(current_app.extensions['availability_simulation_service'].preview_grid(
+        body, time.time_ns() // 1_000_000))

@@ -168,7 +168,8 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         app.extensions["plan_service"], app.extensions["ai_provider_service"],
     )
     app.extensions['availability_simulation_service'] = SimulationAvailabilityService(
-        app.extensions['plan_service'], enabled=settings.availability_simulation_enabled)
+        app.extensions['plan_service'], enabled=settings.availability_simulation_enabled,
+        grid_preview_enabled=settings.app_env == 'development')
     app.extensions['venue_catalog_service'] = VenueCatalogService()
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
