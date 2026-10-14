@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, nextTick, shallowRef, watch } from 'vue';
+import { computed, inject, shallowRef, watch } from 'vue';
 import AppIcon from '../AppIcon.vue';
 import PlanForm from './PlanForm.vue';
 import PlanHistory from './PlanHistory.vue';
@@ -13,36 +13,30 @@ import LiveAvailabilityPanel from './LiveAvailabilityPanel.vue';
 import PlanSectionTabs from './PlanSectionTabs.vue';
 import BookingDateStrip from './BookingDateStrip.vue';
 import { usePlans } from '../../composables/usePlans.js';
-const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('planningProposalApi');
+const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('planningProposalApi',null);
 const simulationApi=inject('availabilitySimulationApi',null);
 const liveApi=inject('liveAvailabilityApi',null),credentialApi=inject('credentialApi',null);
 const {plans,defaultWindow,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain,rememberDraft}=usePlans(api,session);
-const observedSelection=shallowRef(null),liveRefreshKey=shallowRef(0);
-const liveDraft=shallowRef(null),activeSection=shallowRef('manual'),manualDate=shallowRef('');
+const courtOptions=shallowRef([]),queryDate=shallowRef('');
+const liveDraft=shallowRef(null),activeSection=shallowRef('query'),manualDate=shallowRef('');
 watch(defaultWindow,value=>{
- if(!value){manualDate.value='';activeSection.value='manual';}
- else if(!source.value)manualDate.value=value.default_target_date||value.queryable_target_dates?.[2]||'';
+ if(!value){manualDate.value='';queryDate.value='';activeSection.value='query';}
+ else {if(!queryDate.value)queryDate.value=value.queryable_target_dates?.[2]||value.default_target_date||'';if(!source.value)manualDate.value=value.default_target_date||value.queryable_target_dates?.[2]||'';}
 },{flush:'sync',immediate:true});
 watch(source,value=>{
- liveDraft.value=null;observedSelection.value=null;
+ liveDraft.value=null;
  if(value){manualDate.value=value.draftState?.form?.target_date||value.intent.target_date;activeSection.value='manual';}
 },{flush:'sync'});
 function rememberLiveDraft(draft){rememberDraft(draft);liveDraft.value=draft;manualDate.value=draft.form.target_date;}
 function createManualPlan(){activeSection.value='manual';startNew(manualDate.value||undefined);}
-async function applyObservedSelection(selection){
- if(!authorized.value||saving.value||conflict.value||uncertain.value||selection.target_date!==manualDate.value
-  ||selection.observation_expires_at_utc_ms<=Date.now())return;
- if(!source.value)startNew(selection.target_date);
- await nextTick();
- if(!authorized.value||!source.value||saving.value||conflict.value||uncertain.value
-  ||selection.target_date!==manualDate.value||selection.observation_expires_at_utc_ms<=Date.now())return;
- observedSelection.value={...selection};
-}
-const liveContextKey=computed(()=>JSON.stringify({source:source.value,draft:liveDraft.value,date:manualDate.value,conflict:conflict.value,uncertain:uncertain.value}));
+watch(activeSection,value=>{if(value==='manual'&&!source.value&&canCreate.value)startNew(manualDate.value||undefined);});
+function rememberCourtLabels(names){if(JSON.stringify(courtOptions.value)!==JSON.stringify(names))courtOptions.value=[...names];}
+watch(()=>[session?.status,session?.user?.user_id,session?.invalidationEpoch],()=>{courtOptions.value=[];},{flush:'sync'});
+const queryContextKey=computed(()=>JSON.stringify({user:session?.user?.user_id,epoch:session?.invalidationEpoch}));
 </script>
 <template>
  <div class="plans-page">
-  <header class="plans-heading"><h1>预约计划</h1><div class="plans-heading-actions"><span class="intent-badge">仅保存意向</span><button data-testid="new-plan" class="primary-button" type="button" :disabled="!canCreate" @click="createManualPlan"><AppIcon name="plus" />新建计划</button></div></header>
+  <h1 class="sr-only">预约计划</h1>
   <div v-if="!authorized" class="panel"><p role="alert">{{ session?.status==='unauthenticated' ? '登录状态已失效，请重新登录。' : '暂时无法确认登录状态，请重试。' }}</p></div>
   <template v-else>
    <PlanSectionTabs v-model="activeSection" :plan-count="plans.length" />
@@ -51,19 +45,22 @@ const liveContextKey=computed(()=>JSON.stringify({source:source.value,draft:live
    <div v-if="saveError" class="plan-feedback" :class="conflict?'plan-conflict':''" role="alert"><p>{{ saveError }}</p><button v-if="source?.planId && (conflict || uncertain)" class="secondary-button" data-testid="view-latest" type="button" @click="viewLatest">查看最新版本</button><template v-if="uncertain"><button class="secondary-button" type="button" @click="refresh">读取计划列表核对</button><button class="secondary-button" type="button" @click="acknowledgeUncertain">已核对，允许再次保存</button></template></div>
    <p v-if="latestError" class="form-error" role="alert">{{ latestError }}</p>
    <section v-if="latest" class="panel latest-plan" aria-label="最新版本预览"><h2>最新版本 {{ latest.version }}（独立预览）</h2><PlanSnapshotDetails :snapshot="latest" /><p class="muted">采用最新版本将替换下方未保存内容，请先比较并保留需要的文字。</p><button data-testid="adopt-latest" class="secondary-button" type="button" :disabled="saving" @click="adoptLatest">采用最新版本，替换表单</button></section>
-   <section v-show="activeSection==='manual'" id="plan-panel-manual" role="tabpanel" aria-labelledby="plan-tab-manual" class="plan-workspace-section">
-    <div class="manual-layout" :class="{'is-editing':source}"><section class="manual-observation"><BookingDateStrip v-model="manualDate" :state="defaultWindow" :busy="saving" @refresh="liveRefreshKey++" />
-    <LiveAvailabilityPanel v-if="liveApi && credentialApi" :api="liveApi" :credential-api="credentialApi" :session="session" :target-date="manualDate" :refresh-key="liveRefreshKey" :context-key="liveContextKey" :selection-disabled="saving || conflict || uncertain" @apply="applyObservedSelection" />
-
-    </section><div v-if="source" class="plan-edit-section"><PlanForm :observed-selection="observedSelection" :source="source" :requested-date="manualDate" :busy="saving" :save-blocked="conflict || uncertain" :fields="fields" :grid-api="simulationApi" :session-key="session?.user?.user_id||''" @save="save" @cancel="cancel" @target-change="updateWindow" @draft-change="rememberLiveDraft" /><details class="window-details"><summary>日期窗口</summary><BookingWindowStatus :state="windowState" :error="windowError" /></details></div></div>
+   <section v-show="activeSection==='query'" id="plan-panel-query" role="tabpanel" aria-labelledby="plan-tab-query" class="plan-workspace-section query-workspace">
+    <LiveAvailabilityPanel v-if="liveApi && credentialApi" :api="liveApi" :credential-api="credentialApi" :session="session" :calendar-state="defaultWindow" :target-date="queryDate" :context-key="queryContextKey" @date-change="queryDate=$event" @court-labels="rememberCourtLabels" />
+    <BookingDateStrip v-else v-model="queryDate" :state="defaultWindow" />
     <details class="plan-reference-details"><summary aria-label="目录来源与历史数据预览" title="目录来源与历史数据预览"><AppIcon name="info" />数据资料</summary><VenueCatalogStatus v-if="catalog" :catalog="catalog" /><OfficialHistoryPreview v-if="simulationApi" :api="simulationApi" :session="session" /></details>
+   </section>
+   <section v-show="activeSection==='manual'" id="plan-panel-manual" role="tabpanel" aria-labelledby="plan-tab-manual" class="plan-workspace-section">
+    <div class="selection-toolbar"><BookingDateStrip v-model="manualDate" :state="defaultWindow" :busy="saving" /><button data-testid="new-plan" class="secondary-button" type="button" :disabled="!canCreate" @click="createManualPlan"><AppIcon name="plus" />新建意向</button></div>
+    <div v-if="source" class="plan-edit-section"><PlanForm :court-options="courtOptions" :source="source" :requested-date="manualDate" :busy="saving" :save-blocked="conflict || uncertain" :fields="fields" :grid-api="simulationApi" :session-key="session?.user?.user_id||''" @save="save" @cancel="cancel" @target-change="updateWindow" @draft-change="rememberLiveDraft" /><details class="window-details"><summary>日期窗口</summary><BookingWindowStatus :state="windowState" :error="windowError" /></details></div>
+    <div v-else class="selection-empty"><AppIcon name="court" /><p>选择场地与时间，保存为预约偏好</p><button class="primary-button" type="button" :disabled="!canCreate" @click="createManualPlan">开始选择</button></div>
    </section>
    <section v-show="activeSection==='agent'" id="plan-panel-agent" role="tabpanel" aria-labelledby="plan-tab-agent" class="plan-workspace-section">
     <ProposalAssistant v-if="proposalApi" :plans="plans" :plan-api="api" :proposal-api="proposalApi" :session="session" @refresh-request="refresh" />
     <p v-else class="panel muted">Agent 服务当前未配置，请先检查模型设置。</p>
    </section>
    <section v-show="activeSection==='current'" id="plan-panel-current" role="tabpanel" aria-labelledby="plan-tab-current" class="plan-workspace-section">
-   <section class="panel" aria-labelledby="plans-list-title"><div class="plan-section-heading"><h2 id="plans-list-title">我的计划</h2><button data-testid="refresh-plans" class="secondary-button" type="button" :disabled="saving || listStatus==='loading'" @click="refresh" aria-label="刷新计划" title="刷新计划"><AppIcon name="refresh" /></button></div>
+   <section class="panel" aria-labelledby="plans-list-title"><div class="plan-section-heading"><h2 id="plans-list-title">我的计划</h2><button data-testid="new-current-plan" class="secondary-button" type="button" :disabled="!canCreate" @click="createManualPlan"><AppIcon name="plus" />新建计划</button><button data-testid="refresh-plans" class="secondary-button" type="button" :disabled="saving || listStatus==='loading'" @click="refresh" aria-label="刷新计划" title="刷新计划"><AppIcon name="refresh" /></button></div>
     <p v-if="listStatus==='loading'" class="muted" role="status">正在读取计划…</p>
     <p v-else-if="listStatus==='error'" class="form-error" role="alert">计划读取失败，请检查网络后刷新重试。</p>
     <p v-else-if="listStatus==='ready' && !plans.length" class="plan-empty">还没有预约计划。可以先保存未来日期的人工意向。</p>
@@ -80,4 +77,6 @@ const liveContextKey=computed(()=>JSON.stringify({source:source.value,draft:live
 </style>
 <style scoped>
 .plans-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.plans-heading h1{font-size:26px;margin:0;letter-spacing:-.03em}.plans-heading-actions{display:flex;align-items:center;gap:12px}.intent-badge{font-size:12px;color:var(--muted)}.plans-heading button,.manual-start button{display:inline-flex;align-items:center;gap:6px;min-height:44px}.plan-workspace-section{min-width:0}.manual-layout{display:grid;gap:16px;align-items:start}.manual-layout.is-editing{grid-template-columns:minmax(0,1fr) 400px}.manual-observation{min-width:0;border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:clip}.manual-observation :deep(.live-availability-panel){border:0;border-radius:0;margin:0;box-shadow:none;padding:16px 20px}.manual-start{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid var(--line);padding:12px 20px;font-size:13px}.plan-edit-section{min-width:0;margin:0}.plan-edit-section :deep(.plan-editor){padding:20px}.window-details{font-size:13px;color:var(--muted);margin-top:8px}.window-details>summary{cursor:pointer;min-height:44px;display:flex;align-items:center;gap:6px}.plan-reference-details{margin:8px 0 16px;color:var(--muted);font-size:13px}.plan-reference-details>summary{display:flex;align-items:center;gap:6px;cursor:pointer;min-height:44px;width:fit-content}.plan-reference-details[open]>summary{margin-bottom:8px}.plan-reference-details :deep(.venue-catalog-status){margin-bottom:0}.plan-section-heading h2{font-size:18px;margin:0}.plan-card{padding:16px 0}.plan-section-heading button{min-width:44px;min-height:44px;display:grid;place-items:center}.plan-reference-details :deep(.availability-simulation){margin-top:0}.plan-reference-details :deep(.simulation-notice){padding:8px 12px;font-size:13px}.plan-draft-tag{font-size:12px;padding:2px 7px}.plan-card h3{font-size:17px}.plan-card p{font-size:14px}.plans-page>.panel{margin-bottom:16px}.plans-page>.form-success{padding:0;background:transparent;border:0;font-size:13px;margin:0 0 12px;color:var(--brand)}@media(max-width:1100px){.manual-layout.is-editing{grid-template-columns:minmax(0,1fr)}.plan-edit-section{max-width:none}}@media(max-width:600px){.plans-heading h1{font-size:23px}.intent-badge{display:none}.manual-observation :deep(.live-availability-panel){padding:12px}.manual-start{padding:12px}.plan-edit-section :deep(.plan-editor){padding:16px}}
+
+.selection-toolbar{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:10px;margin-bottom:12px;padding-right:12px}.selection-toolbar>.booking-date-strip{flex:1;border:0;padding:10px 12px}.selection-toolbar>button{display:flex;align-items:center;gap:5px;white-space:nowrap;min-height:40px}.selection-empty{padding:48px 20px;text-align:center;border:1px dashed var(--line);border-radius:10px;color:var(--muted)}.selection-empty>.app-icon{width:30px;height:30px}.query-workspace{min-width:0}.plan-edit-section{max-width:100%}.plan-edit-section :deep(.plan-fieldset){grid-template-columns:repeat(2,minmax(0,1fr))}.plan-edit-section :deep(.plan-fieldset>.plan-two-columns){grid-column:1/-1}.plan-edit-section :deep(.plan-fieldset>#plan-preferred_start_times){grid-column:1/-1}.plan-edit-section :deep(.plan-fieldset>.grid-apply-confirmation),.plan-edit-section :deep(.plan-fieldset>.editor-disclosure){grid-column:1/-1}.plan-section-heading>button[data-testid=new-current-plan]{margin-left:auto;display:flex;gap:5px;font-size:13px}.plan-section-heading{flex-wrap:nowrap}@media(max-width:650px){.selection-toolbar{flex-wrap:wrap;padding:8px}.selection-toolbar>.booking-date-strip{flex-basis:100%;padding:0}.selection-toolbar>button{margin-left:auto}.plan-edit-section :deep(.plan-fieldset){grid-template-columns:minmax(0,1fr)}}
 </style>

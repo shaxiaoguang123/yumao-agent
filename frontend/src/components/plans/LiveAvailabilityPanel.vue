@@ -1,41 +1,44 @@
 <script setup>
 import { computed, watch } from 'vue';
 import AppIcon from '../AppIcon.vue';
+import BookingDateStrip from './BookingDateStrip.vue';
+import TokenExpiryBadge from './TokenExpiryBadge.vue';
 import { useLiveAvailability } from '../../composables/useLiveAvailability.js';
 import LiveAvailabilityGrid from './LiveAvailabilityGrid.vue';
-const props = defineProps({ refreshKey:{type:Number,default:0}, selectionDisabled:Boolean, api: { type: Object, required: true }, credentialApi: { type: Object, required: true }, session: { type: Object, required: true }, targetDate: { type: String, default: '' }, contextKey: { type: String, default: '' } });
-const emit=defineEmits(['apply']);
-const state = useLiveAvailability({ api: props.api, credentialApi: props.credentialApi, session: () => props.session, targetDate: () => props.targetDate, contextKey: () => props.contextKey });
-const { autoLoading, refreshAvailability, enabled, optionsLoading, optionsError, credentialsError, eligibleCredentials, selectedCredentialId, categories, selectedScopeReference, categoriesLoading, gridLoading, grid, gridExpired, error, message, initialize, refreshCredentials, loadCategories, queryGrid } = state;
+const props=defineProps({calendarState:{type:Object,default:null},refreshKey:{type:Number,default:0},selectionDisabled:Boolean,api:{type:Object,required:true},credentialApi:{type:Object,required:true},session:{type:Object,required:true},targetDate:{type:String,default:''},contextKey:{type:String,default:''}});
+const emit=defineEmits(['date-change','court-labels']);
+const state=useLiveAvailability({api:props.api,credentialApi:props.credentialApi,session:()=>props.session,targetDate:()=>props.targetDate,contextKey:()=>props.contextKey});
+const {autoLoading,refreshAvailability,enabled,optionsLoading,optionsError,credentials,credentialsError,eligibleCredentials,selectedCredentialId,categoriesLoading,gridLoading,grid,gridExpired,error,message,initialize,refreshCredentials}=state;
 watch(()=>props.refreshKey,()=>refreshAvailability());
-const busy = computed(() => autoLoading.value || categoriesLoading.value || gridLoading.value);
+const busy=computed(()=>autoLoading.value||categoriesLoading.value||gridLoading.value);
+const selectedCredential=computed(()=>credentials.value.find(item=>item.credential_id===selectedCredentialId.value)||credentials.value[0]||null);
+watch(grid,value=>{if(value)emit('court-labels',value.courts.map(court=>court.display_name));});
+watch(selectedCredentialId,()=>emit('court-labels',[]));
 </script>
-
 <template>
-  <section v-if="enabled || optionsLoading || optionsError" class="panel live-availability-panel" data-testid="live-availability-panel" aria-labelledby="live-availability-title">
-    <header class="live-panel-heading"><h2 id="live-availability-title">场地时段</h2><span class="live-readonly-tag">官方状态 · 仅保存意向</span></header>
-    <p v-if="optionsLoading" role="status">正在读取查询配置…</p>
-    <p v-if="optionsError" class="form-error" role="alert">{{ optionsError }} <button type="button" class="secondary-button" @click="initialize">重试配置</button></p>
-    <template v-if="enabled">
-      <div class="live-controls">
-        <details class="query-settings"><summary aria-label="查询设置" title="查询设置"><AppIcon name="settings" /></summary><div class="query-settings-content"><label class="field">预约凭据<select v-model="selectedCredentialId" data-testid="live-credential" :disabled="busy"><option value="">选择已验证的凭据</option><option v-for="credential in eligibleCredentials" :key="credential.credential_id" :value="credential.credential_id">{{ credential.label }}</option></select></label><button class="secondary-button icon-control" type="button" :disabled="busy" aria-label="刷新凭据" title="刷新凭据" @click="refreshCredentials"><AppIcon name="refresh" /></button></div></details>
-        <span class="live-sport-label"><AppIcon name="court" />羽毛球</span>
-        <button class="primary-button" data-testid="query-live-grid" type="button" :disabled="busy || !targetDate || !selectedCredentialId" @click="refreshAvailability()"><AppIcon name="refresh" />{{ busy ? '读取中…' : '刷新场地' }}</button>
-
-      </div>
-      <p v-if="!eligibleCredentials.length" class="muted">请先添加并验证预约凭据。</p>
-      <p v-if="credentialsError" class="form-error" role="alert">{{ credentialsError }}</p>
-      <span class="sr-only" data-testid="live-target-date">{{ targetDate }}</span>
-
-      <p v-if="error" class="form-error" role="alert">{{ error }}</p>
-      <LiveAvailabilityGrid v-if="grid" :grid="grid" :expired="gridExpired" :context-key="contextKey" :selection-disabled="selectionDisabled" @apply="emit('apply',$event)" />
-      <div v-if="!grid && !error" :aria-busy="busy" class="live-empty"><AppIcon name="court" /><p>{{ busy ? '正在读取当天场地…' : '请选择日期或刷新场地' }}</p><span>按官方状态选格 · 确认后保存意向</span></div>
-      <details class="live-source-help"><summary aria-label="只读查询与场馆绑定有什么区别？"><AppIcon name="info" />查询说明</summary><p v-if="message" class="muted">{{ message }}</p><p class="muted">切换日期自动读取羽毛球场地。按官方显示状态选择首选与备选，仅保存语义意向，不下单或支付。</p></details>
-    </template>
-  </section>
+ <section v-if="enabled||optionsLoading||optionsError" class="live-availability-panel" data-testid="live-availability-panel" aria-label="查询场地">
+  <BookingDateStrip :state="calendarState" :model-value="targetDate" @update:model-value="emit('date-change',$event)" @refresh="refreshAvailability()">
+   <template #actions>
+    <TokenExpiryBadge :credential="selectedCredential" :timezone-name="calendarState?.business_timezone_name||'Asia/Shanghai'" />
+    <button class="secondary-button query-refresh" data-testid="query-live-grid" type="button" :disabled="busy||!targetDate||!selectedCredentialId" @click="refreshAvailability()" :aria-label="busy?'读取中…':'刷新场地'" :title="busy?'读取中…':'刷新场地'"><AppIcon name="refresh" :class="{'is-loading':busy}" /></button>
+    <details class="query-settings"><summary aria-label="查询设置" title="查询设置"><AppIcon name="settings" /></summary><div class="query-settings-content"><label class="field">预约凭据<select v-model="selectedCredentialId" data-testid="live-credential" :disabled="busy"><option value="">选择已验证的凭据</option><option v-for="credential in eligibleCredentials" :key="credential.credential_id" :value="credential.credential_id">{{ credential.label }}</option></select></label><button class="secondary-button" type="button" :disabled="busy" aria-label="刷新凭据" title="刷新凭据" @click="refreshCredentials"><AppIcon name="refresh" /></button></div></details>
+   </template>
+  </BookingDateStrip>
+  <div class="query-content">
+   <p v-if="optionsLoading" role="status">正在读取查询配置…</p>
+   <p v-if="optionsError" class="form-error" role="alert">{{ optionsError }} <button type="button" class="secondary-button" @click="initialize">重试配置</button></p>
+   <template v-if="enabled">
+    <p v-if="!eligibleCredentials.length" class="muted">请先添加并验证预约凭据。</p>
+    <p v-if="credentialsError" class="form-error" role="alert">{{ credentialsError }}</p>
+    <span class="sr-only" data-testid="live-target-date">{{ targetDate }}</span>
+    <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+    <LiveAvailabilityGrid v-if="grid" :grid="grid" :expired="gridExpired" :context-key="contextKey" :selection-disabled="selectionDisabled" query-only />
+    <div v-if="!grid&&!error" :aria-busy="busy" class="live-empty"><AppIcon name="court" /><p>{{ busy?'正在读取当天场地…':'请选择日期或刷新场地' }}</p></div>
+    <details class="live-source-help"><summary aria-label="只读查询与场馆绑定有什么区别？"><AppIcon name="info" />查询说明</summary><p v-if="message" class="muted">{{ message }}</p><p class="muted">查询只显示官方观察状态。预约偏好请使用“选择预约”，该页面不写计划或下单。</p></details>
+   </template>
+  </div>
+ </section>
 </template>
-
 <style scoped>
-.live-availability-panel{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;min-width:0;margin:0}.live-panel-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}.live-availability-panel h2{font-size:17px;margin:0}.live-availability-panel p{margin:0}.live-readonly-tag{font-size:12px;color:var(--muted)}.live-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-width:0}.live-controls .field{min-width:0;margin:0}.live-category-field{flex:1 1 150px}.live-controls select{width:100%;min-height:44px;min-width:0;max-width:100%}.live-controls button{display:inline-flex;justify-content:center;align-items:center;gap:6px;min-height:44px;font-size:14px;white-space:nowrap;padding:10px 12px}.query-settings{display:contents}.query-settings>summary{display:grid;place-items:center;list-style:none;cursor:pointer;min-width:44px;min-height:44px;border:1px solid var(--line);border-radius:8px;color:var(--muted);order:4}.query-settings>summary::-webkit-details-marker{display:none}.query-settings[open]>summary{color:var(--brand);background:var(--brand-soft)}.query-settings-content{display:flex;align-items:end;gap:8px;flex-basis:100%;order:5;padding:12px;background:var(--page);border-radius:8px}.query-settings-content .field{flex:1}.icon-control{min-width:44px}.live-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:170px;background:var(--page);border:1px dashed var(--line);border-radius:8px;color:var(--muted)}.live-empty>.app-icon{width:32px;height:32px}.live-empty p{font-size:14px}.live-empty span{font-size:12px}.live-source-help summary{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:12px;cursor:pointer;min-height:30px;width:fit-content}.live-source-help summary .app-icon{width:16px;height:16px}.live-source-help p{margin-top:8px;line-height:1.6;font-size:13px}@media(max-width:600px){.live-category-field{flex:1 1 110px}.live-controls button{padding:10px}.live-controls .app-icon{width:17px;height:17px}.live-empty{min-height:160px}}
-.live-sport-label{display:flex;align-items:center;gap:6px;margin-right:auto;color:var(--brand-dark);font-weight:650;font-size:14px}.live-controls .primary-button{margin-left:auto}
+.live-availability-panel{min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:10px}.query-content{padding:10px 16px;min-width:0}.live-availability-panel :deep(.date-strip-options>button[data-testid^="browse-date-"][aria-pressed=true]){background:#0762c7;border-color:#0762c7}.live-availability-panel :deep(.date-strip-options>button[data-testid^="browse-date-"]){flex-direction:column;gap:0;padding:4px 12px;min-width:94px;border-radius:4px}.live-availability-panel :deep(.date-strip-options>button[data-testid^="browse-date-"] strong){font-weight:400}.query-content p{margin:0}.query-refresh,.query-settings>summary{width:40px;min-height:40px;display:grid;place-items:center;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer;flex-shrink:0;padding:0}.query-settings{position:relative}.query-settings>summary{list-style:none}.query-settings>summary::-webkit-details-marker{display:none}.query-settings-content{position:absolute;right:0;top:calc(100% + 6px);display:flex;gap:6px;align-items:end;width:280px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);z-index:8;box-shadow:0 6px 20px #0001}.query-settings-content .field{flex:1;min-width:0;margin:0}.query-settings-content select{min-height:40px;width:100%}.query-settings-content button{min-width:40px;min-height:40px;padding:6px}.live-empty{min-height:170px;display:flex;align-items:center;justify-content:center;gap:10px;color:var(--muted)}.live-source-help{font-size:12px;margin-top:8px;color:var(--muted)}.live-source-help summary{display:flex;gap:4px;align-items:center;cursor:pointer;min-height:30px}.live-source-help p{line-height:1.7}.is-loading{animation:query-spin 1.2s linear infinite}@keyframes query-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.is-loading{animation:none}}@media(max-width:600px){.live-availability-panel :deep(.date-strip-options>button[data-testid^="browse-date-"]){min-width:65px;flex:1 1 65px;padding:4px}.live-availability-panel :deep(.more-date){order:1;min-width:155px;flex:0 1 155px;margin-left:0}.live-availability-panel :deep(.more-date>.app-icon){display:none}.live-availability-panel :deep(.token-expiry){order:1;margin-left:auto}.query-content{padding:8px}.query-refresh,.query-settings>summary{min-height:44px;width:44px}.query-settings-content{width:250px}}
 </style>

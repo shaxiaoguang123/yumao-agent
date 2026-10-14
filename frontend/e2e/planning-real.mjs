@@ -40,7 +40,7 @@ async function context(name,width=1440,height=900) {
   const page=await ctx.newPage();page.on('pageerror',error=>report.errors.push(error.message));
   return {ctx,page};
 }
-async function login(page,user) {await page.goto(origin+'/login');await page.getByLabel('用户名').fill(user);await page.getByLabel('密码',{exact:true}).fill('Synthetic-only-password-42');await page.getByRole('button',{name:'登录',exact:true}).click();await page.getByRole('link',{name:'预约计划',exact:true}).click();await page.getByRole('heading',{name:'预约计划'}).waitFor();await page.getByTestId('plan-tab-agent').click();}
+async function login(page,user) {await page.goto(origin+'/login');await page.getByLabel('用户名').fill(user);await page.getByLabel('密码',{exact:true}).fill('Synthetic-only-password-42');await page.getByRole('button',{name:'登录',exact:true}).click();await page.getByRole('link',{name:'预约计划',exact:true}).click();await page.getByTestId('plan-tab-query').waitFor();await page.getByTestId('plan-tab-agent').click();}
 async function screenshot(page,name) {const file=path.join(output,name+'.jpg');await page.screenshot({path:file,fullPage:true});report.screenshots.push(file);}
 const description='下周六18:00打两个小时，东区体育馆，6号场优先，5号场备选。';
 const editDescription='把开始时间改成19:00，5号场改为第一优先级。';

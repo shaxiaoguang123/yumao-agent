@@ -13,22 +13,21 @@ function gridFixture(){return {options:vi.fn(async()=>({enabled:false,grid_previ
 async function chooseGridBlock(wrapper){await wrapper.get('[data-testid="grid-load"]').trigger('click');await flushPromises();for(const row of [0,1,2,3])await wrapper.get(`[data-testid="grid-cell-${row}-0"]`).trigger('click');await wrapper.get('[data-testid="grid-add-backup-1"]').trigger('click');await flushPromises();}
 
 describe('manual plans page',()=>{
- it('opens manual view on the server third day and starts an intent on an explicitly chosen earlier day',async()=>{
+ it('defaults to third-day query and exposes four ordered sections without the redundant header',async()=>{
   const {wrapper,api}=await mountView();
-  expect(wrapper.get('#plan-panel-manual').isVisible()).toBe(true);
-  expect(wrapper.get('#plan-panel-current').isVisible()).toBe(false);
-  expect(wrapper.get('[data-testid="browse-date-2"]').attributes('aria-pressed')).toBe('true');
-  await wrapper.get('[data-testid="browse-date-0"]').trigger('click');
-  expect(wrapper.get('[data-testid="browse-date-0"]').attributes('aria-pressed')).toBe('true');
+  expect(wrapper.findAll('[role="tab"]').map(tab=>tab.text().replace(/\s+/g,''))).toEqual(['查询场地','选择预约','Agent预约','当前计划1']);
+  expect(wrapper.get('#plan-panel-query').isVisible()).toBe(true);
+  expect(wrapper.get('#plan-panel-manual').isVisible()).toBe(false);
+  expect(wrapper.find('.plans-heading').exists()).toBe(false);
+  expect(wrapper.get('#plan-panel-query [data-testid="browse-date-2"]').attributes('aria-pressed')).toBe('true');
+  await wrapper.get('#plan-panel-query [data-testid="browse-date-0"]').trigger('click');
   expect(api.create).not.toHaveBeenCalled();
-  await wrapper.get('[data-testid="new-plan"]').trigger('click');await flushPromises();
-  expect(wrapper.get('[name="target_date"]').element.value).toBe(windowState.queryable_target_dates[0]);
-  await wrapper.get('[data-testid="browse-date-1"]').trigger('click');
+  await wrapper.get('[data-testid="plan-tab-manual"]').trigger('click');await flushPromises();
+  expect(wrapper.get('[name="target_date"]').element.value).toBe(windowState.default_target_date);
+  await wrapper.get('#plan-panel-manual [data-testid="browse-date-1"]').trigger('click');
   expect(wrapper.get('[name="target_date"]').element.value).toBe(windowState.queryable_target_dates[1]);
-  await wrapper.get('[data-testid="browse-more-date"]').setValue('');
-  expect(wrapper.get('[name="target_date"]').element.value).toBe('');
  });
- it('retains the manual draft and agent text while switching between all three sections',async()=>{
+ it('retains the manual draft and agent text while switching between all four sections',async()=>{
   const {wrapper}=await mountView(apiFixture(),null,{planningProposalApi:{generate:vi.fn()}});
   await newDraft(wrapper);
   await wrapper.get('[data-testid="plan-tab-agent"]').trigger('click');
@@ -50,22 +49,17 @@ describe('manual plans page',()=>{
   expect(wrapper.get('[data-testid="add-time"]').attributes('aria-label')).toBe('添加开始时间');
   expect(wrapper.get('.plan-reference-details').attributes('open')).toBeUndefined();
  });
- it('reviews an observed semantic selection and saves no inventory metadata',async()=>{
-  const {wrapper,api}=await mountView(apiFixture(),null,{liveAvailabilityApi:{options:vi.fn(async()=>({enabled:false}))},credentialApi:{list:vi.fn(async()=>({credentials:[]}))}});
-  await wrapper.get('[data-testid="new-plan"]').trigger('click');
-  await wrapper.get('[name="venue_preference"]').setValue('用户填写的场馆意向');
-  const selection={target_date:windowState.default_target_date,start_time:'18:00',end_time:'19:00',duration_minutes:60,court_preferences:['查询中选择的任意场'],observation_expires_at_utc_ms:Date.now()+60000,observation_timezone_name:'Asia/Shanghai'};
-  // Props/event boundary is tested here; actual cell clicks are covered by LiveAvailabilityGrid.
-  const observed={...selection};
-  wrapper.findComponent({name:'LiveAvailabilityPanel'}).vm.$emit('apply',observed);
-  await flushPromises();
-  expect(wrapper.find('[data-testid="grid-apply-confirmation"]').exists()).toBe(true);
-  expect(api.create).not.toHaveBeenCalled();
+ it('reviews an independent preference grid and saves semantic values without any observation expiry',async()=>{
+  const {wrapper,api}=await mountView();await newDraft(wrapper);
+  await wrapper.get('[data-testid="intent-cell-4-1"]').trigger('click');await wrapper.get('[data-testid="intent-cell-5-1"]').trigger('click');
+  await wrapper.get('[data-testid="intent-cell-4-0"]').trigger('click');
+  await wrapper.get('[aria-label="将意向场地 2 提前"]').trigger('click');
+  await wrapper.get('[data-testid="apply-intent-selection"]').trigger('click');
+  expect(wrapper.find('[data-testid="grid-apply-confirmation"]').exists()).toBe(true);expect(api.create).not.toHaveBeenCalled();
   await wrapper.get('[data-testid="confirm-grid-selection"]').trigger('click');
-  expect(wrapper.get('[name="duration_minutes"]').element.value).toBe('60');
   await wrapper.get('form').trigger('submit');await flushPromises();
-  expect(api.create.mock.calls[0][0].court_preferences).toEqual(['查询中选择的任意场']);
-  expect(JSON.stringify(api.create.mock.calls[0][0])).not.toContain('observation_');
+  expect(api.create.mock.calls[0][0]).toMatchObject({target_date:'2026-10-20',court_preferences:['6号场','5号场'],preferred_start_times:['18:00'],duration_minutes:60});
+  expect(JSON.stringify(api.create.mock.calls[0][0])).not.toMatch(/observation_|coordinates|intent_timezone/);
  });
  it('supports arrow-key navigation and exposes tab selection to assistive technology',async()=>{
   const {wrapper}=await mountView();
@@ -74,16 +68,15 @@ describe('manual plans page',()=>{
   await wrapper.get('[data-testid="plan-tab-agent"]').trigger('keydown',{key:'End'});
   expect(wrapper.get('[data-testid="plan-tab-current"]').attributes('aria-selected')).toBe('true');
  });
- it('passes the unsaved date to the independent official read-only panel',async()=>{
+ it('keeps the query date independent from unsaved plan dates and ignores query apply events',async()=>{
   const liveApi={options:vi.fn(async()=>({enabled:true})),categories:vi.fn(async()=>({data_state:'live_observed_unverified',source:'official_read_only',options:[{reference:'opaque-test-ref',label:'羽毛球',physical_venue_verified:false}]})),grid:vi.fn(async()=>null)};
   const credentialApi={list:vi.fn(async()=>({credentials:[{credential_id:'owned-credential',label:'Test',enabled:true,account_binding_state:'confirmed',requires_revalidation:false,last_confirmed_validation_state:'confirmed_valid',expiry_state:'expiry_ok'}]}))};
-  const {wrapper}=await mountView(apiFixture(),null,{liveAvailabilityApi:liveApi,credentialApi});
+  const {wrapper,api}=await mountView(apiFixture(),null,{liveAvailabilityApi:liveApi,credentialApi});
   await newDraft(wrapper);await new Promise(resolve=>setTimeout(resolve,20));await flushPromises();
-  expect(wrapper.get('[data-testid="live-target-date"]').text()).toBe('2026-10-20');
+  expect(wrapper.get('[data-testid="live-target-date"]').text()).toBe(windowState.default_target_date);
   await wrapper.get('[name="target_date"]').setValue('2026-10-21');await flushPromises();
-  expect(wrapper.get('[data-testid="live-target-date"]').text()).toBe('2026-10-21');
-  await wrapper.get('[data-testid="query-live-grid"]').trigger('click');await flushPromises();
-  expect(liveApi.grid).toHaveBeenCalledWith({credentialId:'owned-credential',scopeReference:'opaque-test-ref',targetDate:'2026-10-21'});
+  expect(wrapper.get('[data-testid="live-target-date"]').text()).toBe(windowState.default_target_date);
+  expect(api.create).not.toHaveBeenCalled();
  });
  it('loads owned plans and clearly labels unverified intent and far-date policy',async()=>{const {wrapper}=await mountView();expect(wrapper.text()).toContain('人工意向场馆');expect(wrapper.text()).toContain('未绑定');await edit(wrapper);expect(wrapper.text()).toContain('当前不可查询');expect(wrapper.text()).toContain('07:30');expect(wrapper.text()).toContain('估计');expect(wrapper.text()).not.toContain('立即预约');});
  it('explains why no physical venue catalog or real availability is available',async()=>{const {wrapper}=await mountView();expect(wrapper.get('[data-testid="venue-catalog-status"]').text()).toContain('可信场馆目录尚未配置');expect(wrapper.text()).toContain('目录版本：未配置');expect(wrapper.text()).toContain('协议证据部分确认');expect(wrapper.text()).toContain('场馆显示名到查询范围');expect(wrapper.text()).toContain('不能据此绑定场馆');expect(wrapper.text()).toContain('属于所选场馆');expect(wrapper.find('[data-testid="bind-venue"]').exists()).toBe(false);});
