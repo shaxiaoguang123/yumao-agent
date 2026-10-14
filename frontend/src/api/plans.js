@@ -2,6 +2,10 @@ const path = (id) => `/api/plans/${encodeURIComponent(id)}`;
 export function createPlanApi(client) {
   if (typeof client?.request !== 'function') throw new TypeError('an authenticated HTTP client is required');
   return {
+    queues: () => client.request('/api/plans/manual-queues'),
+    queue: (date) => client.request(`/api/plans/manual-queues/${encodeURIComponent(date)}`),
+    saveQueue: (date, base_version, entries) => client.request(`/api/plans/manual-queues/${encodeURIComponent(date)}`, {method:'PUT',body:{base_version,entries}}),
+    queueRevisions: (date) => client.request(`/api/plans/manual-queues/${encodeURIComponent(date)}/revisions`),
     list: () => client.request('/api/plans'),
     options: () => client.request('/api/plans/options'),
     get: (id) => client.request(path(id)),

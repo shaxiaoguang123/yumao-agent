@@ -23,9 +23,11 @@ describe('manual plans page',()=>{
   await wrapper.get('#plan-panel-query [data-testid="browse-date-0"]').trigger('click');
   expect(api.create).not.toHaveBeenCalled();
   await wrapper.get('[data-testid="plan-tab-manual"]').trigger('click');await flushPromises();
-  expect(wrapper.get('[name="target_date"]').element.value).toBe(windowState.default_target_date);
+  expect(wrapper.get('#plan-panel-manual [data-testid="browse-more-date"]').element.value).toBe(windowState.default_target_date);
+  expect(wrapper.find('#plan-panel-manual form').exists()).toBe(false);
+  expect(wrapper.get('[data-testid="queue-two-hours"]').attributes('aria-pressed')).toBe('true');
   await wrapper.get('#plan-panel-manual [data-testid="browse-date-1"]').trigger('click');
-  expect(wrapper.get('[name="target_date"]').element.value).toBe(windowState.queryable_target_dates[1]);
+  expect(wrapper.get('#plan-panel-manual [data-testid="browse-more-date"]').element.value).toBe(windowState.queryable_target_dates[1]);
  });
  it('retains the manual draft and agent text while switching between all four sections',async()=>{
   const {wrapper}=await mountView(apiFixture(),null,{planningProposalApi:{generate:vi.fn()}});

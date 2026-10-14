@@ -107,3 +107,42 @@ def update_plan(plan_id):
 @require_session
 def revisions(plan_id):
     return jsonify({"revisions": _service().list_revisions(_user_id(), plan_id, _now_utc_ms())})
+
+
+# Dedicated routes keep queue drafts out of the single-intent Matcher / Agent APIs.
+def _queue_date(value):
+    from backend.plans.validation import parse_target_date, IntentValidationError
+    try:
+        return parse_target_date(value).isoformat()
+    except IntentValidationError as exc:
+        raise PlanError("invalid_plan", 400, exc.fields) from exc
+
+
+@plans_bp.get("/manual-queues")
+@require_session
+def manual_queues():
+    if request.args:
+        raise PlanError("invalid_request", 400)
+    return jsonify({"queues": _service().list_manual_queues(_user_id())})
+
+
+@plans_bp.get("/manual-queues/<target_date>")
+@require_session
+def manual_queue(target_date):
+    if request.args:
+        raise PlanError("invalid_request", 400)
+    return jsonify({"queue": _service().get_manual_queue(_user_id(), _queue_date(target_date))})
+
+
+@plans_bp.put("/manual-queues/<target_date>")
+@require_session
+@require_csrf
+def save_manual_queue(target_date):
+    body = _body({"base_version", "entries"})
+    return jsonify({"queue": _service().save_manual_queue(_user_id(), _queue_date(target_date), body["base_version"], body["entries"], _now_utc_ms())})
+
+
+@plans_bp.get("/manual-queues/<target_date>/revisions")
+@require_session
+def manual_queue_revisions(target_date):
+    return jsonify({"revisions": _service().manual_queue_revisions(_user_id(), _queue_date(target_date))})
