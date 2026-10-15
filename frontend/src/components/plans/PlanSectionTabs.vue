@@ -1,10 +1,10 @@
 <script setup>
 import { nextTick, useTemplateRef } from 'vue';
 import AppIcon from '../AppIcon.vue';
-const props=defineProps({modelValue:{type:String,default:'manual'},planCount:{type:Number,default:0}});
+const props=defineProps({modelValue:{type:String,default:'query'},planCount:{type:Number,default:0}});
 const emit=defineEmits(['update:modelValue']);
 const nav=useTemplateRef('nav');
-const tabs=[{id:'manual',label:'人工预约',icon:'court'},{id:'agent',label:'Agent 预约',icon:'bot'},{id:'current',label:'当前计划',icon:'list'}];
+const tabs=[{id:'query',label:'查询场地',icon:'search'},{id:'manual',label:'选择预约',icon:'court'},{id:'agent',label:'Agent 预约',icon:'bot'},{id:'current',label:'抢票计划',icon:'list'}];
 async function navigate(event,index){
  let next=index;
  if(event.key==='ArrowRight')next=(index+1)%tabs.length;
@@ -21,5 +21,8 @@ async function navigate(event,index){
  </nav>
 </template>
 <style scoped>
-.plan-section-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 0 16px}.plan-section-tabs button{display:flex;align-items:center;justify-content:center;gap:8px;min-width:0;min-height:48px;padding:10px 20px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;cursor:pointer}.plan-section-tabs button[aria-selected=true]{color:var(--brand-dark);border-bottom-color:var(--brand)}.plan-section-tabs button:hover{background:var(--brand-soft)}.tab-title{display:flex;align-items:center;gap:8px;font-weight:650}.tab-count{padding:1px 6px;border-radius:999px;background:var(--brand-soft);font-size:12px}@media(max-width:600px){.plan-section-tabs button{flex:1;padding:10px 4px;gap:5px}.tab-title{font-size:14px;gap:4px}.plan-section-tabs .app-icon{width:17px;height:17px}.tab-count{padding:1px 4px}}
+.plan-section-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 0 16px}.plan-section-tabs button{display:flex;align-items:center;justify-content:center;gap:8px;min-width:0;min-height:48px;padding:10px 20px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;cursor:pointer}.plan-section-tabs button[aria-selected=true]{color:var(--brand-dark);border-bottom-color:var(--brand)}.plan-section-tabs button:hover{background:var(--brand-soft)}.tab-title{display:flex;align-items:center;gap:8px;font-weight:650}.tab-count{padding:1px 6px;border-radius:999px;background:var(--brand-soft);font-size:12px}@media(max-width:600px){.plan-section-tabs button{flex:1;padding:10px 4px;gap:4px}.tab-title{font-size:13px;gap:4px}.plan-section-tabs .app-icon{width:17px;height:17px}.tab-count{padding:1px 4px}}
+</style>
+<style scoped>
+@media(max-width:600px){.plan-section-tabs button{padding:10px 2px;gap:0}.plan-section-tabs .app-icon{display:none}.tab-title{font-size:12px;gap:3px;white-space:nowrap}.tab-count{padding:1px 3px;font-size:11px}}
 </style>

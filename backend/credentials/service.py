@@ -5,6 +5,7 @@ import sqlite3
 import time
 import unicodedata
 import uuid
+from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
@@ -16,6 +17,11 @@ from backend.credentials.crypto import (
     TokenCipherError,
 )
 from backend.credentials.keyring import CredentialKeyring
+from backend.credentials.payment_secret import (
+    CredentialPaymentSecretCipher,
+    EncryptedPaymentSecret,
+    PaymentSecretError,
+)
 from backend.credentials.request_gate import (
     GateAttemptObservation,
     GateDecision,
@@ -34,6 +40,7 @@ from backend.db import connect_database
 
 
 _MAX_TOKEN_BYTES = 16_384
+_MAX_PAYMENT_PASSWORD_BYTES = 4_096
 _MAX_LABEL_LENGTH = 128
 _SAFE_ATTEMPT_RESULTS = {
     "success",
@@ -54,6 +61,18 @@ class _TokenCandidate:
     expires_at_utc_ms: int | None
     fingerprint: str = field(repr=False)
     fingerprint_key_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class BookingCredentialMaterial:
+    """Short-lived server-side material for one scheduled execution."""
+
+    user_id: str
+    credential_id: str
+    credential_version: int
+    token_revision_id: str
+    token: str = field(repr=False)
+    payment_password: str = field(repr=False)
 
 
 class CredentialService:
@@ -85,6 +104,7 @@ class CredentialService:
         self.encryption_keyring = encryption_keyring
         self.fingerprint_keyring = fingerprint_keyring
         self.cipher = CredentialTokenCipher(encryption_keyring)
+        self.payment_secret_cipher = CredentialPaymentSecretCipher(encryption_keyring)
         self.adapter = adapter
         self.gate = gate
         self.account_continuity_capability = bool(account_continuity_capability)
@@ -114,6 +134,20 @@ class CredentialService:
         ):
             raise CredentialOperationError("invalid_credential_label", 400)
         return normalized
+
+    @staticmethod
+    def _payment_password_bytes(value: str | None) -> bytes | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value:
+            raise CredentialOperationError("invalid_payment_password", 400)
+        try:
+            encoded = value.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            raise CredentialOperationError("invalid_payment_password", 400) from None
+        if len(encoded) > _MAX_PAYMENT_PASSWORD_BYTES or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+            raise CredentialOperationError("invalid_payment_password", 400)
+        return encoded
 
     def _token_candidate(self, token: str, now_utc_ms: int) -> _TokenCandidate:
         if not isinstance(token, str) or not token:
@@ -399,6 +433,79 @@ class CredentialService:
             raise CredentialOperationError("credential_version_conflict", 409)
         return response
 
+    def booking_material(self, user_id: str, credential_id: str) -> BookingCredentialMaterial:
+        """Decrypt one confirmed credential and its separate payment secret in memory only."""
+        self._validate_user_id(user_id)
+        if not isinstance(credential_id, str) or not credential_id:
+            raise CredentialOperationError("credential_not_found", 404)
+        row, _revision = self._snapshot(user_id, credential_id)
+        now = self._now()
+        if not row["enabled"]:
+            raise CredentialOperationError("credential_disabled", 409)
+        if row["requires_revalidation"] or row["last_confirmed_validation_state"] != "confirmed_valid":
+            raise CredentialOperationError("credential_requires_revalidation", 409)
+        if row["account_binding_state"] != "confirmed":
+            raise CredentialOperationError("credential_account_binding_unresolved", 409)
+        if row["token_expires_at_utc_ms"] is not None and row["token_expires_at_utc_ms"] <= now:
+            raise CredentialOperationError("credential_token_expired", 422)
+        connection = connect_database(self.database_path, self.busy_timeout_ms)
+        try:
+            secret = connection.execute(
+                """SELECT secret_revision, ciphertext, nonce, tag, encryption_key_version
+                   FROM credential_payment_secrets WHERE user_id=? AND credential_id=?""",
+                (user_id, credential_id),
+            ).fetchone()
+        finally:
+            connection.close()
+        if secret is None:
+            raise CredentialOperationError("credential_payment_password_missing", 409)
+        try:
+            payment_password = self.payment_secret_cipher.decrypt(
+                EncryptedPaymentSecret(
+                    ciphertext=secret["ciphertext"], nonce=secret["nonce"],
+                    tag=secret["tag"], key_id=secret["encryption_key_version"],
+                ),
+                user_id=user_id,
+                credential_id=credential_id,
+                revision=secret["secret_revision"],
+                key_id=secret["encryption_key_version"],
+            ).decode("utf-8", errors="strict")
+        except (PaymentSecretError, UnicodeDecodeError) as exc:
+            raise CredentialOperationError("credential_secret_unavailable", 503) from exc
+        token = self._decrypt_snapshot_token(row, user_id, credential_id)
+        return BookingCredentialMaterial(
+            user_id=user_id,
+            credential_id=credential_id,
+            credential_version=row["credential_version"],
+            token_revision_id=row["current_token_revision_id"],
+            token=token,
+            payment_password=payment_password,
+        )
+
+    def assert_booking_snapshot(self, material: BookingCredentialMaterial) -> None:
+        """Fence every scheduled upstream step against Token changes or disablement."""
+        if not isinstance(material, BookingCredentialMaterial):
+            raise CredentialOperationError("credential_version_conflict", 409)
+        row, _revision = self._snapshot(material.user_id, material.credential_id)
+        if (row["credential_version"] != material.credential_version
+                or row["current_token_revision_id"] != material.token_revision_id):
+            raise CredentialOperationError("credential_version_conflict", 409)
+        if not row["enabled"]:
+            raise CredentialOperationError("credential_disabled", 409)
+        if row["requires_revalidation"] or row["last_confirmed_validation_state"] != "confirmed_valid":
+            raise CredentialOperationError("credential_requires_revalidation", 409)
+        if row["account_binding_state"] != "confirmed":
+            raise CredentialOperationError("credential_account_binding_unresolved", 409)
+        if row["token_expires_at_utc_ms"] is not None and row["token_expires_at_utc_ms"] <= self._now():
+            raise CredentialOperationError("credential_token_expired", 422)
+        with closing(connect_database(self.database_path, self.busy_timeout_ms)) as connection:
+            secret = connection.execute(
+                "SELECT 1 FROM credential_payment_secrets WHERE user_id=? AND credential_id=?",
+                (material.user_id, material.credential_id),
+            ).fetchone()
+        if secret is None:
+            raise CredentialOperationError("credential_payment_password_missing", 409)
+
     def _identity(self, result: AdapterValidationResult) -> tuple[bytes, str] | None:
         if not self.account_continuity_capability:
             return None
@@ -629,6 +736,11 @@ class CredentialService:
             (user_id, credential_id),
         ).fetchone()
         latest_projection = dict(latest) if latest is not None else None
+        payment_secret = connection.execute(
+            """SELECT secret_revision FROM credential_payment_secrets
+               WHERE user_id=? AND credential_id=?""",
+            (user_id, credential_id),
+        ).fetchone()
         return CredentialDTO(
             credential_id=row["credential_id"],
             label=row["label"],
@@ -642,6 +754,8 @@ class CredentialService:
             last_confirmed_validation_state=row["last_confirmed_validation_state"],
             last_successful_validation_at_utc_ms=row["last_successful_validation_at_utc_ms"],
             latest_requested_validation_attempt=latest_projection,
+            has_payment_password=payment_secret is not None,
+            payment_password_revision=payment_secret["secret_revision"] if payment_secret is not None else None,
         )
 
     def get_for_user(self, user_id: str, credential_id: str) -> CredentialDTO | None:
@@ -717,11 +831,13 @@ class CredentialService:
         label: str,
         token: str,
         now_utc_ms: int,
+        payment_password: str | None = None,
     ) -> CredentialDTO:
         self._validate_user_id(user_id)
         clean_label = self._validate_label(label)
         now = self._now(now_utc_ms)
         candidate = self._token_candidate(token, now)
+        payment_password_bytes = self._payment_password_bytes(payment_password)
         context = GateOperationContext(
             user_id=user_id,
             credential_id=None,
@@ -850,6 +966,13 @@ class CredentialService:
                 revision_id=revision_id,
                 key_id=self.encryption_keyring.active_key_id,
             )
+            payment_envelope = self.payment_secret_cipher.encrypt(
+                payment_password_bytes,
+                user_id=user_id,
+                credential_id=credential_id,
+                revision=1,
+                key_id=self.encryption_keyring.active_key_id,
+            ) if payment_password_bytes is not None else None
             connection.execute(
                 """INSERT INTO credentials
                    (credential_id, user_id, label, credential_version, enabled,
@@ -874,6 +997,15 @@ class CredentialService:
                     completed_at,
                 ),
             )
+            if payment_envelope is not None:
+                connection.execute(
+                    """INSERT INTO credential_payment_secrets
+                       (user_id, credential_id, secret_revision, ciphertext, nonce, tag,
+                        encryption_key_version, updated_at_utc_ms)
+                       VALUES (?, ?, 1, ?, ?, ?, ?, ?)""",
+                    (user_id, credential_id, payment_envelope.ciphertext,
+                     payment_envelope.nonce, payment_envelope.tag, payment_envelope.key_id, completed_at),
+                )
             connection.execute(
                 """INSERT INTO credential_token_revisions
                    (revision_id, user_id, credential_id, revision_number, token_fingerprint,
@@ -943,7 +1075,7 @@ class CredentialService:
             if connection.in_transaction:
                 connection.execute("ROLLBACK")
             raise
-        except (sqlite3.Error, ValueError, TokenCipherError) as exc:
+        except (sqlite3.Error, ValueError, TokenCipherError, PaymentSecretError) as exc:
             if connection.in_transaction:
                 connection.execute("ROLLBACK")
             raise CredentialOperationError("credential_write_failed", 500) from exc
@@ -1653,6 +1785,86 @@ class CredentialService:
         finally:
             connection.close()
 
+    def set_payment_password(
+        self,
+        user_id: str,
+        credential_id: str,
+        expected_credential_version: int,
+        payment_password: str,
+        now_utc_ms: int,
+    ) -> CredentialOperationResult:
+        self._validate_user_id(user_id)
+        password_bytes = self._payment_password_bytes(payment_password)
+        if password_bytes is None:
+            raise CredentialOperationError("invalid_payment_password", 400)
+        now = self._now(now_utc_ms)
+        if (isinstance(expected_credential_version, bool)
+                or not isinstance(expected_credential_version, int)
+                or expected_credential_version <= 0):
+            raise CredentialOperationError("invalid_credential_version", 400)
+        connection = connect_database(self.database_path, self.busy_timeout_ms)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """SELECT credential_version FROM credentials
+                   WHERE user_id=? AND credential_id=? AND deleted_at_utc_ms IS NULL""",
+                (user_id, credential_id),
+            ).fetchone()
+            if row is None:
+                raise CredentialOperationError("credential_not_found", 404)
+            if row["credential_version"] != expected_credential_version:
+                raise CredentialOperationError("credential_version_conflict", 409)
+            existing = connection.execute(
+                """SELECT secret_revision FROM credential_payment_secrets
+                   WHERE user_id=? AND credential_id=?""",
+                (user_id, credential_id),
+            ).fetchone()
+            revision = existing["secret_revision"] + 1 if existing is not None else 1
+            envelope = self.payment_secret_cipher.encrypt(
+                password_bytes,
+                user_id=user_id,
+                credential_id=credential_id,
+                revision=revision,
+                key_id=self.encryption_keyring.active_key_id,
+            )
+            changed = connection.execute(
+                """UPDATE credentials
+                   SET credential_version=credential_version+1, updated_at_utc_ms=?
+                   WHERE user_id=? AND credential_id=? AND credential_version=?
+                     AND deleted_at_utc_ms IS NULL""",
+                (now, user_id, credential_id, expected_credential_version),
+            )
+            if changed.rowcount != 1:
+                raise CredentialOperationError("credential_version_conflict", 409)
+            connection.execute(
+                """INSERT INTO credential_payment_secrets
+                   (user_id, credential_id, secret_revision, ciphertext, nonce, tag,
+                    encryption_key_version, updated_at_utc_ms)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(user_id, credential_id) DO UPDATE SET
+                     secret_revision=excluded.secret_revision,
+                     ciphertext=excluded.ciphertext, nonce=excluded.nonce, tag=excluded.tag,
+                     encryption_key_version=excluded.encryption_key_version,
+                     updated_at_utc_ms=excluded.updated_at_utc_ms""",
+                (user_id, credential_id, revision, envelope.ciphertext, envelope.nonce,
+                 envelope.tag, envelope.key_id, now),
+            )
+            dto = self._dto_from_id(connection, user_id, credential_id, now)
+            connection.execute("COMMIT")
+            if dto is None:
+                raise CredentialOperationError("credential_update_failed", 500)
+            return CredentialOperationResult("payment_password_saved", 200, dto)
+        except CredentialOperationError:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        except (sqlite3.Error, ValueError, PaymentSecretError) as exc:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise CredentialOperationError("credential_update_failed", 500) from exc
+        finally:
+            connection.close()
+
     def soft_delete(
         self,
         user_id: str,
@@ -1684,6 +1896,10 @@ class CredentialService:
                        ciphertext_cleared_at_utc_ms=?
                    WHERE user_id=? AND credential_id=? AND secret_material_active=1""",
                 (now, user_id, credential_id),
+            )
+            connection.execute(
+                "DELETE FROM credential_payment_secrets WHERE user_id=? AND credential_id=?",
+                (user_id, credential_id),
             )
             self._audit(
                 connection,

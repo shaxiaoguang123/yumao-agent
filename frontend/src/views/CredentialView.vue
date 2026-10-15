@@ -18,6 +18,13 @@ const creating = ref(false);
 const busyCredentialId = ref('');
 const search = ref('');
 const filter = ref('all');
+const label = ref('');
+const createToken = ref('');
+const createPaymentPassword = ref('');
+const rotationCredentialId = ref('');
+const rotationToken = ref('');
+const paymentPasswordCredentialId = ref('');
+const paymentPassword = ref('');
 const visibleCredentials = computed(() => credentials.value.filter(item => (
  item.label.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase())
  && (filter.value === 'all' || (filter.value === 'enabled' && item.enabled) || (filter.value === 'disabled' && !item.enabled) || (filter.value === 'attention' && needsAttention(item)))
@@ -28,16 +35,20 @@ watch([search, filter], () => {
     rotationToken.value = '';
     rotationCredentialId.value = '';
   }
+  if (paymentPasswordCredentialId.value && !visibleCredentials.value.some(item => item.credential_id === paymentPasswordCredentialId.value)) {
+    paymentPassword.value = '';
+    paymentPasswordCredentialId.value = '';
+  }
 }, { flush: 'sync' });
-const label = ref('');
-const createToken = ref('');
-const rotationCredentialId = ref('');
-const rotationToken = ref('');
 
 const safeErrors = {
   invalid_request: '输入内容无效，请检查后重试。',
   invalid_credential_label: '名称长度须为 1 到 128 个字符，且不能包含控制字符。',
   invalid_credential_token: 'Token 格式无效，请重新输入。',
+  invalid_credential_enabled: '凭据启用状态无效，请刷新后重试。',
+  invalid_credential_version: '凭据版本无效，请刷新凭据列表后重试。',
+  invalid_payment_password: '支付密码格式无效，请检查后重试。',
+  invalid_user: '登录用户状态无效，请重新登录后重试。',
   credential_token_expired: '此 Token 已过期，请替换 Token。',
   credential_token_invalid: '此 Token 已确认无效，请替换 Token。',
   credential_account_already_configured: '此上游账户已绑定到本用户的其他凭据，请重新启用或轮换已有凭据。',
@@ -45,6 +56,16 @@ const safeErrors = {
   credential_account_reconfirmation_required: '账户连续性需要重新确认；当前凭据不能轮换。',
   credential_account_mismatch: '替换 Token 与当前账户不匹配，原凭据保持不变。',
   credential_version_conflict: '凭据已更新，请刷新后重试。',
+  credential_requires_revalidation: '凭据状态需要重新验证；请先重新验证 Token 后再操作。',
+  credential_write_failed: '服务器未能保存凭据。请刷新凭据列表确认结果后，再决定是否重试。',
+  credential_update_failed: '服务器未能更新凭据。请刷新凭据列表确认当前状态后重试。',
+  credential_delete_failed: '服务器未能确认删除结果。请刷新凭据列表核对后再操作。',
+  credential_validation_write_failed: '验证结果暂未写入。请刷新凭据状态后重新验证。',
+  credential_rotation_write_failed: 'Token 轮换结果暂未确认。请刷新凭据并核对当前 Token 状态后重试。',
+  credential_secret_unavailable: '凭据密钥暂不可用，请检查服务端加密配置后重试。',
+  credential_snapshot_unavailable: '凭据状态暂时无法读取，请刷新后重试。',
+  credential_fingerprint_key_unavailable: '凭据校验暂不可用，请检查服务端密钥配置。',
+  upstream_read_failed: '上游 Token 验证未完成，凭据未标记为有效；请检查 Token 状态后重试。',
   validation_stale: '验证结果已过期，凭据状态未被覆盖。请重新加载后再试。',
   validation_rate_limited: '上游请求暂时受到限流，请稍后重试。',
   validation_not_configured: '上游验证尚未配置，Token 未保存。',
@@ -56,8 +77,31 @@ const safeErrors = {
   credential_not_found: '找不到此凭据，请刷新列表。',
 };
 
-function safeMessage(error) {
-  return safeErrors[error?.code] || '操作未完成，请重试。';
+function safeMessage(error, { mutation = false } = {}) {
+  if (safeErrors[error?.code]) return safeErrors[error.code];
+  if (error?.message === 'invalid_response') return '凭据服务返回的数据格式异常，请重新读取。';
+  if (error?.kind === 'network') {
+    return mutation
+      ? '与凭据服务的连接中断，本次操作结果未确认。请先刷新凭据列表核对，再决定是否重试。'
+      : '无法连接凭据服务，请确认本地服务正在运行后重新读取。';
+  }
+  if (error?.kind === 'timeout') {
+    return mutation
+      ? '凭据操作等待超时，结果未确认。请先刷新凭据列表核对，再决定是否重试。'
+      : '读取凭据超时，请稍后刷新重试。';
+  }
+  if (typeof error?.code === 'string' && /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(error.code)) {
+    return `服务端返回错误码 ${error.code}。${mutation ? '请先刷新凭据列表核对当前状态，再决定是否重试。' : '请重新读取后重试。'}`;
+  }
+  if (error?.status >= 500) {
+    return mutation
+      ? `凭据服务暂时异常（HTTP ${error.status}），操作结果未确认。请先刷新列表核对，再决定是否重试。`
+      : `凭据服务暂时异常（HTTP ${error.status}），请稍后重新读取。`;
+  }
+  if (error?.status === 409) return '凭据状态已变化，请刷新列表后重试。';
+  return mutation
+    ? '凭据服务未确认本次操作。请先刷新列表核对状态，再决定是否重试。'
+    : '无法读取凭据状态，请重试。';
 }
 
 async function loadCredentials() {
@@ -79,25 +123,41 @@ async function loadCredentials() {
 
 function clearSensitiveInputs() {
   createToken.value = '';
+  createPaymentPassword.value = '';
   rotationToken.value = '';
   rotationCredentialId.value = '';
+  paymentPassword.value = '';
+  paymentPasswordCredentialId.value = '';
 }
 
 function cancelCreate() {
   label.value = '';
   createToken.value = '';
+  createPaymentPassword.value = '';
   errorMessage.value = '';
 }
 
 function beginRotation(credentialId) {
   errorMessage.value = '';
+  paymentPasswordCredentialId.value = '';
+  paymentPassword.value = '';
   rotationCredentialId.value = credentialId;
   rotationToken.value = '';
+}
+
+function beginPaymentPassword(credentialId) {
+  errorMessage.value = '';
+  rotationCredentialId.value = '';
+  rotationToken.value = '';
+  paymentPasswordCredentialId.value = credentialId;
+  paymentPassword.value = '';
 }
 
 function cancelRotation() {
   rotationToken.value = '';
   rotationCredentialId.value = '';
+  paymentPassword.value = '';
+  paymentPasswordCredentialId.value = '';
   errorMessage.value = '';
 }
 
@@ -108,16 +168,41 @@ async function createCredential() {
   successMessage.value = '';
   const submittedLabel = label.value;
   const submittedToken = createToken.value;
+  const submittedPaymentPassword = createPaymentPassword.value;
+  if (!submittedPaymentPassword) {
+    errorMessage.value = safeMessage({ code: 'invalid_payment_password' });
+    creating.value = false;
+    return;
+  }
   try {
-    await api.create({ label: submittedLabel, token: submittedToken });
+    await api.create({ label: submittedLabel, token: submittedToken, payment_password: submittedPaymentPassword });
     label.value = '';
     successMessage.value = '凭据已添加。';
     await loadCredentials();
   } catch (error) {
-    errorMessage.value = safeMessage(error);
+    errorMessage.value = safeMessage(error, { mutation: true });
   } finally {
     createToken.value = '';
+    createPaymentPassword.value = '';
     creating.value = false;
+  }
+}
+
+async function savePaymentPassword(credential) {
+  if (busyCredentialId.value || !paymentPassword.value) return;
+  busyCredentialId.value = credential.credential_id;
+  errorMessage.value = '';
+  successMessage.value = '';
+  try {
+    await api.setPaymentPassword(credential.credential_id, paymentPassword.value, credential.credential_version);
+    successMessage.value = '支付密码已单独加密保存；此操作没有发起支付。';
+    paymentPasswordCredentialId.value = '';
+  } catch (error) {
+    errorMessage.value = safeMessage(error, { mutation: true });
+  } finally {
+    paymentPassword.value = '';
+    busyCredentialId.value = '';
+    await loadCredentials();
   }
 }
 
@@ -130,7 +215,7 @@ async function runCredentialAction(credential, action, successText) {
     await action();
     successMessage.value = successText;
   } catch (error) {
-    errorMessage.value = safeMessage(error);
+    errorMessage.value = safeMessage(error, { mutation: true });
   } finally {
     busyCredentialId.value = '';
     await loadCredentials();
@@ -162,7 +247,7 @@ function toggleEnabled(credential) {
 
 function deleteCredential(credential) {
   const confirmed = window.confirm(
-    `确认删除“${credential.label}”吗？已保存的 Token 会被清除，且此操作无法撤销。`,
+    `确认删除“${credential.label}”吗？已保存的 Token 和支付密码都会被清除，且此操作无法撤销。`,
   );
   if (!confirmed) return;
 
@@ -189,7 +274,7 @@ async function rotateCredential(credential) {
     rotationCredentialId.value = '';
     successMessage.value = 'Token 已轮换。';
   } catch (error) {
-    errorMessage.value = safeMessage(error);
+    errorMessage.value = safeMessage(error, { mutation: true });
   } finally {
     rotationToken.value = '';
     busyCredentialId.value = '';
@@ -207,7 +292,7 @@ onUnmounted(() => {
 
 <template>
   <section class="credential-page" aria-labelledby="credential-title">
-    <PageHeader title-id="credential-title" eyebrow="账户安全 · 凭据管理" title="预约凭据" description="清晰管理 Token 有效期、验证结果与账户连续性。验证和保存不代表已经预约。" />
+    <PageHeader title-id="credential-title" eyebrow="账户安全 · 凭据管理" title="预约凭据" />
 
     <p v-if="errorMessage" class="credential-message error-message" role="alert">
       {{ errorMessage }}
@@ -222,45 +307,15 @@ onUnmounted(() => {
 
     <div class="credential-workspace">
     <section class="credential-add panel" aria-labelledby="credential-add-title">
-      <span class="section-icon"><AppIcon name="plus" /></span>
-      <h2 id="credential-add-title">添加预约凭据</h2>
-      <p class="muted">
-        Token 会在服务器端加密保存。验证完成后会清空输入框；Token 不会放入浏览器地址或本地存储。
-      </p>
-      <form class="form-stack" data-testid="credential-create" @submit.prevent="createCredential">
-        <label class="field">
-          凭据名称
-          <input
-            v-model="label"
-            data-testid="credential-label"
-            type="text"
-            maxlength="128"
-            autocomplete="off"
-            required
-          />
-        </label>
-        <label class="field">
-          上游 Token
-          <input
-            v-model="createToken"
-            data-testid="credential-token"
-            type="password"
-            autocomplete="off"
-            spellcheck="false"
-            required
-          />
-        </label>
-        <div class="credential-actions">
-          <button class="primary-button" type="submit" :disabled="creating">
-            {{ creating ? '验证并保存中…' : '验证并保存' }}
-          </button>
-          <button
-            class="secondary-button"
-            type="button"
-            data-testid="credential-create-cancel"
-            @click="cancelCreate"
-          >清空</button>
-        </div>
+      <header class="credential-add-heading">
+        <span class="section-icon"><AppIcon name="plus" /></span>
+        <div><h2 id="credential-add-title">添加预约凭据</h2><p class="muted">Token 验证后加密保存；支付密码单独加密保存，不参与 Token 验证。</p></div>
+      </header>
+      <form class="credential-create-grid" data-testid="credential-create" @submit.prevent="createCredential">
+        <label class="field">凭据名称<input v-model="label" data-testid="credential-label" type="text" maxlength="128" autocomplete="off" required /></label>
+        <label class="field">上游 Token<input v-model="createToken" data-testid="credential-token" type="password" autocomplete="off" spellcheck="false" required /></label>
+        <label class="field">支付密码<input v-model="createPaymentPassword" data-testid="credential-payment-password" type="password" autocomplete="new-password" required /><small>单独加密保存；非空抢票队列授权付款，执行器启用后才会执行。</small></label>
+        <div class="credential-actions"><button class="primary-button" type="submit" :disabled="creating">{{ creating ? '验证并保存中…' : '验证并保存凭据' }}</button><button class="secondary-button" type="button" data-testid="credential-create-cancel" @click="cancelCreate">清空</button></div>
       </form>
     </section>
 
@@ -281,8 +336,8 @@ onUnmounted(() => {
         暂无预约凭据。添加后可查看 Token 状态和账户连续性。
       </p>
 
-      <template v-if="listStatus === 'ready'">
-      <CredentialCard v-for="credential in visibleCredentials" :key="credential.credential_id" :credential="credential" :busy="Boolean(busyCredentialId)" @validate="validateCredential(credential)" @rotate="beginRotation(credential.credential_id)" @toggle="toggleEnabled(credential)" @remove="deleteCredential(credential)">
+      <div v-if="listStatus === 'ready' && visibleCredentials.length" class="credential-cards">
+      <CredentialCard v-for="credential in visibleCredentials" :key="credential.credential_id" :credential="credential" :busy="Boolean(busyCredentialId)" @validate="validateCredential(credential)" @rotate="beginRotation(credential.credential_id)" @payment-password="beginPaymentPassword(credential.credential_id)" @toggle="toggleEnabled(credential)" @remove="deleteCredential(credential)">
         <form
           v-if="rotationCredentialId === credential.credential_id"
           class="rotation-form"
@@ -319,8 +374,13 @@ onUnmounted(() => {
             </button>
           </div>
         </form>
+        <form v-if="paymentPasswordCredentialId === credential.credential_id" class="rotation-form payment-password-form" :data-testid="`payment-password-form-${credential.credential_id}`" @submit.prevent="savePaymentPassword(credential)">
+          <label class="field">{{ credential.has_payment_password ? '新支付密码' : '支付密码' }}<input v-model="paymentPassword" type="password" autocomplete="new-password" data-testid="payment-password-input" required /></label>
+          <p class="muted">保存后由服务器单独加密保管；此 Token 有非空抢票队列且执行器启用时，系统会读取该密码完成付款。</p>
+          <div class="credential-actions"><button class="primary-button" type="submit" :disabled="busyCredentialId === credential.credential_id">加密保存</button><button class="secondary-button" type="button" data-testid="payment-password-cancel" @click="cancelRotation">取消</button></div>
+        </form>
       </CredentialCard>
-      </template>
+      </div>
     </section>
     </div>
   </section>
@@ -335,27 +395,12 @@ onUnmounted(() => {
 .credential-workspace {
   display:grid;
   grid-template-columns:minmax(0,1fr);
-  gap:26px;
+  gap:18px;
   align-items:start;
 
 }
 
-.credential-add h2 {
-  margin-top:17px;
-  font-size:18px;
-
-}
-
-.credential-add .muted {
-  font-size:12px;
-  margin:10px 0 0;
-
-}
-
-.credential-add .form-stack {
-  gap:17px;
-
-}
+.credential-add{padding:18px;min-width:0}.credential-add-heading{display:flex;align-items:flex-start;gap:12px;margin-bottom:18px}.credential-add-heading .section-icon{flex:0 0 40px;height:40px;display:grid;place-items:center;border:1px solid var(--line);border-radius:10px;background:var(--brand-soft);color:var(--brand)}.credential-add-heading h2{font-size:17px;margin:0}.credential-add-heading p{font-size:12px;line-height:1.6;margin:5px 0 0}.credential-create-grid{display:grid;gap:14px}.credential-create-grid .field{min-width:0}.credential-create-grid .field input{min-width:0;width:100%}.credential-create-grid .field small{font-size:11px;color:var(--muted);line-height:1.5}.credential-create-grid button{min-height:44px;font-size:12px}.credential-create-grid .credential-actions{margin-top:2px}
 
 .credential-actions {
   display:flex;
@@ -371,6 +416,7 @@ onUnmounted(() => {
   min-width:0;
 
 }
+.credential-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px;align-items:start;min-width:0}.credential-cards :deep(.credential-card){height:100%;padding:18px}.credential-cards :deep(.credential-facts){grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;margin:16px 0}.credential-cards :deep(.credential-actions){gap:6px}.credential-cards :deep(.credential-actions button){min-height:44px;padding:8px 10px;font-size:11px}
 
 .section-heading h2 {
   font-size:18px;
@@ -453,26 +499,6 @@ onUnmounted(() => {
   border:0;
 
 }
-@media(min-width:1200px) {
-  .credential-workspace {
-  grid-template-columns:280px minmax(0,1fr);
-
-}
-}
-@media(max-width:360px) {
-  .credential-toolbar {
-  flex-wrap:wrap;
-
-}
-
-.filter-field {
-  width:100%;
-
-}
-
-.filter-field select {
-  width:100%;
-
-}
-}
+@media(min-width:1050px){.credential-workspace{grid-template-columns:minmax(270px,310px) minmax(0,1fr)}}
+@media(max-width:640px){.credential-workspace{gap:12px}.credential-add{padding:15px}.credential-cards{grid-template-columns:minmax(0,1fr)}.credential-toolbar{flex-wrap:wrap}.search-field{flex-basis:100%}.filter-field{width:100%}.filter-field select{width:100%}}
 </style>

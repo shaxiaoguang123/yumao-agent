@@ -19,6 +19,9 @@ KEYRING = CredentialKeyring({"enc-v1": bytes(range(32, 64))}, "enc-v1")
 
 class FakeTransport:
     def __init__(self): self.calls = []
+    def list_models(self, config):
+        self.calls.append((config, "GET /models"))
+        return [{"id":"deepseek-flash"},{"id":"qwen-plus"},{"id":"deepseek-flash"},{"id":"bad id"},{"name":"missing-id"}]
     def chat(self, config, messages):
         self.calls.append((config, messages))
         return "synthetic reply"
@@ -141,6 +144,34 @@ class AIModelTests(unittest.TestCase):
         self.assertEqual(body["models"][0]["has_api_key"], True)
         self.assertNotIn("'api_key':", str(body))
 
+    def test_model_discovery_is_explicit_secret_safe_and_owner_scoped(self):
+        body={"base_url":"https://vendor.example/v1","auth_mode":"bearer","api_key":"ephemeral-discovery-secret"}
+        response=self.a.post('/api/ai/models/discover',json=body,headers=self._headers(self.csrf_a))
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.get_json(),{"models":["deepseek-flash","qwen-plus"]})
+        self.assertNotIn(b"ephemeral-discovery-secret",response.data)
+        config,operation=self.transport.calls[-1]
+        self.assertEqual((operation,config.api_key),("GET /models","ephemeral-discovery-secret"))
+        self.assertEqual(self.service.list_models('user-a')['models'],[])
+        self.assertEqual(self.a.post('/api/ai/models/discover',json=body,headers=self._headers()).status_code,403)
+
+        saved=self._create().get_json()['model']
+        response=self.a.post(f"/api/ai/models/{saved['id']}/discover",json={},headers=self._headers(self.csrf_a))
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(self.transport.calls[-1][0].api_key,"user-secret-synthetic")
+        self.assertEqual(self.b.post(f"/api/ai/models/{saved['id']}/discover",json={},headers=self._headers(self.csrf_b)).status_code,404)
+        self.assertEqual(self.app.test_client().post(f"/api/ai/models/{saved['id']}/discover",json={},headers=self._headers()).status_code,401)
+
+    def test_model_discovery_validates_endpoint_and_requires_ephemeral_key(self):
+        for body in (
+            {"base_url":"http://vendor.example/v1","auth_mode":"bearer","api_key":"secret"},
+            {"base_url":"https://vendor.example/v1","auth_mode":"bearer"},
+            {"base_url":"https://vendor.example/v1","auth_mode":"none","api_key":"secret"},
+        ):
+            response=self.a.post('/api/ai/models/discover',json=body,headers=self._headers(self.csrf_a))
+            self.assertEqual(response.status_code,400)
+        self.assertEqual(self.transport.calls,[])
+
     def test_crud_preferences_secret_replace_delete_and_fake_test(self):
         created = self._create().get_json()["model"]
         model_id = created["id"]
@@ -208,10 +239,14 @@ class AIModelTests(unittest.TestCase):
             def request(self,*_args,**_kwargs): pass
             def getresponse(self): return SlowResponse()
         transport = PinnedChatCompletionsTransport(resolver=lambda _host:["93.184.216.34"],total_timeout=0.03)
-        with patch("backend.ai.provider._PinnedHTTPSConnection", SlowConnection):
+        # The fake connection does not use TLS. Exclude machine certificate-load
+        # latency so the 30ms budget actually tests the slow read/abort path.
+        with patch("backend.ai.provider._PinnedHTTPSConnection", SlowConnection), \
+                patch("backend.ai.provider.ssl.create_default_context", return_value=object()):
             with self.assertRaises(ProviderFailure) as caught:
                 transport.chat(ProviderConfig("m","m","https://vendor.example/v1","model","none"), [{"role":"user","content":"x"}])
         self.assertEqual(caught.exception.code,"provider_timeout")
+        self.assertEqual(len(SlowConnection.instances), 1)
         self.assertTrue(SlowConnection.instances[0].closed)
 
     def test_transport_no_auth_redirect_or_oversize_body_leak(self):
@@ -252,6 +287,67 @@ class AIModelTests(unittest.TestCase):
             with self.assertRaises(ProviderFailure) as oversized:
                 limited.chat(ProviderConfig("m","m","https://vendor.example/v1","model","none"),[{"role":"user","content":"x"}])
         self.assertEqual(oversized.exception.code,"provider_response_too_large")
+
+    def test_pinned_transport_reads_models_with_get_and_bearer_auth(self):
+        import json
+        class FakeSocket:
+            def settimeout(self, _value): pass
+        class Response:
+            status=200
+            def __init__(self): self.sent=False
+            def read1(self,size):
+                if self.sent:return b""
+                self.sent=True
+                return b'{"object":"list","data":[{"id":"deepseek-flash"}]}'[:size]
+        class RecordingConnection:
+            last=None
+            def __init__(self,*_args,**_kwargs):self.sock=FakeSocket();self.response=Response();RecordingConnection.last=self
+            def connect(self):pass
+            def request(self,*args,**kwargs):self.request_args=args;self.request_kwargs=kwargs
+            def getresponse(self):return self.response
+            def close(self):self.sock=None
+        transport=PinnedChatCompletionsTransport(resolver=lambda _host:["93.184.216.34"])
+        config=ProviderConfig("m","m","https://vendor.example/v1","model","bearer","discovery-key")
+        with patch("backend.ai.provider._PinnedHTTPSConnection",RecordingConnection):
+            models=transport.list_models(config)
+        self.assertEqual(models,[{"id":"deepseek-flash"}])
+        self.assertEqual(RecordingConnection.last.request_args[:2],("GET","/v1/models"))
+        self.assertEqual(RecordingConnection.last.request_kwargs["headers"]["Authorization"],"Bearer discovery-key")
+        self.assertIsNone(RecordingConnection.last.request_kwargs["body"])
+
+    def test_model_discovery_reports_safe_provider_http_failure_categories(self):
+        import socket
+        class FakeSocket:
+            def settimeout(self, _value): pass
+        class Response:
+            def __init__(self,status): self.status=status; self.sent=False
+            def read1(self,_size):
+                if self.sent:return b""
+                self.sent=True
+                return b'{"message":"private provider response"}'
+        class Connection:
+            status=401
+            def __init__(self,*_args,**_kwargs): self.sock=FakeSocket()
+            def connect(self): pass
+            def request(self,*_args,**_kwargs): pass
+            def getresponse(self): return Response(self.status)
+            def close(self): self.sock=None
+        transport=PinnedChatCompletionsTransport(resolver=lambda _host:["93.184.216.34"])
+        config=ProviderConfig("m","m","https://vendor.example/v1","model","none")
+        for status,expected in ((401,"provider_auth_failed"),(403,"provider_access_denied"),
+                                (404,"provider_model_discovery_unavailable"),(429,"provider_rate_limited"),
+                                (503,"provider_server_error")):
+            with self.subTest(status=status), patch("backend.ai.provider._PinnedHTTPSConnection",Connection):
+                Connection.status=status
+                with self.assertRaises(ProviderFailure) as caught:
+                    transport.list_models(config)
+            self.assertEqual(caught.exception.code,expected)
+            self.assertNotIn("private provider response",str(caught.exception))
+
+        with patch("backend.ai.provider.socket.getaddrinfo",side_effect=socket.gaierror("private resolver text")):
+            with self.assertRaises(ProviderFailure) as dns:
+                _resolve_public("vendor.example")
+        self.assertEqual(dns.exception.code,"provider_dns_resolution_failed")
 
     def test_cipher_binds_user_model_revision_and_uses_derived_key(self):
         cipher = ProviderKeyCipher(KEYRING)

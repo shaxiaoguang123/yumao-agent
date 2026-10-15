@@ -12,6 +12,8 @@ const credential = (overrides = {}) => ({
   account_binding_state: 'confirmed',
   requires_revalidation: false,
   expiry_state: 'expiring_soon',
+  has_payment_password: false,
+  payment_password_revision: null,
   token_expires_at_utc: '2026-10-15T12:00:00.000Z',
   last_confirmed_validation_state: 'confirmed_valid',
   last_successful_validation_at_utc: '2026-10-08T10:00:00.000Z',
@@ -55,8 +57,23 @@ function makeApi({ credentials = [], ...overrides } = {}) {
     create: vi.fn().mockResolvedValue({ credential: credential() }),
     validate: vi.fn().mockResolvedValue({ result: 'validated', credential: credential() }),
     rotateToken: vi.fn().mockResolvedValue({ result: 'token_rotated', credential: credential() }),
+    setPaymentPassword: vi.fn().mockResolvedValue({ result: 'payment_password_saved', credential: credential({ has_payment_password: true }) }),
     update: vi.fn().mockResolvedValue({ result: 'credential_updated', credential: credential() }),
     remove: vi.fn().mockResolvedValue(undefined),
+    executionSettings: vi.fn(async credentialId => ({
+      credential_id: credentialId,
+      version: 0,
+      settings: {
+        reconciliation_time: '00:30', clock_calibration_lead_ms: 1000, start_offset_ms: 0,
+        booking_node_delay_ms: 0, booking_by_time_delay_ms: 0, get_user_info_delay_ms: 0,
+        get_children_delay_ms: 0, get_pay_price_delay_ms: 0, create_booking_delay_ms: 0,
+        open_platform_pay_order_delay_ms: 0, payment_verify_delay_ms: 0,
+      },
+      worker_enabled: false,
+    })),
+    updateExecutionSettings: vi.fn(async (credentialId, version, settings) => ({
+      credential_id: credentialId, version: version + 1, settings, worker_enabled: false,
+    })),
     ...overrides,
   };
 }
@@ -82,6 +99,13 @@ async function mountView(api) {
 }
 
 describe('Credential management view', () => {
+  it('keeps automatic execution settings with reservation plans', async () => {
+    const api = makeApi({ credentials: [credential({ has_payment_password: true })] });
+    const { wrapper } = await mountView(api);
+    expect(wrapper.text()).not.toContain('自动执行时间');
+    expect(api.executionSettings).not.toHaveBeenCalled();
+  });
+
   it('discards a rotation draft when local filtering hides its credential', async()=>{
     const api=makeApi({credentials:[credential()]});const {wrapper}=await mountView(api);
     await wrapper.get('[data-testid="rotate-credential-a"]').trigger('click');
@@ -191,11 +215,13 @@ describe('Credential management view', () => {
     const storageBefore = window.localStorage.length + window.sessionStorage.length;
     await wrapper.get('[data-testid="credential-label"]').setValue('Primary');
     await wrapper.get('[data-testid="credential-token"]').setValue(token);
+    await wrapper.get('[data-testid="credential-payment-password"]').setValue('synthetic-payment-password');
     await wrapper.get('[data-testid="credential-create"]').trigger('submit');
     await flushPromises();
 
-    expect(api.create).toHaveBeenCalledWith({ label: 'Primary', token });
+    expect(api.create).toHaveBeenCalledWith({ label: 'Primary', token, payment_password: 'synthetic-payment-password' });
     expect(wrapper.get('[data-testid="credential-token"]').element.value).toBe('');
+    expect(wrapper.get('[data-testid="credential-payment-password"]').element.value).toBe('');
     expect(window.localStorage.length + window.sessionStorage.length).toBe(storageBefore);
     expect(router.currentRoute.value.fullPath).not.toContain(token);
   });
@@ -232,6 +258,7 @@ describe('Credential management view', () => {
     const { wrapper } = await mountView(api);
     await wrapper.get('[data-testid="credential-label"]').setValue('Primary');
     await wrapper.get('[data-testid="credential-token"]').setValue('synthetic-busy-token');
+    await wrapper.get('[data-testid="credential-payment-password"]').setValue('synthetic-payment-password');
     await wrapper.get('[data-testid="credential-create"]').trigger('submit');
     await nextTick();
 
@@ -253,6 +280,7 @@ describe('Credential management view', () => {
     const { wrapper } = await mountView(api);
     await wrapper.get('[data-testid="credential-label"]').setValue('Primary');
     await wrapper.get('[data-testid="credential-token"]').setValue(token);
+    await wrapper.get('[data-testid="credential-payment-password"]').setValue('synthetic-payment-password');
     await wrapper.get('[data-testid="credential-create"]').trigger('submit');
     await flushPromises();
 
@@ -262,17 +290,63 @@ describe('Credential management view', () => {
     expect(wrapper.text()).not.toContain('raw message');
   });
 
+  it('shows an actionable reason for backend mutations that fail without echoing server text', async () => {
+    const api = makeApi({ credentials: [], create: vi.fn().mockRejectedValue(Object.assign(new Error('private traceback'), {
+      kind: 'network',
+    })) });
+    const { wrapper } = await mountView(api);
+    await wrapper.get('[data-testid="credential-label"]').setValue('Primary');
+    await wrapper.get('[data-testid="credential-token"]').setValue('synthetic-token');
+    await wrapper.get('[data-testid="credential-payment-password"]').setValue('synthetic-payment-password');
+    await wrapper.get('[data-testid="credential-create"]').trigger('submit');
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain('本次操作结果未确认');
+    expect(wrapper.get('[role="alert"]').text()).toContain('刷新凭据列表核对');
+    expect(wrapper.text()).not.toContain('private traceback');
+    expect(wrapper.text()).not.toContain('synthetic-token');
+  });
+
+  it('explains a known credential write failure and recommends reconciliation', async () => {
+    const api = makeApi({ credentials: [], create: vi.fn().mockRejectedValue(Object.assign(new Error('private database detail'), {
+      code: 'credential_write_failed',
+    })) });
+    const { wrapper } = await mountView(api);
+    await wrapper.get('[data-testid="credential-label"]').setValue('Primary');
+    await wrapper.get('[data-testid="credential-token"]').setValue('synthetic-token');
+    await wrapper.get('[data-testid="credential-payment-password"]').setValue('synthetic-payment-password');
+    await wrapper.get('[data-testid="credential-create"]').trigger('submit');
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain('服务器未能保存凭据');
+    expect(wrapper.get('[role="alert"]').text()).toContain('刷新凭据列表确认结果');
+    expect(wrapper.text()).not.toContain('private database detail');
+  });
+
   it('clears the create form when the user cancels', async () => {
     const api = makeApi({ credentials: [] });
     const { wrapper } = await mountView(api);
     await wrapper.get('[data-testid="credential-label"]').setValue('Draft');
     await wrapper.get('[data-testid="credential-token"]').setValue('synthetic-cancelled-token');
+    await wrapper.get('[data-testid="credential-payment-password"]').setValue('synthetic-payment-password');
 
     await wrapper.get('[data-testid="credential-create-cancel"]').trigger('click');
 
     expect(wrapper.get('[data-testid="credential-label"]').element.value).toBe('');
     expect(wrapper.get('[data-testid="credential-token"]').element.value).toBe('');
+    expect(wrapper.get('[data-testid="credential-payment-password"]').element.value).toBe('');
     expect(api.create).not.toHaveBeenCalled();
+  });
+
+  it('sets a separate encrypted payment password and clears the in-memory field', async () => {
+    const api = makeApi({ credentials: [credential()] });
+    const { wrapper } = await mountView(api);
+    await wrapper.get('[data-testid="payment-password-credential-a"]').trigger('click');
+    await wrapper.get('[data-testid="payment-password-input"]').setValue('synthetic-payment-change');
+    await wrapper.get('[data-testid="payment-password-form-credential-a"]').trigger('submit');
+    await flushPromises();
+    expect(api.setPaymentPassword).toHaveBeenCalledWith('credential-a', 'synthetic-payment-change', 3);
+    expect(wrapper.text()).toContain('此操作没有发起支付');
+    expect(wrapper.text()).not.toContain('synthetic-payment-change');
+    expect(wrapper.find('[data-testid="payment-password-input"]').exists()).toBe(false);
   });
 
   it('validates with the current version and revision', async () => {
@@ -433,6 +507,7 @@ describe('Credential management view', () => {
     const { wrapper } = await mountView(api);
     await wrapper.get('[data-testid="credential-label"]').setValue('Duplicate');
     await wrapper.get('[data-testid="credential-token"]').setValue(token);
+    await wrapper.get('[data-testid="credential-payment-password"]').setValue('synthetic-payment-password');
     await wrapper.get('[data-testid="credential-create"]').trigger('submit');
     await flushPromises();
 

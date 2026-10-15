@@ -52,6 +52,9 @@ class AppFactoryTests(unittest.TestCase):
         self.assertIn("credential_upstream_adapter", app.extensions)
         self.assertIn("upstream_request_gate", app.extensions)
         self.assertIn("credential_token_cipher", app.extensions)
+        self.assertIn("booking_execution_engine", app.extensions)
+        self.assertIn("booking_scheduler", app.extensions)
+        self.assertFalse(app.extensions["booking_scheduler"].worker_enabled)
         self.assertIsNone(app.extensions["upstream_request_gate"].minimum_interval_ms)
         self.assertIs(app.extensions["credential_service"].adapter, app.extensions["credential_upstream_adapter"])
         self.assertIs(app.extensions["credential_service"].gate, app.extensions["upstream_request_gate"])
@@ -174,7 +177,7 @@ class AppFactoryTests(unittest.TestCase):
             shutil.copyfile(migration_dir / name, schema_v2_migrations / name)
         migrate_database(database_path, 5000, schema_v2_migrations)
 
-        self.assertEqual(db.CURRENT_SCHEMA_VERSION, 6)
+        self.assertEqual(db.CURRENT_SCHEMA_VERSION, 8)
         with self.assertRaises(db.SchemaNotReadyError):
             _create_app(database_path)
 

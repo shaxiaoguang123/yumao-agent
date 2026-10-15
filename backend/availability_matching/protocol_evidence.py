@@ -47,8 +47,10 @@ CURRENT_EVIDENCE = {
         "court_to_venue_association": "missing",
         "booking_by_time_scope_response_association": "missing",
         "booking_by_time_response_structure": "partial",
-        "availability_status_semantics": "missing",
-        "conflict_list_semantics": "missing",
+        # The official client defines conflictList display/selection behavior,
+        # but does not prove that a clear-looking cell is authoritative inventory.
+        "availability_status_semantics": "partial",
+        "conflict_list_semantics": "confirmed",
         "time_atom_duration_continuity": "partial",
         "price_unit_currency_scope": "missing",
         "capture_timestamp_freshness": "missing",

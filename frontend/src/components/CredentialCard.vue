@@ -1,7 +1,7 @@
 <script setup>
 import AppIcon from './AppIcon.vue';
 defineProps({ credential:{type:Object,required:true},busy:Boolean });
-defineEmits(['validate','rotate','toggle','remove']);
+defineEmits(['validate','rotate','payment-password','toggle','remove']);
 const expiryLabels = {
   expiry_unknown: '到期时间未知',
   expiry_ok: '有效期正常',
@@ -62,6 +62,7 @@ function attemptText(value) {
 </script><template>
       <article
         class="credential-card"
+        :class="{'credential-needs-attention': credential.expiry_state==='expired'||credential.last_confirmed_validation_state==='confirmed_invalid'||credential.requires_revalidation||credential.account_binding_state!=='confirmed'}"
         :data-testid="`credential-card-${credential.credential_id}`"
       >
         <header class="credential-card-heading">
@@ -94,6 +95,10 @@ function attemptText(value) {
           <div>
             <dt>最近成功验证</dt>
             <dd>{{ formatDate(credential.last_successful_validation_at_utc) }}</dd>
+          </div>
+          <div>
+            <dt>支付密码</dt>
+            <dd class="fact-state" :class="credential.has_payment_password ? 'fact-positive' : 'fact-warning'">{{ credential.has_payment_password ? '已加密保存' : '尚未设置' }}</dd>
           </div>
 
         </dl>
@@ -150,6 +155,13 @@ function attemptText(value) {
           <button
             class="secondary-button"
             type="button"
+            :data-testid="`payment-password-${credential.credential_id}`"
+            :disabled="busy"
+            @click="$emit('payment-password')"
+          >{{ credential.has_payment_password ? '更换支付密码' : '设置支付密码' }}</button>
+          <button
+            class="secondary-button"
+            type="button"
             :data-testid="`credential-${credential.enabled ? 'disable' : 'enable'}-${credential.credential_id}`"
             :disabled="busy"
             @click="$emit('toggle')"
@@ -180,6 +192,7 @@ function attemptText(value) {
   background:var(--surface);
 
 }
+.credential-card.credential-needs-attention{border-color:var(--warning)}.credential-card:not(.credential-needs-attention){border-top:3px solid var(--brand)}
 
 .credential-card-heading {
   display:flex;

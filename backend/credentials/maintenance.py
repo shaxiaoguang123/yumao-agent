@@ -14,6 +14,11 @@ from backend.credentials.key_dependencies import (
     check_credential_key_dependencies,
 )
 from backend.credentials.keyring import CredentialKeyring
+from backend.credentials.payment_secret import (
+    CredentialPaymentSecretCipher,
+    EncryptedPaymentSecret,
+    PaymentSecretError,
+)
 from backend.db import connect_database
 
 
@@ -56,6 +61,7 @@ def rewrap_credential_tokens(
         raise CredentialMaintenanceError("credential_key_dependency_missing") from exc
 
     cipher = CredentialTokenCipher(encryption_keyring)
+    payment_cipher = CredentialPaymentSecretCipher(encryption_keyring)
     connection = connect_database(Path(database_path), busy_timeout_ms)
     rewrapped_count = 0
     unchanged_count = 0
@@ -141,6 +147,58 @@ def rewrap_credential_tokens(
                     new_envelope.key_id,
                     now_utc_ms,
                 ),
+            )
+            rewrapped_count += 1
+
+        payment_secrets = connection.execute(
+            """SELECT secret.user_id, secret.credential_id, secret.secret_revision,
+                      secret.ciphertext, secret.nonce, secret.tag, secret.encryption_key_version,
+                      credential.current_token_revision_id
+               FROM credential_payment_secrets AS secret
+               JOIN credentials AS credential
+                 ON credential.user_id=secret.user_id AND credential.credential_id=secret.credential_id
+               ORDER BY secret.user_id, secret.credential_id"""
+        ).fetchall()
+        for row in payment_secrets:
+            envelope = EncryptedPaymentSecret(
+                ciphertext=row["ciphertext"], nonce=row["nonce"], tag=row["tag"],
+                key_id=row["encryption_key_version"],
+            )
+            try:
+                plaintext = payment_cipher.decrypt(
+                    envelope, user_id=row["user_id"], credential_id=row["credential_id"],
+                    revision=row["secret_revision"], key_id=row["encryption_key_version"],
+                )
+            except (PaymentSecretError, TypeError, ValueError) as exc:
+                raise CredentialMaintenanceError("credential_rewrap_failed") from exc
+            if row["encryption_key_version"] == active_key_id:
+                unchanged_count += 1
+                continue
+            try:
+                new_envelope = payment_cipher.encrypt(
+                    plaintext, user_id=row["user_id"], credential_id=row["credential_id"],
+                    revision=row["secret_revision"], key_id=active_key_id,
+                )
+            except (PaymentSecretError, TypeError, ValueError) as exc:
+                raise CredentialMaintenanceError("credential_rewrap_failed") from exc
+            cursor = connection.execute(
+                """UPDATE credential_payment_secrets
+                   SET ciphertext=?, nonce=?, tag=?, encryption_key_version=?
+                   WHERE user_id=? AND credential_id=? AND secret_revision=?
+                     AND encryption_key_version=?""",
+                (new_envelope.ciphertext, new_envelope.nonce, new_envelope.tag,
+                 new_envelope.key_id, row["user_id"], row["credential_id"],
+                 row["secret_revision"], row["encryption_key_version"]),
+            )
+            if cursor.rowcount != 1:
+                raise CredentialMaintenanceError("credential_rewrap_stale")
+            connection.execute(
+                """INSERT INTO credential_lifecycle_audits
+                   (user_id, credential_id, revision_id, actor_user_id, operation_code,
+                    old_key_version, new_key_version, occurred_at_utc_ms, outcome)
+                   VALUES (?, ?, ?, ?, 'key_rewrapped', ?, ?, ?, 'success')""",
+                (row["user_id"], row["credential_id"], row["current_token_revision_id"],
+                 actor_user_id, row["encryption_key_version"], new_envelope.key_id, now_utc_ms),
             )
             rewrapped_count += 1
         connection.execute("COMMIT")

@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from backend.credentials.crypto import CredentialTokenCipher
 from backend.credentials.keyring import CredentialKeyring
+from backend.credentials.payment_secret import CredentialPaymentSecretCipher, EncryptedPaymentSecret
 from backend.credentials.key_dependencies import (
     CredentialKeyDependencyError,
     check_credential_key_dependencies,
@@ -131,6 +132,21 @@ class CredentialMaintenanceTests(unittest.TestCase):
             )
             connection.execute("COMMIT")
 
+    def _insert_payment_secret(self, credential_id: str, password: str) -> None:
+        cipher = CredentialPaymentSecretCipher(self.old_encryption_keyring)
+        envelope = cipher.encrypt(
+            password.encode(), user_id="user-a", credential_id=credential_id,
+            revision=1, key_id="enc-v1",
+        )
+        with closing(connect_database(self.database_path, BUSY_TIMEOUT_MS)) as connection:
+            connection.execute(
+                """INSERT INTO credential_payment_secrets
+                   (user_id, credential_id, secret_revision, ciphertext, nonce, tag,
+                    encryption_key_version, updated_at_utc_ms)
+                   VALUES ('user-a', ?, 1, ?, ?, ?, 'enc-v1', ?)""",
+                (credential_id, envelope.ciphertext, envelope.nonce, envelope.tag, NOW),
+            )
+
     def _insert_inactive_historical_revision(self, credential_id: str) -> None:
         with closing(connect_database(self.database_path, BUSY_TIMEOUT_MS)) as connection:
             connection.execute(
@@ -221,6 +237,42 @@ class CredentialMaintenanceTests(unittest.TestCase):
         self.assertEqual(after, before)
         with closing(connect_database(self.database_path, BUSY_TIMEOUT_MS)) as connection:
             self.assertEqual(connection.execute("SELECT count(*) FROM credential_lifecycle_audits").fetchone()[0], 0)
+
+    def test_payment_secret_is_rewrapped_with_separate_aad_and_key_dependency(self) -> None:
+        maintenance = self._require_maintenance()
+        self._insert_active_credential("credential-a", "revision-a", SYNTHETIC_TOKEN_A)
+        self._insert_payment_secret("credential-a", "synthetic-payment-password")
+        active_only_ring = CredentialKeyring(MappingProxyType({"enc-v2": NEW_ENCRYPTION_KEY}), "enc-v2")
+        with self.assertRaises(CredentialKeyDependencyError):
+            check_credential_key_dependencies(
+                self.database_path, BUSY_TIMEOUT_MS,
+                encryption_keyring=active_only_ring,
+                fingerprint_keyring=self.fingerprint_keyring,
+            )
+
+        result = maintenance.rewrap_credential_tokens(
+            self.database_path, BUSY_TIMEOUT_MS,
+            encryption_keyring=self.active_encryption_keyring,
+            fingerprint_keyring=self.fingerprint_keyring,
+            actor_user_id="admin-a", now_utc_ms=NOW + 1,
+        )
+        with closing(connect_database(self.database_path, BUSY_TIMEOUT_MS)) as connection:
+            row = connection.execute(
+                "SELECT * FROM credential_payment_secrets WHERE user_id='user-a' AND credential_id='credential-a'"
+            ).fetchone()
+        self.assertEqual(row["encryption_key_version"], "enc-v2")
+        plaintext = CredentialPaymentSecretCipher(self.active_encryption_keyring).decrypt(
+            EncryptedPaymentSecret(row["ciphertext"], row["nonce"], row["tag"], row["encryption_key_version"]),
+            user_id="user-a", credential_id="credential-a", revision=1, key_id="enc-v2",
+        )
+        self.assertEqual(plaintext, b"synthetic-payment-password")
+        self.assertEqual(result.rewrapped_count, 2)
+        self.assertNotIn("synthetic-payment-password", repr(result))
+        check_credential_key_dependencies(
+            self.database_path, BUSY_TIMEOUT_MS,
+            encryption_keyring=active_only_ring,
+            fingerprint_keyring=self.fingerprint_keyring,
+        )
 
     def test_partial_rewrap_failure_rolls_back_all_envelopes_and_audits(self) -> None:
         maintenance = self._require_maintenance()

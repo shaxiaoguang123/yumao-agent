@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 8
 _MIGRATION_NAME_RE = re.compile(r"\A(?P<version>[0-9]{4})_[a-z0-9_]+\.sql\Z")
 
 _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
@@ -46,6 +46,27 @@ _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
         "initial_validation_result", "initial_validation_at_utc_ms", "created_by_user_id",
         "secret_material_active", "ciphertext", "nonce", "tag", "encryption_key_version",
         "ciphertext_cleared_at_utc_ms",
+    }),
+    "credential_payment_secrets": frozenset({
+        "user_id", "credential_id", "secret_revision", "ciphertext", "nonce", "tag",
+        "encryption_key_version", "updated_at_utc_ms",
+    }),
+    "booking_execution_settings": frozenset({
+        "user_id", "credential_id", "version", "reconciliation_time",
+        "clock_calibration_lead_ms", "start_offset_ms", "booking_node_delay_ms",
+        "booking_by_time_delay_ms", "get_user_info_delay_ms", "get_children_delay_ms",
+        "get_pay_price_delay_ms", "create_booking_delay_ms",
+        "open_platform_pay_order_delay_ms", "payment_verify_delay_ms", "updated_at_utc_ms",
+    }),
+    "booking_execution_runs": frozenset({
+        "run_id", "user_id", "credential_id", "target_date", "source_plan_id",
+        "source_revision_id", "source_version", "source_sha256", "state", "snapshot_json",
+        "reconciliation_json", "clock_offset_ms", "clock_uncertainty_ms",
+        "created_at_utc_ms", "updated_at_utc_ms", "started_at_utc_ms", "completed_at_utc_ms",
+    }),
+    "booking_execution_stages": frozenset({
+        "stage_id", "run_id", "round_number", "candidate_index", "stage_key",
+        "started_at_utc_ms", "completed_at_utc_ms", "elapsed_ms", "outcome", "safe_code",
     }),
     "credential_validation_observations": frozenset({
         "validation_attempt_id", "user_id", "credential_id", "operation_kind",
@@ -213,6 +234,10 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
         for name, columns in _REQUIRED_COLUMNS.items()
         if (schema_version >= 6 or name not in {"ai_models", "ai_model_preferences"})
         and (schema_version >= 5 or name not in {"booking_plans", "booking_plan_revisions"})
+        and (schema_version >= 7 or name != "credential_payment_secrets")
+        and (schema_version >= 8 or name not in {
+            "booking_execution_settings", "booking_execution_runs", "booking_execution_stages",
+        })
         and (schema_version >= 2 or name not in {
             "credentials",
             "credential_token_revisions",
@@ -251,6 +276,13 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
             ("credential_token_revisions", ("user_id", "credential_id", "revision_id")),
             ("credential_token_revisions", ("user_id", "credential_id", "revision_number")),
         )
+        if schema_version >= 7:
+            required_composite_uniques += (("credential_payment_secrets", ("user_id", "credential_id")),)
+        if schema_version >= 8:
+            required_composite_uniques += (
+                ("booking_execution_settings", ("user_id", "credential_id")),
+                ("booking_execution_runs", ("user_id", "credential_id", "target_date", "source_revision_id")),
+            )
         for table_name, columns in required_composite_uniques:
             if not _has_unique_columns(connection, table_name, columns):
                 raise SchemaNotReadyError(f"required composite uniqueness is missing from {table_name}")
@@ -310,6 +342,33 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
                 (("active_user_id", "user_id"), ("active_credential_id", "credential_id")),
             ),
         )
+        if schema_version >= 7:
+            composite_foreign_keys += (
+                (
+                    "credential_payment_secrets",
+                    "credentials",
+                    (("user_id", "user_id"), ("credential_id", "credential_id")),
+                ),
+            )
+        if schema_version >= 8:
+            composite_foreign_keys += (
+                (
+                    "booking_execution_settings",
+                    "credentials",
+                    (("user_id", "user_id"), ("credential_id", "credential_id")),
+                ),
+                (
+                    "booking_execution_runs",
+                    "credentials",
+                    (("user_id", "user_id"), ("credential_id", "credential_id")),
+                ),
+                (
+                    "booking_execution_runs",
+                    "booking_plan_revisions",
+                    (("source_revision_id", "revision_id"), ("source_plan_id", "plan_id"),
+                     ("user_id", "user_id"), ("source_version", "revision_number")),
+                ),
+            )
         for table_name, parent_table, column_map in composite_foreign_keys:
             if not _has_composite_foreign_key(connection, table_name, parent_table, column_map):
                 raise SchemaNotReadyError(f"required tenant-bound foreign key is missing from {table_name}")
@@ -347,6 +406,13 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
             raise SchemaNotReadyError("AI model owner constraint is missing")
         if not _has_foreign_key(connection, "ai_model_preferences", "user_id", "users", "user_id"):
             raise SchemaNotReadyError("AI model preference owner constraint is missing")
+
+    if schema_version >= 8:
+        if not _has_foreign_key(connection, "booking_execution_stages", "run_id", "booking_execution_runs", "run_id"):
+            raise SchemaNotReadyError("execution stage ownership constraint is missing")
+        triggers = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+        if "booking_execution_runs_owner_immutable" not in triggers:
+            raise SchemaNotReadyError("execution queue snapshot immutability guard is missing")
 
     if schema_version >= 3:
         gate_rows = connection.execute(

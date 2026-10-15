@@ -10,10 +10,16 @@ export function createCredentialApi(client) {
     list() {
       return client.request('/api/credentials');
     },
-    create({ label, token }) {
+    create({ label, token, payment_password }) {
       return client.request('/api/credentials', {
         method: 'POST',
-        body: { label, token },
+        body: { label, token, payment_password },
+      });
+    },
+    setPaymentPassword(credentialId, payment_password, expectedCredentialVersion) {
+      return client.request(`${credentialPath(credentialId)}/payment-password`, {
+        method: 'PUT',
+        body: { payment_password, expected_credential_version: expectedCredentialVersion },
       });
     },
     validate(credentialId, expectedCredentialVersion, expectedRevisionId) {
@@ -45,6 +51,15 @@ export function createCredentialApi(client) {
       return client.request(credentialPath(credentialId), {
         method: 'DELETE',
         body: { expected_credential_version: expectedCredentialVersion },
+      });
+    },
+    executionSettings(credentialId) {
+      return client.request(`/api/booking-execution/credentials/${encodeURIComponent(credentialId)}/settings`);
+    },
+    updateExecutionSettings(credentialId, expectedVersion, settings) {
+      return client.request(`/api/booking-execution/credentials/${encodeURIComponent(credentialId)}/settings`, {
+        method: 'PUT',
+        body: { expected_version: expectedVersion, settings },
       });
     },
   };

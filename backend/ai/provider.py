@@ -89,6 +89,8 @@ def _resolve_public(host: str, timeout: float = 2.0) -> list[str]:
         raise ProviderFailure("provider_dns_timeout", 504) from None
     except ProviderFailure:
         raise
+    except socket.gaierror:
+        raise ProviderFailure("provider_dns_resolution_failed") from None
     except (OSError, ValueError):
         raise ProviderFailure("provider_unavailable") from None
 
@@ -123,7 +125,7 @@ class PinnedChatCompletionsTransport:
         self.connect_timeout, self.read_timeout = connect_timeout, read_timeout
         self.total_timeout, self.max_response_bytes, self.resolver = total_timeout, max_response_bytes, resolver
 
-    def _request(self, config: ProviderConfig, messages: Sequence[Mapping[str, str]]) -> str:
+    def _exchange(self, config: ProviderConfig, method: str, suffix: str, body: bytes | None = None) -> bytes:
         base = validate_base_url(config.base_url)
         parsed = urlsplit(base)
         deadline = time.monotonic() + self.total_timeout
@@ -133,10 +135,8 @@ class PinnedChatCompletionsTransport:
             addresses = self.resolver(parsed.hostname or "")
         if time.monotonic() >= deadline:
             raise ProviderFailure("provider_timeout", 504)
-        path = parsed.path.rstrip("/") + "/chat/completions"
-        body = json.dumps({"model": config.model, "messages": list(messages), "max_tokens": 3072}, ensure_ascii=False,
-                          separators=(",", ":")).encode("utf-8")
-        if len(body) > 262_144:
+        path = parsed.path.rstrip("/") + suffix
+        if body is not None and len(body) > 262_144:
             raise ProviderFailure("request_too_large", 413)
         headers = {"Content-Type": "application/json", "Accept": "application/json", "Connection": "close"}
         if config.auth_mode == "bearer":
@@ -149,8 +149,8 @@ class PinnedChatCompletionsTransport:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ProviderFailure("provider_timeout", 504)
-        # A POST is sent to one vetted address only; retrying another DNS answer
-        # could duplicate a billed completion after an ambiguous network failure.
+        # A request is sent to one vetted address only. In particular, never
+        # retry a POST after an ambiguous network failure because it may be billed.
         conn = _PinnedHTTPSConnection(parsed.hostname or "", addresses[0], timeout=min(self.connect_timeout, remaining), context=context)
         timer: threading.Timer | None = None
         try:
@@ -172,7 +172,7 @@ class PinnedChatCompletionsTransport:
             timer.daemon = True
             timer.start()
             conn.sock.settimeout(min(self.read_timeout, remaining))
-            conn.request("POST", path, body=body, headers=headers)
+            conn.request(method, path, body=body, headers=headers)
             response = conn.getresponse()
             if response.status in (301, 302, 303, 307, 308):
                 raise ProviderFailure("provider_redirect_rejected")
@@ -196,20 +196,25 @@ class PinnedChatCompletionsTransport:
             if response.status < 200 or response.status >= 300:
                 category = {401:'provider_auth_failed',403:'provider_access_denied',
                             404:'provider_model_or_endpoint_not_found',429:'provider_rate_limited'}.get(response.status,'provider_request_failed')
+                if method == "GET" and suffix == "/models" and response.status == 404:
+                    category = "provider_model_discovery_unavailable"
+                elif response.status in (408, 504):
+                    category = "provider_timeout"
+                elif response.status in (400, 422):
+                    category = "provider_request_rejected"
+                elif 500 <= response.status <= 599:
+                    category = "provider_server_error"
                 raise ProviderFailure(category)
-            try:
-                value = json.loads(b"".join(chunks).decode("utf-8"))
-                content = value["choices"][0]["message"]["content"]
-            except (ValueError, KeyError, IndexError, TypeError):
-                raise ProviderFailure("provider_response_invalid") from None
-            if not isinstance(content, str):
-                raise ProviderFailure("provider_response_invalid")
-            return content
+            return b"".join(chunks)
         except ProviderFailure:
             raise
+        except ssl.SSLCertVerificationError:
+            raise ProviderFailure("provider_tls_verification_failed") from None
+        except ssl.SSLError:
+            raise ProviderFailure("provider_tls_failed") from None
         except TimeoutError:
             raise ProviderFailure("provider_timeout", 504) from None
-        except (OSError, ssl.SSLError, ValueError, HTTPException):
+        except (OSError, ValueError, HTTPException):
             if time.monotonic() >= deadline:
                 raise ProviderFailure("provider_timeout", 504) from None
             raise ProviderFailure("provider_unavailable") from None
@@ -217,6 +222,29 @@ class PinnedChatCompletionsTransport:
             if timer is not None:
                 timer.cancel()
             conn.close()
+
+    def _request(self, config: ProviderConfig, messages: Sequence[Mapping[str, str]]) -> str:
+        body = json.dumps({"model": config.model, "messages": list(messages), "max_tokens": 3072}, ensure_ascii=False,
+                          separators=(",", ":")).encode("utf-8")
+        try:
+            value = json.loads(self._exchange(config, "POST", "/chat/completions", body).decode("utf-8"))
+            content = value["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise ProviderFailure("provider_response_invalid") from None
+        if not isinstance(content, str):
+            raise ProviderFailure("provider_response_invalid")
+        return content
+
+    def list_models(self, config: ProviderConfig) -> list[object]:
+        """Read an OpenAI-compatible GET /models response without exposing its body."""
+        try:
+            value = json.loads(self._exchange(config, "GET", "/models").decode("utf-8"))
+            models = value["data"]
+        except (ValueError, KeyError, TypeError):
+            raise ProviderFailure("provider_models_response_invalid") from None
+        if not isinstance(models, list):
+            raise ProviderFailure("provider_models_response_invalid")
+        return models
 
     def chat(self, config: ProviderConfig, messages: Sequence[Mapping[str, str]]) -> str:
         return self._request(config, messages)

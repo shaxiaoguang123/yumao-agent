@@ -63,6 +63,8 @@ def _serialize_credential(value: CredentialDTO) -> dict:
         "last_successful_validation_at_utc": _utc_iso8601(
             value.last_successful_validation_at_utc_ms
         ),
+        "has_payment_password": value.has_payment_password,
+        "payment_password_revision": value.payment_password_revision,
         "latest_requested_validation_attempt": _serialize_attempt(
             value.latest_requested_validation_attempt
         ),
@@ -194,12 +196,12 @@ def list_credentials():
 @require_session
 @require_csrf
 def create_credential():
-    body, error = _validated_body({"label", "token"}, {"label", "token"})
+    body, error = _validated_body({"label", "token", "payment_password"}, {"label", "token", "payment_password"})
     if error is not None:
         return error
     try:
         credential = current_app.extensions["credential_service"].create(
-            _user_id(), body["label"], body["token"], _now_utc_ms()
+            _user_id(), body["label"], body["token"], _now_utc_ms(), body["payment_password"]
         )
     except CredentialOperationError as exc:
         return _service_error(exc)
@@ -223,6 +225,26 @@ def validate_credential(credential_id: str):
             body["expected_credential_version"],
             body["expected_current_token_revision_id"],
             _now_utc_ms(),
+        )
+    except CredentialOperationError as exc:
+        return _service_error(exc)
+    return _operation_response(result)
+
+
+@credentials_bp.put("/<credential_id>/payment-password")
+@require_session
+@require_csrf
+def set_credential_payment_password(credential_id: str):
+    body, error = _validated_body(
+        {"expected_credential_version", "payment_password"},
+        {"expected_credential_version", "payment_password"},
+    )
+    if error is not None:
+        return error
+    try:
+        result = current_app.extensions["credential_service"].set_payment_password(
+            _user_id(), credential_id, body["expected_credential_version"],
+            body["payment_password"], _now_utc_ms(),
         )
     except CredentialOperationError as exc:
         return _service_error(exc)

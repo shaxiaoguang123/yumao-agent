@@ -18,6 +18,8 @@ class CredentialDTO:
     last_confirmed_validation_state: str
     last_successful_validation_at_utc_ms: int | None
     latest_requested_validation_attempt: Mapping[str, Any] | None = field(default=None, repr=False)
+    has_payment_password: bool = False
+    payment_password_revision: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

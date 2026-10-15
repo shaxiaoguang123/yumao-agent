@@ -4,17 +4,20 @@ import { RouterLink } from 'vue-router';
 import AppIcon from '../AppIcon.vue';
 import PlanSnapshotDetails from './PlanSnapshotDetails.vue';
 import BookingWindowStatus from './BookingWindowStatus.vue';
-import ConversationFollowUp from './ConversationFollowUp.vue';
+import AgentCredentialGate from './AgentCredentialGate.vue';
+import ProposalConversationHistory from './ProposalConversationHistory.vue';
+import ProposalComposer from './ProposalComposer.vue';
+import ProposalModePicker from './ProposalModePicker.vue';
 import { providerErrorMessage } from '../../api/providerErrors.js';
 
-const props=defineProps({plans:{type:Array,default:()=>[]},planApi:{type:Object,required:true},proposalApi:{type:Object,required:true},session:{type:Object,required:true}});
+const props=defineProps({plans:{type:Array,default:()=>[]},planApi:{type:Object,required:true},proposalApi:{type:Object,required:true},credentialApi:{type:Object,default:null},credentialRefreshKey:{type:Number,default:0},session:{type:Object,required:true},credentialId:{type:String,default:''}});
 const emit=defineEmits(['saved','refresh-request']);
-const message=ref(''),targetId=shallowRef(''),proposal=shallowRef(null),status=shallowRef('idle');
+const message=shallowRef(''),targetId=shallowRef(''),mode=shallowRef('new'),proposal=shallowRef(null),status=shallowRef('idle');
 const questions=ref([]),error=shallowRef(''),savedNotice=shallowRef(''),latest=shallowRef(null),latestError=shallowRef('');
 const generatedFor=shallowRef(null),busySaving=shallowRef(false),needsRegeneration=shallowRef(false);
 const uncertainSave=shallowRef(false),verificationLoading=shallowRef(false),verificationComplete=shallowRef(false),verificationResult=shallowRef(null);
 const ownSavedVersion=shallowRef(null);
-const answers=ref([]),answer=shallowRef(''),conversationBase=shallowRef(null),questionHistory=ref([]);
+const answers=ref([]),answer=shallowRef(''),conversationBase=shallowRef(null),questionHistory=ref([]),trace=ref([]),pendingTurn=shallowRef(''),credentialReady=shallowRef(false);
 const labels={target_date:'目标日期',preferred_start_times:'开始时间偏好',duration_minutes:'预约时长',venue_preference:'场馆偏好',court_preferences:'场地偏好',fallback_policy:'备用策略',price_ceiling_minor:'价格上限'};
 const currentTarget=computed(()=>targetId.value||null);
 const selectedPlan=computed(()=>props.plans.find(plan=>plan.plan_id===targetId.value)||null);
@@ -23,24 +26,35 @@ const targetChanged=computed(()=>Boolean(generatedFor.value)&&(
  || (currentTarget.value&&selectedPlan.value&&generatedFor.value.listVersion!==selectedPlan.value.version)
  || generatedFor.value.message!==message.value.trim()
 ));
-const canSave=computed(()=>status.value==='ready'&&proposal.value?.can_book===false&&generatedFor.value&&!targetChanged.value&&!needsRegeneration.value&&!uncertainSave.value&&!busySaving.value);
+const canSave=computed(()=>status.value==='ready'&&proposal.value?.can_book===false&&intentComplete.value&&canStart.value&&generatedFor.value&&(generatedFor.value.planId||generatedFor.value.credentialId)&&!targetChanged.value&&!needsRegeneration.value&&!uncertainSave.value&&!busySaving.value);
 const questionList=computed(()=>Array.isArray(questions.value)?questions.value:[]);
+const intentComplete=computed(()=>{
+ const intent=proposal.value?.intent,fallback=intent?.fallback_policy;
+ return typeof intent?.target_date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(intent.target_date)
+  &&Array.isArray(intent.preferred_start_times)&&intent.preferred_start_times.length>0&&intent.preferred_start_times.every(value=>/^\d{2}:\d{2}$/.test(value))
+  &&Number.isInteger(intent.duration_minutes)&&intent.duration_minutes>=30&&intent.duration_minutes<=240&&intent.duration_minutes%30===0
+  &&typeof intent.venue_preference==='string'&&Boolean(intent.venue_preference.trim())
+  &&Array.isArray(intent.court_preferences)&&(intent.court_preferences.length>0||fallback?.allow_any_court_in_venue===true);
+});
+const canStart= computed(()=>!props.credentialApi||credentialReady.value);
+const followUpActive=computed(()=>questionList.value.length>0&&!proposal.value&&status.value!=='unsupported');
 let alive=true,epoch=0,requestId=0;
 const authorized=()=>props.session.status==='authenticated'&&Boolean(props.session.user?.user_id);
 function valid(generation,userId,csrfToken){return alive&&generation===epoch&&authorized()&&props.session.user?.user_id===userId&&props.session.csrfToken===csrfToken;}
 function resetForSession(values,previous){
- epoch++;requestId++;proposal.value=null;generatedFor.value=null;status.value='idle';questions.value=[];latest.value=null;latestError.value='';error.value='';savedNotice.value='';needsRegeneration.value=false;uncertainSave.value=false;verificationLoading.value=false;verificationComplete.value=false;verificationResult.value=null;ownSavedVersion.value=null;busySaving.value=false;answers.value=[];questionHistory.value=[];answer.value='';conversationBase.value=null;
- if(previous&&(previous[1]!==values[1]||values[0]!=='authenticated')){message.value='';targetId.value='';}
+ epoch++;requestId++;proposal.value=null;generatedFor.value=null;status.value='idle';questions.value=[];latest.value=null;latestError.value='';error.value='';savedNotice.value='';needsRegeneration.value=false;uncertainSave.value=false;verificationLoading.value=false;verificationComplete.value=false;verificationResult.value=null;ownSavedVersion.value=null;busySaving.value=false;answers.value=[];questionHistory.value=[];answer.value='';conversationBase.value=null;trace.value=[];pendingTurn.value='';credentialReady.value=!props.credentialApi;
+ if(previous&&(previous[1]!==values[1]||previous[3]!==values[3]||values[0]!=='authenticated')){message.value='';targetId.value='';mode.value='new';}
 }
-watch(()=>[props.session.status,props.session.user?.user_id,props.session.csrfToken],resetForSession,{flush:'sync'});
-watch(()=>[message.value,targetId.value,selectedPlan.value?.version],(current,previous)=>{
+watch(()=>[props.session.status,props.session.user?.user_id,props.session.csrfToken,props.credentialId],resetForSession,{flush:'sync'});
+watch(()=>[message.value,targetId.value,selectedPlan.value?.version,mode.value],(current,previous)=>{
  requestId++;
  if(status.value==='generating')status.value='idle';
- const inputOrTargetChanged=current[0]!==previous[0]||current[1]!==previous[1];
+ const modeOrTargetChanged=current[1]!==previous[1]||current[3]!==previous[3];
+ const inputOrTargetChanged=current[0]!==previous[0]||modeOrTargetChanged;
  if(inputOrTargetChanged){
-  const targetSwitch=current[1]!==previous[1]&&conversationBase.value;
+  const targetSwitch=modeOrTargetChanged&&conversationBase.value;
   answers.value=[];questionHistory.value=[];answer.value='';conversationBase.value=null;questions.value=[];
-  if(targetSwitch){message.value='';clearProposal();}
+  if(targetSwitch){message.value='';clearProposal();trace.value=[];}
   savedNotice.value='';ownSavedVersion.value=null;return;}
  const versionChanged=current[2]!==previous[2];
  if(versionChanged){
@@ -49,6 +63,10 @@ watch(()=>[message.value,targetId.value,selectedPlan.value?.version],(current,pr
   else{savedNotice.value='';ownSavedVersion.value=null;if(conversationBase.value?.planId===current[1])needsRegeneration.value=true;}
  }
 },{flush:'sync'});
+function traceEvent(title,detail){
+ const time=new Intl.DateTimeFormat('zh-CN',{hour:'2-digit',minute:'2-digit'}).format(new Date());
+ trace.value=[...trace.value,{id:`${Date.now()}-${trace.value.length}`,title,detail,time}];
+}
 function clearProposal(){if(uncertainSave.value)return;proposal.value=null;questions.value=[];status.value='idle';generatedFor.value=null;latest.value=null;latestError.value='';error.value='';savedNotice.value='';needsRegeneration.value=false;}
 function formatValue(field,value,context){
  if(value===null||value===undefined)return '未设置';
@@ -72,28 +90,39 @@ function formatValue(field,value,context){
  if(typeof value==='object')return '有更新';
  return String(value);
 }
-function restartConversation(){if(busySaving.value||uncertainSave.value)return;requestId++;clearProposal();answers.value=[];questionHistory.value=[];answer.value='';conversationBase.value=null;message.value='';}
+function restartConversation(){if(busySaving.value||uncertainSave.value)return;requestId++;clearProposal();answers.value=[];questionHistory.value=[];answer.value='';conversationBase.value=null;message.value='';trace.value=[];pendingTurn.value='';}
+function selectMode(next){if(next!=='new'&&next!=='edit')return;mode.value=next;if(next==='new')targetId.value='';}
 async function generate({forceLatest=false,latestPlan=null,supplement=false}={}){
- if(!authorized()||status.value==='generating'||busySaving.value||uncertainSave.value||!message.value.trim()||(needsRegeneration.value&&!forceLatest))return;
+ if(!authorized()||!canStart.value||status.value==='generating'||busySaving.value||uncertainSave.value||!message.value.trim()||(mode.value==='edit'&&!targetId.value)||(needsRegeneration.value&&!forceLatest))return;
  const nextQuestions=supplement?[...questionHistory.value,[...questionList.value]]:[...questionHistory.value];
  const nextAnswers=supplement?[...answers.value,answer.value.trim()]:[...answers.value];
  if(supplement&&(!answer.value.trim()||nextAnswers.length>7))return;
  const generation=epoch,id=props.session.user.user_id,csrf=props.session.csrfToken,sequence=++requestId,selectedId=targetId.value||null,userMessage=message.value.trim(),listVersion=selectedPlan.value?.version??null;
  status.value='generating';error.value='';savedNotice.value='';latestError.value='';proposal.value=null;generatedFor.value=null;needsRegeneration.value=false;uncertainSave.value=false;verificationComplete.value=false;verificationResult.value=null;
+ pendingTurn.value=supplement?answer.value.trim():'';
+ if(!supplement||trace.value.length===0)trace.value=[];
+ traceEvent(supplement?'提交补充回答':'提交预约需求',supplement?'继续核对必需信息。':'开始整理日期、时段、场馆和场地偏好。');
  try{
   let plan=latestPlan;
-  if(selectedId&&!conversationBase.value&&!plan){const response=await props.planApi.get(selectedId);if(!valid(generation,id,csrf)||sequence!==requestId)return;plan=response.plan;}
+  if(selectedId&&!conversationBase.value&&!plan){const scope=selectedPlan.value?.credential_id;const response=scope?await props.planApi.get(selectedId,scope):await props.planApi.get(selectedId);if(!valid(generation,id,csrf)||sequence!==requestId)return;plan=response.plan;traceEvent('读取计划版本',`读取到版本 ${plan.version}，将以此版本为修改基准。`);}
   if(!conversationBase.value||forceLatest)conversationBase.value={planId:selectedId,version:plan?.version??null};
   if(forceLatest&&plan)latest.value=plan;
   const baseVersion=conversationBase.value.version;
-  const result=nextAnswers.length?await props.proposalApi.generate(userMessage,selectedId,baseVersion,nextAnswers,nextQuestions):await props.proposalApi.generate(userMessage,selectedId,baseVersion);
+  const scopedCredentialId=selectedId?(plan?.credential_id||selectedPlan.value?.credential_id||null):(props.credentialId||null);
+  const result=scopedCredentialId
+   ? (nextAnswers.length?await props.proposalApi.generate(userMessage,selectedId,baseVersion,nextAnswers,nextQuestions,scopedCredentialId):await props.proposalApi.generate(userMessage,selectedId,baseVersion,undefined,undefined,scopedCredentialId))
+   : (nextAnswers.length?await props.proposalApi.generate(userMessage,selectedId,baseVersion,nextAnswers,nextQuestions):await props.proposalApi.generate(userMessage,selectedId,baseVersion));
   if(!valid(generation,id,csrf)||sequence!==requestId)return;
-  answers.value=nextAnswers;questionHistory.value=nextQuestions;if(supplement)answer.value='';
+  answers.value=nextAnswers;questionHistory.value=nextQuestions;if(supplement)answer.value='';pendingTurn.value='';
   proposal.value=result.proposal;questions.value=result.questions||[];status.value=result.status;
-  generatedFor.value={message:userMessage,planId:selectedId,baseVersion:result.proposal?.base_version??baseVersion,listVersion};
+  generatedFor.value={message:userMessage,planId:selectedId,credentialId:scopedCredentialId,baseVersion:result.proposal?.base_version??baseVersion,listVersion};
+  if(result.status==='needs_input')traceEvent('必需信息尚未齐全',`还需回答 ${Math.max(1,(result.questions||[]).length)} 个问题；未生成或保存预约计划。`);
+  else if(result.status==='ready')traceEvent('预约意向草案已生成',intentComplete.value?'必填字段完整；等待你核对并确认保存。':'草案字段未通过完整性检查，保存已禁用。');
+  else traceEvent('请求不属于整理范围','未生成预约意向；助手不会代为查询、预约、付款或创建任务。');
   if(forceLatest&&plan)latest.value=plan;
  }catch(err){
   if(!valid(generation,id,csrf)||sequence!==requestId)return;
+  pendingTurn.value='';traceEvent('模型请求未完成','请查看错误提示并修正配置或重试；没有保存预约意向。');
   status.value='error';error.value=err?.code==='provider_not_configured'?'尚未配置 AI 模型，请先完成设置。':err?.code==='provider_api_key_required'?'当前模型缺少 API Key，请前往模型设置补充密钥。':err?.code==='plan_version_conflict'?'计划版本已变化。你的描述仍保留，请读取最新版本并重新生成。':`生成建议失败：${providerErrorMessage(err?.code)}`;
   if(err?.code==='plan_version_conflict')needsRegeneration.value=true;
  }finally{if(valid(generation,id,csrf)&&sequence===requestId&&status.value==='generating')status.value='idle';}
@@ -102,25 +131,25 @@ async function readLatestAndRegenerate(){
  if(!targetId.value||!authorized()||busySaving.value)return;
  const generation=epoch,id=props.session.user.user_id,csrf=props.session.csrfToken,sequence=requestId,selected=targetId.value,capturedMessage=message.value.trim();
  latest.value=null;latestError.value='';error.value='';needsRegeneration.value=true;
- try{const result=await props.planApi.get(selected);if(!valid(generation,id,csrf)||sequence!==requestId||selected!==targetId.value||capturedMessage!==message.value.trim())return;latest.value=result.plan;await generate({forceLatest:true,latestPlan:result.plan,supplement:Boolean(answer.value.trim())});}
+ try{const scope=selectedPlan.value?.credential_id;const result=scope?await props.planApi.get(selected,scope):await props.planApi.get(selected);if(!valid(generation,id,csrf)||sequence!==requestId||selected!==targetId.value||capturedMessage!==message.value.trim())return;latest.value=result.plan;await generate({forceLatest:true,latestPlan:result.plan,supplement:Boolean(answer.value.trim())});}
  catch{if(valid(generation,id,csrf))latestError.value='最新版本读取失败，描述和当前建议仍保留。请重试。';}
 }
 async function saveProposal(){
  if(!canSave.value)return;const generation=epoch,id=props.session.user.user_id,csrf=props.session.csrfToken,captured=generatedFor.value;
- busySaving.value=true;error.value='';savedNotice.value='';
+ busySaving.value=true;error.value='';savedNotice.value='';traceEvent('你确认保存预约意向','已提交计划保存请求；不会在此步骤预约或付款。');
  try{
   const result=captured.planId
-   ? await props.planApi.update(captured.planId,captured.baseVersion,proposal.value.intent)
-   : await props.planApi.create(proposal.value.intent);
+   ? (captured.credentialId?await props.planApi.update(captured.planId,captured.baseVersion,proposal.value.intent,captured.credentialId):await props.planApi.update(captured.planId,captured.baseVersion,proposal.value.intent))
+   : (captured.credentialId?await props.planApi.create(proposal.value.intent,captured.credentialId):await props.planApi.create(proposal.value.intent));
   if(!valid(generation,id,csrf))return;
-  savedNotice.value=`预约意向已保存 · 版本 ${result.plan.version}`;ownSavedVersion.value=captured.planId?{planId:captured.planId,version:result.plan.version}:null;proposal.value=null;generatedFor.value=null;status.value='saved';needsRegeneration.value=false;conversationBase.value=null;answers.value=[];questionHistory.value=[];answer.value='';emit('saved',result.plan);emit('refresh-request');
+  savedNotice.value=`预约意向已保存 · 版本 ${result.plan.version}`;traceEvent('预约意向保存成功',`已保存为版本 ${result.plan.version}。`);ownSavedVersion.value=captured.planId?{planId:captured.planId,version:result.plan.version}:null;proposal.value=null;generatedFor.value=null;status.value='saved';needsRegeneration.value=false;conversationBase.value=null;answers.value=[];questionHistory.value=[];answer.value='';emit('saved',result.plan);emit('refresh-request');
  }catch(err){
   if(!valid(generation,id,csrf))return;
-  if(err?.code==='plan_version_conflict'){error.value='保存时检测到版本冲突。你的描述和建议均已保留。';needsRegeneration.value=true;}
+  if(err?.code==='plan_version_conflict'){error.value='保存时检测到版本冲突。你的描述和建议均已保留。';traceEvent('版本冲突','计划已被更新；请读取最新版本并重新生成。');needsRegeneration.value=true;}
   else if(err?.code==='provider_api_key_required'||err?.code==='provider_not_configured')error.value='当前模型缺少可用 API Key，请前往模型设置补充密钥后再重新生成。';
   else if(err?.status===400)error.value='预约意向未保存，请检查字段后重试；当前建议仍保留。';
-  else if(err?.kind==='network'||err?.kind==='timeout'||!err?.status||err.status>=500){uncertainSave.value=true;verificationComplete.value=false;verificationResult.value=null;latest.value=null;latestError.value='';error.value='保存结果暂时无法确认。请先读取计划列表或最新版本，核对后再决定是否重试。';}
-  else error.value='预约意向保存失败，当前建议仍保留。请检查错误后再试。';
+  else if(err?.kind==='network'||err?.kind==='timeout'||!err?.status||err.status>=500){uncertainSave.value=true;verificationComplete.value=false;verificationResult.value=null;latest.value=null;latestError.value='';error.value='保存结果暂时无法确认。请先读取计划列表或最新版本，核对后再决定是否重试。';traceEvent('保存结果待核对','连接中断，尚不能确定服务端是否完成保存。');}
+  else {error.value='预约意向保存失败，当前建议仍保留。请检查错误后再试。';traceEvent('预约意向保存失败','服务端未确认保存成功；当前建议仍保留。');}
  }finally{if(valid(generation,id,csrf))busySaving.value=false;}
 }
 async function verifyAmbiguousSave(){
@@ -128,8 +157,8 @@ async function verifyAmbiguousSave(){
  const generation=epoch,id=props.session.user.user_id,csrf=props.session.csrfToken,sequence=++requestId,selected=generatedFor.value?.planId||null;
  verificationLoading.value=true;verificationComplete.value=false;verificationResult.value=null;latestError.value='';
  try{
-  if(selected){const response=await props.planApi.get(selected);if(!valid(generation,id,csrf)||sequence!==requestId)return;verificationResult.value={type:'plan',plan:response.plan};latest.value=response.plan;}
-  else{const response=await props.planApi.list();if(!valid(generation,id,csrf)||sequence!==requestId)return;verificationResult.value={type:'list',plans:response.plans||[]};}
+  if(selected){const scope=generatedFor.value?.credentialId??props.credentialId;const response=scope?await props.planApi.get(selected,scope):await props.planApi.get(selected);if(!valid(generation,id,csrf)||sequence!==requestId)return;verificationResult.value={type:'plan',plan:response.plan};latest.value=response.plan;}
+  else{const response=props.credentialId?await props.planApi.list(props.credentialId):await props.planApi.list();if(!valid(generation,id,csrf)||sequence!==requestId)return;verificationResult.value={type:'list',plans:response.plans||[]};}
   verificationComplete.value=true;
  }catch{if(valid(generation,id,csrf)&&sequence===requestId)latestError.value='核对读取失败，描述和建议已保留；请重试读取。';}
  finally{if(valid(generation,id,csrf)&&sequence===requestId)verificationLoading.value=false;}
@@ -140,43 +169,50 @@ onBeforeUnmount(()=>{alive=false;epoch++;requestId++;});
 </script>
 
 <template>
- <section class="panel proposal-assistant" aria-labelledby="proposal-title">
-  <div class="proposal-heading"><h2 id="proposal-title">描述预约需求</h2><RouterLink class="proposal-settings" :to="{name:'ai-models'}" aria-label="模型设置" title="模型设置"><AppIcon name="settings" /></RouterLink></div>
-
-  <label class="field">要整理的内容<textarea v-model="message" data-testid="proposal-message" rows="4" maxlength="4000" :disabled="busySaving||uncertainSave" placeholder="例如：把日期改成下周六晚上，优先 18:30，想约城北球馆的 6 号场。" /></label>
-  <label class="field">应用到<select v-model="targetId" data-testid="proposal-target" :disabled="busySaving||uncertainSave"><option value="">新建预约计划</option><option v-for="plan in plans" :key="plan.plan_id" :value="plan.plan_id">编辑：{{ plan.intent.venue_preference }} · {{ plan.intent.target_date }} · 版本 {{ plan.version }}</option></select></label>
-  <div class="proposal-actions"><button class="primary-button" data-testid="generate-proposal" type="button" :disabled="status==='generating'||busySaving||uncertainSave||needsRegeneration||!message.trim()" @click="generate()">{{ status==='generating'?'正在生成…':'生成建议预览' }}</button><button class="secondary-button" data-testid="restart-conversation" type="button" :disabled="busySaving||uncertainSave" @click="restartConversation">重新开始</button></div>
-  <p v-if="error" class="proposal-feedback error" role="alert">{{ error }} <RouterLink v-if="error.includes('尚未配置')||error.includes('模型设置')||error.includes('密钥')" :to="{name:'ai-models'}">前往设置AI模型</RouterLink></p>
-  <p v-if="latestError" class="proposal-feedback error" role="alert">{{ latestError }}</p><p v-if="savedNotice" class="proposal-feedback success" role="status">{{ savedNotice }}</p>
-  <section v-if="uncertainSave" class="verification-panel" aria-label="保存结果核对">
-   <h3>保存结果待核对</h3><p>为避免重复创建，请先读取列表或该计划最新版本。核对结果后，明确确认才会重新允许保存。</p>
-   <button class="secondary-button" data-testid="verify-ambiguous-save" type="button" :disabled="verificationLoading" @click="verifyAmbiguousSave">{{ verificationLoading?'正在读取…':generatedFor?.planId?'读取最新版本':'读取计划列表' }}</button>
-   <p v-if="verificationResult?.type==='list'" role="status">已读取计划列表，共 {{ verificationResult.plans.length }} 个预约计划。</p>
-   <ul v-if="verificationResult?.type==='list'&&verificationResult.plans.length"><li v-for="plan in verificationResult.plans.slice(0,5)" :key="plan.plan_id">{{ plan.intent.venue_preference }} · {{ plan.intent.target_date }} · 版本 {{ plan.version }}</li></ul>
-   <button class="primary-button" data-testid="acknowledge-save-check" type="button" :disabled="!verificationComplete" @click="acknowledgeAmbiguousSave">已核对结果，允许再次保存</button>
-  </section>
-  <section v-if="latest" class="latest-proposal" aria-label="最新计划独立预览"><h3>读取到的最新版本 {{ latest.version }}（独立预览）</h3><PlanSnapshotDetails :snapshot="latest" /><p>你仍需重新生成并确认，最新版本不会自动应用到建议。</p></section>
-  <p v-if="status==='generating'" class="muted" role="status">正在根据描述生成建议。保存计划仍需你确认。</p>
-  <ConversationFollowUp v-if="answers.length||questionList.length&&status!=='unsupported'" v-model:answer="answer" :answers="answers" :history="questionHistory" :questions="questionList" :busy="status==='generating'||busySaving" :blocked="needsRegeneration||uncertainSave" @continue="generate({supplement:true})" />
-  <button v-if="status==='needs_input'" class="secondary-button" data-testid="cancel-proposal" type="button" @click="cancelProposal">取消建议</button>
-  <section v-if="status==='unsupported'" class="proposal-result" aria-label="暂不支持的请求"><h3>暂时无法整理这项请求</h3><ul><li v-for="(question,index) in questionList" :key="index">{{ question }}</li></ul><p>你可以改为描述预约意向字段；建议不会执行预约、付款或创建任务。</p><button class="secondary-button" data-testid="cancel-proposal" type="button" @click="cancelProposal">关闭</button></section>
-  <section v-if="proposal" class="proposal-result" aria-label="AI建议预览">
-   <div class="proposal-heading"><h3>建议预览 · {{ proposal.kind==='unbound_draft'?'未绑定意向草案':'意向草案' }}</h3><span v-if="proposal.provider" class="proposal-provider">{{ proposal.provider.name }} · {{ proposal.provider.model }}</span></div>
-   <p v-if="proposal.changes?.length" class="muted">逐项变更预览</p>
-   <dl v-if="proposal.changes?.length" class="proposal-diff"><template v-for="(change,index) in proposal.changes" :key="`${change.field}-${index}`"><dt>{{ labels[change.field]||'其他意向字段' }}</dt><dd><span class="diff-before">{{ formatValue(change.field,change.before,proposal.context) }}</span><span aria-hidden="true"> → </span><strong>{{ formatValue(change.field,change.after,proposal.context) }}</strong></dd></template></dl>
-   <p v-else class="muted">AI生成了完整预约意向草案。</p>
-   <p v-if="proposal.context?.timezone_name" class="muted">业务时区：{{ proposal.context.timezone_name }}</p>
-   <BookingWindowStatus v-if="proposal.booking_window" :state="proposal.booking_window" />
-   <p class="proposal-safety">确认后仅保存预约意向，不会预约或付款。</p>
-   <p v-if="targetChanged" class="proposal-feedback error" role="status">描述、目标计划或计划版本已变化。请重新生成后再保存。</p>
-   <p v-if="needsRegeneration&&targetId" class="proposal-conflict-action"><button class="secondary-button" data-testid="read-latest-regenerate" type="button" :disabled="status==='generating'||busySaving" @click="readLatestAndRegenerate">读取最新并重新生成</button></p>
-   <div class="proposal-actions"><button class="primary-button" data-testid="confirm-save-proposal" type="button" :disabled="!canSave" @click="saveProposal">{{ busySaving?'正在保存…':'确认并保存预约意向' }}</button><button class="secondary-button" data-testid="cancel-proposal" type="button" :disabled="busySaving||uncertainSave" @click="cancelProposal">取消建议</button></div>
-  </section>
-  <p v-if="needsRegeneration&&targetId&&!proposal" class="proposal-conflict-action"><button class="secondary-button" data-testid="read-latest-regenerate" type="button" :disabled="status==='generating'||busySaving" @click="readLatestAndRegenerate">读取最新并重新生成</button></p>
+ <section class="proposal-assistant" aria-label="AI预约助手">
+  <ProposalConversationHistory :message="message" :answers="answers" :question-history="questionHistory" :questions="questionList" :pending-turn="pendingTurn" :status="status" :error="error" :saved-notice="savedNotice" :trace="trace" :show-credential-status="Boolean(credentialApi)" @restart="restartConversation">
+   <template #header-actions><slot name="header-actions" /></template>
+   <template #system-message><AgentCredentialGate v-if="credentialApi" :api="credentialApi" :session="session" :credential-id="credentialId" :refresh-key="credentialRefreshKey" @ready-change="credentialReady=$event" /></template>
+   <template #welcome-actions><ProposalModePicker :mode="mode" :disabled="status==='generating'||busySaving||uncertainSave" @update:mode="selectMode" /></template>
+   <template #conversation-extra>
+    <li v-if="latestError" class="chat-row is-assistant"><div class="chat-bubble bubble-error" role="alert">{{ latestError }}</div></li>
+    <li v-if="uncertainSave" class="chat-row is-assistant"><div class="chat-bubble bubble-artifact">
+     <section class="verification-panel" aria-label="保存结果核对">
+      <h3>保存结果待核对</h3><p>为避免重复创建，请先读取列表或该计划最新版本。核对结果后，明确确认才会重新允许保存。</p>
+      <button class="secondary-button" data-testid="verify-ambiguous-save" type="button" :disabled="verificationLoading" @click="verifyAmbiguousSave">{{ verificationLoading?'正在读取…':generatedFor?.planId?'读取最新版本':'读取计划列表' }}</button>
+      <p v-if="verificationResult?.type==='list'" role="status">已读取计划列表，共 {{ verificationResult.plans.length }} 个预约计划。</p>
+      <ul v-if="verificationResult?.type==='list'&&verificationResult.plans.length"><li v-for="plan in verificationResult.plans.slice(0,5)" :key="plan.plan_id">{{ plan.intent.venue_preference }} · {{ plan.intent.target_date }} · 版本 {{ plan.version }}</li></ul>
+      <button class="primary-button" data-testid="acknowledge-save-check" type="button" :disabled="!verificationComplete" @click="acknowledgeAmbiguousSave">已核对结果，允许再次保存</button>
+     </section>
+    </div></li>
+    <li v-if="latest" class="chat-row is-assistant"><div class="chat-bubble bubble-artifact">
+     <section class="latest-proposal" aria-label="最新计划独立预览"><h3>读取到的最新版本 {{ latest.version }}</h3><PlanSnapshotDetails :snapshot="latest" /><p>请重新生成并确认；最新版本不会自动应用到建议。</p></section>
+    </div></li>
+    <li v-if="status==='needs_input'" class="chat-row is-assistant"><div class="chat-bubble"><button class="secondary-button" data-testid="cancel-proposal" type="button" @click="cancelProposal">取消本轮整理</button></div></li>
+    <li v-if="needsRegeneration&&targetId&&!proposal" class="chat-row is-assistant"><div class="chat-bubble"><button class="secondary-button" data-testid="read-latest-regenerate" type="button" :disabled="status==='generating'||busySaving" @click="readLatestAndRegenerate">读取最新并重新生成</button></div></li>
+    <li v-if="proposal" class="chat-row is-assistant"><div class="chat-bubble bubble-artifact">
+     <section class="proposal-result" aria-label="AI建议预览">
+      <div class="proposal-result-heading"><div><span class="eyebrow">建议预览</span><h3>{{ proposal.kind==='unbound_draft'?'未绑定意向草案':'预约意向草案' }}</h3></div><span v-if="proposal.provider" class="proposal-provider">{{ proposal.provider.name }} · {{ proposal.provider.model }}</span></div>
+      <p v-if="proposal.changes?.length" class="muted">逐项核对变更</p>
+      <dl v-if="proposal.changes?.length" class="proposal-diff"><template v-for="(change,index) in proposal.changes" :key="`${change.field}-${index}`"><dt>{{ labels[change.field]||'其他意向字段' }}</dt><dd><span class="diff-before">{{ formatValue(change.field,change.before,proposal.context) }}</span><span aria-hidden="true"> → </span><strong>{{ formatValue(change.field,change.after,proposal.context) }}</strong></dd></template></dl>
+      <p v-else class="muted">已整理出完整预约意向草案。</p>
+      <p v-if="!intentComplete" class="proposal-feedback error" role="alert">草案缺少明确的日期、开始时间、时长、场馆或场地偏好；请补齐后重新生成。</p>
+      <p v-if="proposal.context?.timezone_name" class="muted">业务时区：{{ proposal.context.timezone_name }}</p>
+      <BookingWindowStatus v-if="proposal.booking_window" :state="proposal.booking_window" />
+      <p class="proposal-safety">确认后仅保存预约意向，不会预约或付款。</p>
+      <p v-if="targetChanged" class="proposal-feedback error" role="status">描述、目标计划或计划版本已变化。请重新生成后再保存。</p>
+      <p v-if="needsRegeneration&&targetId" class="proposal-conflict-action"><button class="secondary-button" data-testid="read-latest-regenerate" type="button" :disabled="status==='generating'||busySaving" @click="readLatestAndRegenerate">读取最新并重新生成</button></p>
+      <div class="proposal-actions"><button class="primary-button" data-testid="confirm-save-proposal" type="button" :disabled="!canSave" @click="saveProposal">{{ busySaving?'正在保存…':'确认并保存预约意向' }}</button><button class="secondary-button" data-testid="cancel-proposal" type="button" :disabled="busySaving||uncertainSave" @click="cancelProposal">取消建议</button></div>
+     </section>
+    </div></li>
+   </template>
+   <template #composer>
+    <ProposalComposer :message="message" :answer="answer" :mode="mode" :target-id="targetId" :plans="plans" :status="status" :follow-up="followUpActive" :busy="status==='generating'||busySaving" :blocked="!canStart||needsRegeneration" :locked="uncertainSave" :selection-disabled="busySaving||uncertainSave" @update:message="message=$event" @update:answer="answer=$event" @update:target-id="targetId=$event" @send="supplement=>generate({supplement})" />
+   </template>
+  </ProposalConversationHistory>
  </section>
 </template>
 
 <style scoped>
-.proposal-assistant{display:grid;gap:18px;margin-bottom:22px}.proposal-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}.proposal-heading h2,.proposal-heading h3{margin:0}.proposal-heading h3{font-size:17px}.proposal-scope,.proposal-provider{color:var(--brand-dark);background:var(--brand-soft);padding:5px 10px;border-radius:999px;font-size:12px}.field textarea{width:100%;resize:vertical;border:1px solid #d5dfd7;border-radius:9px;padding:12px;background:var(--surface);color:var(--ink);font:inherit;line-height:1.6}.field textarea:focus-visible{outline:3px solid var(--brand);outline-offset:2px}.proposal-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px}.proposal-result,.verification-panel{padding:18px;border:1px solid var(--line);border-radius:12px;background:#fbfcfb}.proposal-result h3,.verification-panel h3{margin:0}.verification-panel{display:grid;gap:12px;border-color:var(--warning);background:var(--warning-soft)}.verification-panel p{margin:0}.proposal-result>p{margin:10px 0}.proposal-diff{display:grid;grid-template-columns:minmax(110px,1fr) minmax(0,3fr);gap:10px 16px}.proposal-diff dt{color:var(--muted)}.proposal-diff dd{margin:0;overflow-wrap:anywhere}.diff-before{color:var(--muted)}.proposal-safety{padding:12px;border-radius:9px;background:var(--brand-soft);color:var(--brand-dark)}.proposal-feedback{padding:12px 14px;margin:0;border-radius:10px}.proposal-feedback.error{background:var(--danger-soft);color:var(--danger)}.proposal-feedback.success{background:var(--brand-soft);color:var(--brand-dark)}.latest-proposal{margin:18px 0;padding:16px;border:1px solid var(--warning);border-radius:10px;background:var(--warning-soft)}.latest-proposal h4{margin:0}.latest-proposal p{margin-bottom:0}.proposal-conflict-action{margin:0!important}@media(max-width:600px){.proposal-diff{grid-template-columns:1fr;gap:4px}.proposal-diff dd{margin-bottom:10px}}
-.proposal-assistant{gap:14px}.proposal-heading h2{font-size:18px}.proposal-settings{display:grid;place-items:center;width:44px;height:44px;border:1px solid var(--line);border-radius:8px;color:var(--muted)}.proposal-settings:hover{color:var(--brand);background:var(--brand-soft)}.proposal-safety{font-size:13px;padding:8px 12px}
+.proposal-assistant{min-width:0;margin-bottom:22px}.proposal-result,.verification-panel{display:grid;gap:12px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.proposal-result h3,.verification-panel h3{margin:0}.proposal-result p,.verification-panel p{margin:0}.verification-panel{border-color:var(--warning);background:var(--warning-soft)}.proposal-result-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}.proposal-result-heading h3{margin-top:2px;font-size:16px}.proposal-provider{color:var(--brand-dark);background:var(--brand-soft);padding:5px 10px;border-radius:999px;font-size:11px}.proposal-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding-top:4px}.proposal-actions button,.verification-panel button{min-height:44px}.proposal-diff{display:grid;grid-template-columns:minmax(100px,1fr) minmax(0,3fr);gap:8px 14px;margin:0}.proposal-diff dt{color:var(--muted);font-size:12px}.proposal-diff dd{margin:0;overflow-wrap:anywhere;font-size:13px}.diff-before{color:var(--muted)}.proposal-safety{padding:9px 11px;border-radius:9px;background:var(--brand-soft);color:var(--brand-dark);font-size:12px}.proposal-feedback{padding:10px 12px;margin:0;border-radius:9px}.proposal-feedback.error{background:var(--danger-soft);color:var(--danger)}.proposal-feedback.success{background:var(--brand-soft);color:var(--brand-dark)}.latest-proposal{display:grid;gap:10px;margin:0;padding:12px;border:1px solid var(--warning);border-radius:10px;background:var(--warning-soft)}.latest-proposal h3{font-size:14px}.latest-proposal p{margin:0;color:var(--muted);font-size:12px}.proposal-conflict-action{margin:0!important}.proposal-assistant :deep(button:focus-visible){outline:3px solid var(--brand);outline-offset:2px}@media(max-width:600px){.proposal-diff{grid-template-columns:1fr;gap:3px}.proposal-diff dd{margin-bottom:6px}.proposal-result,.verification-panel{padding:12px}.proposal-actions{display:grid;grid-template-columns:1fr}.proposal-actions button{width:100%}}
 </style>

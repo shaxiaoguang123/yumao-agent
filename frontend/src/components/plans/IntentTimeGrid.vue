@@ -1,0 +1,29 @@
+<script setup>
+import { computed, reactive, ref } from 'vue';
+import AppIcon from '../AppIcon.vue';
+import { useObservedIntentSelection } from '../../composables/useObservedIntentSelection.js';
+const props=defineProps({targetDate:String,courtNames:{type:Array,default:()=>[]},timezoneName:{type:String,default:'Asia/Shanghai'},contextKey:String,selectionDisabled:Boolean});
+const emit=defineEmits(['apply']);
+const from=ref(16),until=ref(22);
+const names=computed(()=>[...new Set(props.courtNames.filter(name=>typeof name==='string'&&name.trim()).map(name=>name.trim()))].slice(0,32));
+const clock=n=>`${String(Math.floor(n/60)).padStart(2,'0')}:${n%60?'30':'00'}`;
+// This model expresses preferences only. There is no availability, price,
+// upstream coordinate, inventory freshness or execution permission here.
+const grid=computed(()=>({target_date:props.targetDate,timezone_name:props.timezoneName,courts:names.value.map(display_name=>({display_name})),rows:Array.from({length:Math.max(0,(until.value-from.value)*2)},(_,i)=>({intent_start_time:clock(from.value*60+i*30),intent_end_time:clock(from.value*60+(i+1)*30)}))}));
+const selectionProps=reactive({intentOnly:true,grid,contextKey:computed(()=>props.contextKey),selectionDisabled:computed(()=>props.selectionDisabled||!props.targetDate)});
+const {selectedRows,courtOrder,selection,selectionError,canSelect,chosen,toggle,clear,move,remove,apply}=useObservedIntentSelection(selectionProps,emit);
+</script>
+<template>
+ <section class="intent-time-grid" aria-label="预约偏好时间网格" data-testid="intent-time-grid">
+  <div class="intent-grid-tools"><strong>选择首选与备选</strong><span>全部格子仅表达偏好</span><details><summary>时间范围</summary><label>从<select v-model.number="from" aria-label="意向网格起始小时"><option v-for="hour in 24" :key="hour" :value="hour-1">{{ hour-1 }}:00</option></select></label><label>到<select v-model.number="until" aria-label="意向网格结束小时"><option v-for="hour in 24" :key="hour" :value="hour">{{ hour }}:00</option></select></label></details></div>
+  <p v-if="!names.length" class="muted">请在场地顺序中填写场地名称，或先查询场地以取得列名称。</p>
+  <div v-else class="intent-grid-scroll" tabindex="0" role="region" aria-label="选择预约时间与场地">
+   <table><thead><tr><th>时间</th><th v-for="name in names" :key="name">{{ name }}</th></tr></thead><tbody><tr v-for="(row,r) in grid.rows" :key="row.intent_start_time"><th>{{ row.intent_start_time }}～{{ row.intent_end_time }}</th><td v-for="(name,c) in names" :key="name"><button type="button" :data-testid="`intent-cell-${r}-${c}`" :aria-label="`${name} ${row.intent_start_time}～${row.intent_end_time} 预约偏好`" :aria-pressed="chosen(r,c)" :disabled="!canSelect(r,c)" :class="{'is-selected':chosen(r,c)}" @click="toggle(r,c)"><AppIcon v-if="chosen(r,c)" name="check"/><span v-else class="sr-only">选择偏好</span></button></td></tr></tbody></table>
+  </div>
+  <div v-if="selectedRows.size" class="intent-selection"><strong>{{ selection.valid?`${selection.start}～${selection.end} · ${selection.duration}分钟`:selection.message }}</strong><ol><li v-for="(c,index) in courtOrder" :key="c"><span>{{ index===0?'首选':'备选 '+index }} · {{ names[c] }}</span><div><button type="button" :disabled="index===0" :aria-label="`将意向场地 ${index+1} 提前`" @click="move(index,-1)"><AppIcon name="up"/></button><button type="button" :disabled="index===courtOrder.length-1" :aria-label="`将意向场地 ${index+1} 后移`" @click="move(index,1)"><AppIcon name="down"/></button><button type="button" :aria-label="`移除意向场地 ${index+1}`" @click="remove(index)"><AppIcon name="close"/></button></div></li></ol><p class="muted">按顺序尝试一个场地，不表示同时预约多块场地。</p><div class="intent-selection-actions"><button class="primary-button" type="button" data-testid="apply-intent-selection" :disabled="!selection.valid" @click="apply">预览选择</button><button class="secondary-button" type="button" @click="clear">清空</button></div></div>
+  <p v-if="selectionError" class="form-error" role="status">{{ selectionError }}</p>
+ </section>
+</template>
+<style scoped>
+.intent-time-grid{grid-column:1/-1;min-width:0;border-top:1px solid var(--line);padding-top:12px}.intent-grid-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:13px}.intent-grid-tools>span{color:var(--muted);font-size:12px}.intent-grid-tools details{margin-left:auto}.intent-grid-tools summary{cursor:pointer;min-height:32px;display:flex;align-items:center}.intent-grid-tools label{display:inline-flex;gap:5px;align-items:center;margin:4px}.intent-grid-tools select{padding:5px;min-height:36px;border:1px solid var(--line);border-radius:5px}.intent-grid-scroll{max-width:100%;max-height:440px;overflow:auto;border:1px solid var(--line);border-radius:6px}.intent-grid-scroll table{border-collapse:separate;border-spacing:0;min-width:100%;width:max-content}.intent-grid-scroll th{background:var(--surface);font-size:12px;white-space:nowrap;position:sticky;top:0;padding:8px;z-index:2}.intent-grid-scroll th:first-child{left:0;z-index:3}.intent-grid-scroll td{padding:3px;min-width:74px;border-bottom:1px solid var(--line)}.intent-grid-scroll td button{width:100%;height:36px;background:#fff;border:1px solid var(--line);border-radius:4px;cursor:pointer;display:grid;place-items:center}.intent-grid-scroll td button.is-selected{background:#f29f11;color:#222}.intent-grid-scroll button:focus-visible{outline:2px solid var(--brand)}.intent-selection{margin-top:10px;font-size:13px}.intent-selection ol{list-style:none;padding:0;margin:8px 0}.intent-selection li{display:flex;justify-content:space-between;align-items:center}.intent-selection li>div{display:flex;gap:4px}.intent-selection li button{height:36px;width:36px;border:1px solid var(--line);border-radius:5px;background:var(--surface);display:grid;place-items:center;cursor:pointer}.intent-selection p{font-size:12px}.intent-selection-actions{display:flex;gap:8px}@media(max-width:600px){.intent-grid-scroll td button{height:44px}.intent-selection li button{width:44px;height:44px}}
+</style>

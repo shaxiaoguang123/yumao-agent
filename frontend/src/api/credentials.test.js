@@ -24,16 +24,20 @@ describe('Credential API helpers', () => {
     const token = 'synthetic-secret-token';
 
     await api.list();
-    await api.create({ label: 'Primary', token });
+    await api.create({ label: 'Primary', token, payment_password: 'synthetic-payment-password' });
+    await api.setPaymentPassword('credential-a', 'replacement-payment-password', 3);
     await api.validate('credential-a', 3, 'revision-a');
     await api.rotateToken('credential-a', token, 3, 'revision-a');
     await api.update('credential-a', { expected_credential_version: 3, enabled: false });
     await api.update('credential-a', { expected_credential_version: 4, enabled: true });
     await api.remove('credential-a', 4);
+    await api.executionSettings('credential-a');
+    await api.updateExecutionSettings('credential-a', 0, { reconciliation_time: '00:30' });
 
     expect(client.request.mock.calls).toEqual([
       ['/api/credentials'],
-      ['/api/credentials', { method: 'POST', body: { label: 'Primary', token } }],
+      ['/api/credentials', { method: 'POST', body: { label: 'Primary', token, payment_password: 'synthetic-payment-password' } }],
+      ['/api/credentials/credential-a/payment-password', { method: 'PUT', body: { payment_password: 'replacement-payment-password', expected_credential_version: 3 } }],
       ['/api/credentials/credential-a/validate', {
         method: 'POST',
         body: {
@@ -61,6 +65,11 @@ describe('Credential API helpers', () => {
         method: 'DELETE',
         body: { expected_credential_version: 4 },
       }],
+      ['/api/booking-execution/credentials/credential-a/settings'],
+      ['/api/booking-execution/credentials/credential-a/settings', {
+        method: 'PUT',
+        body: { expected_version: 0, settings: { reconciliation_time: '00:30' } },
+      }],
     ]);
     expect(window.localStorage.getItem(token)).toBeNull();
     expect(window.sessionStorage.getItem(token)).toBeNull();
@@ -77,7 +86,7 @@ describe('Credential API helpers', () => {
     const client = createHttpClient({ fetchImpl, getCsrfToken: () => 'csrf-memory-only' });
     const api = createCredentialApi(client);
 
-    await api.create({ label: 'Primary', token: 'synthetic-token' });
+    await api.create({ label: 'Primary', token: 'synthetic-token', payment_password: 'synthetic-payment-password' });
 
     expect(fetchImpl).toHaveBeenCalledWith('/api/credentials', expect.objectContaining({
       method: 'POST',
@@ -102,7 +111,7 @@ describe('Credential API helpers', () => {
     sessionStore.csrfToken = 'csrf-from-session-memory';
     const api = createCredentialApi(sessionStore);
 
-    await api.create({ label: 'Primary', token: 'synthetic-token' });
+    await api.create({ label: 'Primary', token: 'synthetic-token', payment_password: 'synthetic-payment-password' });
 
     expect(fetchImpl.mock.calls[0][1]).toMatchObject({
       credentials: 'include',

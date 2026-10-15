@@ -123,7 +123,7 @@ class CredentialApiTests(unittest.TestCase):
     def test_mutation_routes_require_csrf_and_trusted_origin(self) -> None:
         credential = self._seed_credential()
         requests = (
-            ("post", "/api/credentials", {"label": "New", "token": _token()}),
+            ("post", "/api/credentials", {"label": "New", "token": _token(), "payment_password": "synthetic-payment"}),
             ("post", f"/api/credentials/{credential.credential_id}/validate", {
                 "expected_credential_version": credential.credential_version,
                 "expected_current_token_revision_id": credential.current_token_revision_id,
@@ -147,7 +147,7 @@ class CredentialApiTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 403)
                 self.assertEqual(self._body(response)["error"], "csrf_invalid")
         response = self.client_a.post(
-            "/api/credentials", json={"label": "New", "token": _token()},
+            "/api/credentials", json={"label": "New", "token": _token(), "payment_password": "synthetic-payment"},
             headers=self._headers(self.csrf_a, origin="https://attacker.invalid"),
         )
         self.assertEqual(response.status_code, 403)
@@ -204,7 +204,7 @@ class CredentialApiTests(unittest.TestCase):
         token = _token("never-echo-this")
 
         response = self.client_a.post(
-            "/api/credentials", json={"label": "Home", "token": token},
+            "/api/credentials", json={"label": "Home", "token": token, "payment_password": "never-echo-this-payment"},
             headers=self._headers(self.csrf_a),
         )
 
@@ -219,6 +219,7 @@ class CredentialApiTests(unittest.TestCase):
                 "enabled", "account_binding_state", "requires_revalidation", "expiry_state",
                 "token_expires_at_utc", "last_confirmed_validation_state",
                 "last_successful_validation_at_utc", "latest_requested_validation_attempt",
+                "has_payment_password", "payment_password_revision",
             },
         )
         self.assertEqual(credential["account_binding_state"], "confirmed")
@@ -237,7 +238,68 @@ class CredentialApiTests(unittest.TestCase):
         self.assertNotIn(token, response.get_data(as_text=True))
         self.assertNotIn("synthetic-account-a", response.get_data(as_text=True))
         self.assertNotIn("fingerprint", response.get_data(as_text=True))
+        self.assertNotIn("never-echo-this-payment", response.get_data(as_text=True))
         self.assertEqual(response.headers.get("Set-Cookie"), None)
+
+    def test_create_requires_payment_password_and_never_stores_plaintext(self) -> None:
+        calls_before = len(self.adapter.calls)
+        missing = self.client_a.post(
+            "/api/credentials", json={"label": "Missing password", "token": _token()},
+            headers=self._headers(self.csrf_a),
+        )
+        self.assertEqual((missing.status_code, self._body(missing)), (400, {"error": "invalid_request"}))
+        self.assertEqual(len(self.adapter.calls), calls_before)
+
+        secret = "synthetic-payment-never-echo"
+        created = self.client_a.post(
+            "/api/credentials", json={"label": "With payment", "token": _token("payment"), "payment_password": secret},
+            headers=self._headers(self.csrf_a),
+        )
+        self.assertEqual(created.status_code, 201)
+        credential = self._body(created)["credential"]
+        self.assertTrue(credential["has_payment_password"])
+        self.assertEqual(credential["payment_password_revision"], 1)
+        self.assertNotIn(secret, created.get_data(as_text=True))
+        with closing(connect_database(self.database_path, BUSY_TIMEOUT_MS)) as connection:
+            stored = connection.execute(
+                "SELECT ciphertext FROM credential_payment_secrets WHERE credential_id=?",
+                (credential["credential_id"],),
+            ).fetchone()
+        self.assertIsNotNone(stored)
+        self.assertNotEqual(stored["ciphertext"], secret.encode())
+
+    def test_payment_password_update_is_owner_and_version_scoped(self) -> None:
+        credential = self._seed_credential("user-a", "payment-update")
+        missing_password = self.client_a.put(
+            f"/api/credentials/{credential.credential_id}/payment-password",
+            json={"expected_credential_version": credential.credential_version, "payment_password": ""},
+            headers=self._headers(self.csrf_a),
+        )
+        self.assertEqual((missing_password.status_code, self._body(missing_password)), (400, {"error": "invalid_payment_password"}))
+
+        secret = "replacement-payment-never-echo"
+        response = self.client_a.put(
+            f"/api/credentials/{credential.credential_id}/payment-password",
+            json={"expected_credential_version": credential.credential_version, "payment_password": secret},
+            headers=self._headers(self.csrf_a),
+        )
+        self.assertEqual(response.status_code, 200)
+        updated = self._body(response)["credential"]
+        self.assertEqual(updated["credential_version"], credential.credential_version + 1)
+        self.assertTrue(updated["has_payment_password"])
+        self.assertNotIn(secret, response.get_data(as_text=True))
+        stale = self.client_a.put(
+            f"/api/credentials/{credential.credential_id}/payment-password",
+            json={"expected_credential_version": credential.credential_version, "payment_password": "stale-secret"},
+            headers=self._headers(self.csrf_a),
+        )
+        self.assertEqual((stale.status_code, self._body(stale)), (409, {"error": "credential_version_conflict"}))
+        foreign = self.client_b.put(
+            f"/api/credentials/{credential.credential_id}/payment-password",
+            json={"expected_credential_version": updated["credential_version"], "payment_password": "foreign-secret"},
+            headers=self._headers(self.csrf_b),
+        )
+        self.assertEqual((foreign.status_code, self._body(foreign)), (404, {"error": "credential_not_found"}))
 
     def test_list_and_mutations_are_owner_scoped(self) -> None:
         credential_a = self._seed_credential("user-a", "a")
@@ -343,7 +405,7 @@ class CredentialApiTests(unittest.TestCase):
         token = _token("must-not-persist")
 
         response = self.client_a.post(
-            "/api/credentials", json={"label": "No gate", "token": token},
+            "/api/credentials", json={"label": "No gate", "token": token, "payment_password": "synthetic-payment"},
             headers=self._headers(self.csrf_a),
         )
 
@@ -362,7 +424,7 @@ class CredentialApiTests(unittest.TestCase):
         token = _token("rate-limited")
 
         response = self.client_a.post(
-            "/api/credentials", json={"label": "Busy", "token": token},
+            "/api/credentials", json={"label": "Busy", "token": token, "payment_password": "synthetic-payment"},
             headers=self._headers(self.csrf_a),
         )
 
@@ -379,7 +441,7 @@ class CredentialApiTests(unittest.TestCase):
         )]
 
         response = self.client_a.post(
-            "/api/credentials", json={"label": "Limited", "token": _token()},
+            "/api/credentials", json={"label": "Limited", "token": _token(), "payment_password": "synthetic-payment"},
             headers=self._headers(self.csrf_a),
         )
 
@@ -416,7 +478,7 @@ class CredentialApiTests(unittest.TestCase):
         )]
 
         response = self.client_a.post(
-            "/api/credentials", json={"label": "Unknown", "token": _token()},
+            "/api/credentials", json={"label": "Unknown", "token": _token(), "payment_password": "synthetic-payment"},
             headers=self._headers(self.csrf_a),
         )
 

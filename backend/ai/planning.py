@@ -61,7 +61,7 @@ class PlanningService:
         self._providers = provider_service
 
     def propose(self, user_id: str, message: object, plan_id: object, base_version: object, now_utc_ms: int,
-                *, answers=None, follow_up_questions=None, model_id=None, strict_output=False) -> dict:
+                *, answers=None, follow_up_questions=None, model_id=None, strict_output=False, credential_id=None) -> dict:
         turns = self._turns(message, answers)
         question_history = self._question_history(follow_up_questions, len(turns) - 1)
         message = "\n".join(turns)
@@ -75,7 +75,7 @@ class PlanningService:
         else:
             if type(plan_id) is not str or not 1 <= len(plan_id) <= 100 or type(base_version) is not int or base_version < 1:
                 raise PlanError("invalid_planning_request", 400)
-            owned = self._plans.get_plan(user_id, plan_id, now_utc_ms)
+            owned = self._plans.get_plan(user_id, plan_id, now_utc_ms, credential_id)
             if owned["version"] != base_version:
                 raise PlanError("plan_version_conflict", 409)
             before = owned["intent"]

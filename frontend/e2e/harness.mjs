@@ -12,7 +12,7 @@ function safe(value) {
 }
 async function contextFor(name, role, viewport = viewports[0], options = {}) {
   const browser = await getBrowser();
-  const state = { role, credentials: clone(fixtures), requests: [], listDelay: 0, listError: false, listNetworkError: false, sessionError: false, inviteDelay: 0, inviteOutcome: 'success', createDelay: 0, createError: false, removeError: false, rotationError: false, loginOutcome: 'success', registerOutcome: 'success', passwordOutcome: 'error', passwordDelay: 0, logoutOutcome: 'success', ...options };
+  const state = { role, credentials: clone(fixtures), executionSettings: {}, requests: [], listDelay: 0, listError: false, listNetworkError: false, sessionError: false, inviteDelay: 0, inviteOutcome: 'success', createDelay: 0, createError: false, removeError: false, rotationError: false, loginOutcome: 'success', registerOutcome: 'success', passwordOutcome: 'error', passwordDelay: 0, logoutOutcome: 'success', ...options };
   const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, locale: 'zh-CN', timezoneId: 'Asia/Shanghai', reducedMotion: 'reduce', serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] });
   const pendingRoutes = new Set();
   const requestRecords = new WeakMap();
@@ -33,7 +33,13 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
     if (!url.pathname.startsWith('/api/')) { await route.continue(); return; }
     const record = { method: request.method(), path: url.pathname, status: null };
     requestRecords.set(request, record);
-    if (url.search || url.hash) { report.unexpectedApiRequests.push({ scenario: name, reason: 'unexpected API query', path: url.pathname }); await route.abort('blockedbyclient'); return; }
+    const scopedPlanRead = url.pathname === '/api/plans'
+      || /^\/api\/plans\/manual-queues(?:\/\d{4}-\d{2}-\d{2})?$/.test(url.pathname);
+    const queryAllowed = scopedPlanRead
+      && request.method() === 'GET'
+      && [...url.searchParams.keys()].every((key) => key === 'credential_id')
+      && url.searchParams.getAll('credential_id').length <= 1;
+    if ((url.search && !queryAllowed) || url.hash) { report.unexpectedApiRequests.push({ scenario: name, reason: 'unexpected API query', path: url.pathname }); await route.abort('blockedbyclient'); return; }
     if (!['GET', 'HEAD', 'OPTIONS'].includes(record.method) && !['/api/auth/login', '/api/auth/register'].includes(record.path)) record.csrfValid = request.headers()['x-csrf-token'] === SYNTHETIC_CSRF;
     state.requests.push(record);
     const reply = async (status, payload = {}, raw = null) => {
@@ -73,10 +79,56 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
     if (url.pathname === '/api/credentials' && record.method === 'GET') {
       await delay(state.listDelay); if (state.listNetworkError) { record.status = 'MOCK_NETWORK_ABORT'; await route.abort('failed'); return; } await reply(state.listError ? 503 : 200, state.listError ? { error: 'upstream_unavailable' } : { credentials: state.credentials }); return;
     }
+    if (url.pathname === '/api/plans' && record.method === 'GET') { await reply(200, { plans: [] }); return; }
+    if (url.pathname === '/api/plans/options' && record.method === 'GET') {
+      await reply(200, { venues: [], catalog_version: null, context: { timezone_name: 'Asia/Shanghai', currency_code: 'CNY', currency_minor_unit_exponent: 2, preference_verification: 'unverified_manual', catalog_version: null, venue_binding: null } }); return;
+    }
+    if (url.pathname === '/api/booking-window' && record.method === 'GET') {
+      await reply(200, { business_timezone_name: 'Asia/Shanghai', business_date: '2026-10-15', default_target_date: '2026-10-17', queryable_target_dates: ['2026-10-15', '2026-10-16', '2026-10-17'], can_query: false, can_book: false, can_pay: false, can_create_job: false }); return;
+    }
+    if (url.pathname === '/api/plans/manual-queues' && record.method === 'GET') { await reply(200, { queues: [] }); return; }
+    const selectedQueueRoute = url.pathname.match(/^\/api\/plans\/manual-queues\/([0-9]{4}-[0-9]{2}-[0-9]{2})$/);
+    if (selectedQueueRoute && record.method === 'GET') {
+      const credentialId = url.searchParams.get('credential_id') || '';
+      await reply(200, { queue: { target_date: selectedQueueRoute[1], credential_id: credentialId, version: 0, candidates: [] } }); return;
+    }
+    if (url.pathname === '/api/availability/live/options' && record.method === 'GET') { await reply(200, { enabled: false, min_read_interval_ms: 0 }); return; }
     if (url.pathname === '/api/credentials' && record.method === 'POST') {
       await delay(state.createDelay);
       if (state.createError) await reply(409, { error: 'credential_account_already_configured' });
       else { const item = credential('visual-created', '合成新凭据'); state.credentials.push(item); await reply(201, { credential: item }); } return;
+    }
+    const executionSettingsRoute = url.pathname.match(/^\/api\/booking-execution\/credentials\/([^/]+)\/settings$/);
+    if (executionSettingsRoute) {
+      const credentialId = executionSettingsRoute[1];
+      if (!state.credentials.some((item) => item.credential_id === credentialId)) {
+        await reply(404, { error: 'credential_not_found' }); return;
+      }
+      const settings = state.executionSettings[credentialId] || {
+        reconciliation_time: '00:30', clock_calibration_lead_ms: 1000, start_offset_ms: 0,
+        booking_node_delay_ms: 0, booking_by_time_delay_ms: 0, get_user_info_delay_ms: 0,
+        get_children_delay_ms: 0, get_pay_price_delay_ms: 0, create_booking_delay_ms: 0,
+        open_platform_pay_order_delay_ms: 0, payment_verify_delay_ms: 0,
+      };
+      const version = state.executionSettings[`${credentialId}:version`] || 0;
+      if (record.method === 'GET') {
+        await reply(200, { credential_id: credentialId, version, settings, worker_enabled: false }); return;
+      }
+      if (record.method === 'PUT') {
+        const body = request.postDataJSON();
+        if (body.expected_version !== version) { await reply(409, { error: 'execution_settings_version_conflict' }); return; }
+        state.executionSettings[credentialId] = body.settings;
+        state.executionSettings[`${credentialId}:version`] = version + 1;
+        await reply(200, { credential_id: credentialId, version: version + 1, settings: body.settings, worker_enabled: false }); return;
+      }
+      report.unexpectedApiRequests.push({ scenario: name, method: record.method, path: record.path });
+      await reply(501, { error: 'unmocked_api' }); return;
+    }
+    if (url.pathname.match(/^\/api\/booking-execution\/credentials\/([^/]+)\/queues\/([0-9]{4}-[0-9]{2}-[0-9]{2})$/) && record.method === 'GET') {
+      const credentialId = url.pathname.split('/')[4];
+      await reply(state.credentials.some((item) => item.credential_id === credentialId) ? 200 : 404,
+        state.credentials.some((item) => item.credential_id === credentialId)
+          ? { run: null, worker_enabled: false } : { error: 'credential_not_found' }); return;
     }
     const matched = url.pathname.match(/^\/api\/credentials\/([^/]+)(?:\/(validate|rotate-token))?$/);
     if (matched) {
@@ -130,7 +182,7 @@ async function screenshot(ctx, name, options = {}) {
 async function layout(ctx) {
   const geometry = await ctx.page.evaluate(() => {
     const width = document.documentElement.clientWidth;
-    const shown = (e) => !!(e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
+    const shown = (e) => !!(e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden' && !e.classList.contains('sr-only') && !e.closest('.sr-only'));
     const describe = (e) => ({ tag: e.tagName.toLowerCase(), class: e.className, testid: e.getAttribute('data-testid'), left: Math.round(e.getBoundingClientRect().left), right: Math.round(e.getBoundingClientRect().right), width: Math.round(e.getBoundingClientRect().width), height: Math.round(e.getBoundingClientRect().height) });
     const overflowing = [...document.querySelectorAll('header,nav,a,button,input,h1,h2,h3,article,section,dl,dd')].filter(shown).filter((e) => e.getBoundingClientRect().right > width + 1 || e.getBoundingClientRect().left < -1).map(describe);
     const clipped = [...document.querySelectorAll('a,button,h1,h2,h3,label,dt,dd')].filter(shown).filter((e) => ['hidden','clip'].includes(getComputedStyle(e).overflowX) && e.scrollWidth > e.clientWidth + 1).map(describe);

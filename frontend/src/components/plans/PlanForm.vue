@@ -2,13 +2,15 @@
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useTemplateRef, watch } from 'vue';
 import { copy, decimalToMinor, minorToDecimal } from '../../utils/planForm.js';
 import VenueTimeGrid from './VenueTimeGrid.vue';
+import IntentTimeGrid from './IntentTimeGrid.vue';
 import AppIcon from '../AppIcon.vue';
-const props=defineProps({observedSelection:{type:Object,default:null},source:{type:Object,required:true},requestedDate:{type:String,default:''},busy:Boolean,saveBlocked:Boolean,fields:{type:Object,default:()=>({})},gridApi:{type:Object,default:null},sessionKey:{type:String,default:''}});
+const props=defineProps({observedSelection:{type:Object,default:null},courtOptions:{type:Array,default:()=>[]},source:{type:Object,required:true},requestedDate:{type:String,default:''},busy:Boolean,saveBlocked:Boolean,fields:{type:Object,default:()=>({})},gridApi:{type:Object,default:null},sessionKey:{type:String,default:''}});
 const emit=defineEmits(['save','cancel','target-change','draft-change']);
 const form=ref(copy(props.source.intent)), courtsText=shallowRef(''), priceText=shallowRef(''), localError=shallowRef('');
 const rangeStart=shallowRef(''), rangeEnd=shallowRef('');
 const pendingGridSelection=ref(null),gridReviewMessage=shallowRef('');
 const currentCourts=computed(()=>courtsText.value.split('\n').map(value=>value.trim()).filter(Boolean));
+const preferenceGridCourts=computed(()=>[...new Set([...props.courtOptions,...currentCourts.value])]);
 const summary=useTemplateRef('errorSummary');
 watch(()=>props.source,source=>{
  const restored=source.draftState;
@@ -39,7 +41,8 @@ function reviewGridSelection(selection){
 }
 watch(()=>props.observedSelection,value=>{
  if(!value)return;
- if(value.observation_expires_at_utc_ms<=Date.now() || value.observation_timezone_name!==props.source.context.timezone_name){
+ if(value.intent_timezone_name && value.intent_timezone_name!==props.source.context.timezone_name){gridReviewMessage.value='意向时区不一致，请重新选择。';return;}
+ if(!value.intent_timezone_name && (value.observation_expires_at_utc_ms<=Date.now() || value.observation_timezone_name!==props.source.context.timezone_name)){
   gridReviewMessage.value='场地选择已过期或时区不一致，请重新查询。';return;
  }
  reviewGridSelection(value);
@@ -132,6 +135,7 @@ async function submit(){
     </div>
     <label class="field">场馆偏好<input id="plan-venue_preference" v-model="form.venue_preference" name="venue_preference" maxlength="200" required :aria-invalid="Boolean(fields.venue_preference)" /><small v-if="fields.venue_preference" class="form-error">{{ fields.venue_preference }}</small></label>
     <label class="field">场地顺序（每行一项）<textarea id="plan-court_preferences" v-model="courtsText" name="court_preferences" rows="2" :aria-invalid="Boolean(fields.court_preferences)" /><small class="muted">第一项首选，其余为备选</small><small v-if="fields.court_preferences" class="form-error">{{ fields.court_preferences }}</small></label>
+    <IntentTimeGrid :target-date="form.target_date" :court-names="preferenceGridCourts" :timezone-name="source.context.timezone_name" :context-key="gridContextKey" :selection-disabled="busy || saveBlocked" @apply="reviewGridSelection" />
     <details v-if="gridApi" class="editor-disclosure" data-testid="grid-disclosure"><summary><AppIcon name="court" />模拟选格<span class="editor-summary-tag">合成数据</span></summary><VenueTimeGrid v-if="gridApi" :api="gridApi" :target-date="form.target_date" :duration-minutes="form.duration_minutes" :venue-preference="form.venue_preference" :court-preferences="currentCourts" :timezone-name="source.context.timezone_name" :selection-context-key="gridContextKey" @update:target-date="form.target_date=$event" @apply="reviewGridSelection" /></details>
     <p v-if="gridReviewMessage" class="form-error" role="status">{{ gridReviewMessage }}</p>
     <section v-if="pendingGridSelection" class="grid-apply-confirmation" data-testid="grid-apply-confirmation" aria-label="确认应用网格意向">

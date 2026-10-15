@@ -6,6 +6,13 @@ const messages = {
   provider_model_or_endpoint_not_found: '模型或接口地址不存在，请检查模型名称和兼容接口地址。',
   provider_rate_limited: '服务商请求过于频繁，请稍后再测试或生成。',
   provider_response_invalid: '模型返回的响应不符合兼容接口要求，请检查接口或更换模型。',
+  provider_models_response_invalid: '服务商返回的模型列表无法识别。',
+  provider_model_discovery_unavailable: '当前服务商未提供兼容的模型列表接口，请手动填写模型名称。',
+  provider_dns_resolution_failed: '无法解析服务商域名，请检查接口地址或 DNS 设置。',
+  provider_tls_verification_failed: 'HTTPS 证书校验失败，请检查服务商域名、证书和系统时间。',
+  provider_tls_failed: 'HTTPS 安全连接失败，请检查服务商证书和 TLS 配置。',
+  provider_server_error: '服务商暂时发生错误，请稍后重试。',
+  provider_request_rejected: '服务商拒绝了请求，请检查接口地址、认证方式和账户权限。',
   invalid_model_proposal: '连接正常，但模型返回的计划结构或字段依据不符合要求，请更换模型或调整配置。',
   provider_timeout: '连接超时，请检查服务地址和网络后重试。',
   provider_dns_timeout: '连接超时，请检查服务地址和网络后重试。',
@@ -21,5 +28,18 @@ const messages = {
 };
 export function providerErrorMessage(code) {
   const aliases = {access_denied:'provider_auth_failed',model_or_endpoint_not_found:'provider_model_or_endpoint_not_found',rate_limited:'provider_rate_limited'};
-  return messages[aliases[code] || code] || '模型请求失败，请检查地址、模型名称和密钥后重试。';
+  const safeCode = typeof code === 'string' && /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(code) ? code : '';
+  return messages[aliases[code] || code] || (safeCode
+    ? `服务端返回错误码 ${safeCode}，请检查配置后重试。`
+    : '模型请求失败，请检查地址、模型名称和密钥后重试。');
+}
+
+export function providerDiscoveryErrorMessage(error) {
+  if (error?.code) return providerErrorMessage(error.code);
+  if (error?.kind === 'timeout') return '连接预约工作台超时，请确认本地服务仍在运行后重试。';
+  if (error?.kind === 'network') return '浏览器无法连接预约工作台服务；请确认后端仍在运行，再重新读取模型列表。';
+  if (Number.isInteger(error?.status) && error.status > 0) {
+    return `预约工作台返回 HTTP ${error.status}，但没有提供错误码；请重新读取模型配置后重试。`;
+  }
+  return '模型列表请求没有返回可识别的错误信息；请确认预约工作台运行正常后重试。';
 }

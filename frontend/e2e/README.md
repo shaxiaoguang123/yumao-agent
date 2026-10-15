@@ -53,15 +53,13 @@ check is not made required by this change. Browser versions and fonts can differ
 across macOS and Linux: geometry/interaction checks are automated; pixel equality
 is not asserted. Screenshots still need actual visual review before UI acceptance.
 
-## Real booking-plan integration
+## Real planning integration
 
-`npm run test:e2e:plans` starts a fresh temporary Flask application and SQLite
-database, creates only synthetic users, and drives the actual `/api/plans` routes
-through a real browser. The test covers create, refresh persistence, edit/version
-history, cross-user isolation, distant-date non-queryability, and 320px overflow.
-The isolated server rejects all upstream HTTP and non-loopback sockets; the runner
-fails if any external request or browser error is observed. Set `PLAN_QA_OUTPUT` to
-a new empty directory outside the repository to preserve screenshots and the
-SQLite verification record. This is separate from the existing API-mocked suite.
+`npm run test:e2e:planning` drives the current chat-based Agent workflow against a
+temporary Flask application and SQLite database with a fake model provider. The
+availability integration uses synthetic data. These checks cover the current plan
+creation path; they do not contact the upstream booking service or make payments.
+The retired one-shot plan editor E2E was removed because that UI was replaced by
+the conversational Agent flow.
 
 UI redesign adds four discovery scenarios (one per viewport): local search/filter, distinct no-match state and explicit verification-record expansion. Intentional brand subtitle is checked separately from single-line navigation labels. The PR trigger includes the browser-fix base for stacked UI PRs.

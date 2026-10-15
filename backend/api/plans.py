@@ -56,6 +56,22 @@ def _user_id():
     return g.session_context.user.user_id
 
 
+def _credential_scope(value):
+    if value is None:
+        return None
+    if type(value) is not str or not value:
+        raise PlanError("invalid_request", 400)
+    if current_app.extensions["credential_service"].get_for_user(_user_id(), value) is None:
+        raise PlanError("credential_not_found", 404)
+    return value
+
+
+def _query_credential_scope():
+    if set(request.args.keys()) - {"credential_id"} or len(request.args.getlist("credential_id")) > 1:
+        raise PlanError("invalid_request", 400)
+    return _credential_scope(request.args.get("credential_id"))
+
+
 @plans_bp.errorhandler(PlanError)
 def _plan_error(error):
     return jsonify({"error": error.code, **({"fields": error.fields} if error.fields else {})}), error.status
@@ -69,7 +85,7 @@ def _storage_error(_error):
 @plans_bp.get("")
 @require_session
 def list_plans():
-    return jsonify({"plans": _service().list_plans(_user_id(), _now_utc_ms())})
+    return jsonify({"plans": _service().list_plans(_user_id(), _now_utc_ms(), _query_credential_scope())})
 
 
 @plans_bp.get("/options")
@@ -85,25 +101,86 @@ def options():
 @require_session
 @require_csrf
 def create_plan():
-    body = _body({"intent"})
-    return jsonify({"plan": _service().create_plan(_user_id(), body["intent"], _now_utc_ms())}), 201
+    body = _body({"intent"}, {"credential_id"})
+    credential_id = _credential_scope(body.get("credential_id"))
+    return jsonify({"plan": _service().create_plan(_user_id(), body["intent"], _now_utc_ms(), credential_id)}), 201
 
 
 @plans_bp.get("/<plan_id>")
 @require_session
 def get_plan(plan_id):
-    return jsonify({"plan": _service().get_plan(_user_id(), plan_id, _now_utc_ms())})
+    credential_id = _query_credential_scope()
+    return jsonify({"plan": _service().get_plan(_user_id(), plan_id, _now_utc_ms(), credential_id)})
 
 
 @plans_bp.patch("/<plan_id>")
 @require_session
 @require_csrf
 def update_plan(plan_id):
-    body = _body({"base_version", "intent"})
-    return jsonify({"plan": _service().update_plan(_user_id(), plan_id, body["base_version"], body["intent"], _now_utc_ms())})
+    body = _body({"base_version", "intent"}, {"credential_id"})
+    credential_id = _credential_scope(body.get("credential_id"))
+    return jsonify({"plan": _service().update_plan(_user_id(), plan_id, body["base_version"], body["intent"], _now_utc_ms(), credential_id)})
 
 
 @plans_bp.get("/<plan_id>/revisions")
 @require_session
 def revisions(plan_id):
-    return jsonify({"revisions": _service().list_revisions(_user_id(), plan_id, _now_utc_ms())})
+    credential_id = _query_credential_scope()
+    return jsonify({"revisions": _service().list_revisions(_user_id(), plan_id, _now_utc_ms(), credential_id)})
+
+
+# Dedicated routes keep queue drafts out of the single-intent Matcher / Agent APIs.
+def _queue_date(value):
+    from backend.plans.validation import parse_target_date, IntentValidationError
+    try:
+        return parse_target_date(value).isoformat()
+    except IntentValidationError as exc:
+        raise PlanError("invalid_plan", 400, exc.fields) from exc
+
+
+@plans_bp.get("/manual-queues")
+@require_session
+def manual_queues():
+    return jsonify({"queues": _service().list_manual_queues(_user_id(), _query_credential_scope())})
+
+
+@plans_bp.get("/manual-queues/<target_date>")
+@require_session
+def manual_queue(target_date):
+    credential_id = _query_credential_scope()
+    return jsonify({"queue": _service().get_manual_queue(_user_id(), _queue_date(target_date), credential_id)})
+
+
+@plans_bp.put("/manual-queues/<target_date>")
+@require_session
+@require_csrf
+def save_manual_queue(target_date):
+    body = _body({"base_version", "entries"}, {"credential_id"})
+    credential_id = _credential_scope(body.get("credential_id"))
+    return jsonify({"queue": _service().save_manual_queue(_user_id(), _queue_date(target_date), body["base_version"], body["entries"], _now_utc_ms(), credential_id)})
+
+
+@plans_bp.get("/manual-queues/<target_date>/revisions")
+@require_session
+def manual_queue_revisions(target_date):
+    credential_id = _query_credential_scope()
+    return jsonify({"revisions": _service().manual_queue_revisions(_user_id(), _queue_date(target_date), credential_id)})
+
+
+@plans_bp.delete("/<plan_id>")
+@require_session
+@require_csrf
+def delete_plan(plan_id):
+    body = _body({"base_version"}, {"credential_id"})
+    credential_id = _credential_scope(body.get("credential_id"))
+    _service().delete_plan(_user_id(), plan_id, body["base_version"], _now_utc_ms(), credential_id)
+    return jsonify({"deleted": True})
+
+
+@plans_bp.delete("/manual-queues/<target_date>")
+@require_session
+@require_csrf
+def delete_manual_queue(target_date):
+    body = _body({"base_version"}, {"credential_id"})
+    credential_id = _credential_scope(body.get("credential_id"))
+    return jsonify({"queue": _service().delete_manual_queue(_user_id(), _queue_date(target_date), body["base_version"], _now_utc_ms(), credential_id)})
