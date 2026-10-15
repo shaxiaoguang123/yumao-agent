@@ -80,6 +80,19 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.csrf_hmac_secret, raw)
         self.assertNotIn(raw.hex(), repr(settings), "CSRF material entered AppSettings repr")
 
+    def test_booking_execution_is_disabled_by_default_and_requires_official_item_cipher(self):
+        env = _settings_input()
+        self.assertFalse(load_settings(env).booking_execution_enabled)
+        env["BOOKING_EXECUTION_ENABLED"] = "true"
+        with self.assertRaisesRegex(ValueError, "official request cipher"):
+            load_settings(env)
+        env["UPSTREAM_ITEM_AES_KEY_ASCII"] = "1234567890abcdef"
+        env["UPSTREAM_ITEM_AES_IV_ASCII"] = "fedcba0987654321"
+        env["UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS"] = "500"
+        settings = load_settings(env)
+        self.assertTrue(settings.booking_execution_enabled)
+        self.assertNotIn("1234567890abcdef", repr(settings))
+
     def test_both_keyrings_decode_to_bytes_without_exposing_material_in_repr(self) -> None:
         env = _settings_input()
         encryption = bytes(range(32, 64))

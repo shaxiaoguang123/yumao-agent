@@ -314,7 +314,7 @@ onUnmounted(() => {
       <form class="credential-create-grid" data-testid="credential-create" @submit.prevent="createCredential">
         <label class="field">凭据名称<input v-model="label" data-testid="credential-label" type="text" maxlength="128" autocomplete="off" required /></label>
         <label class="field">上游 Token<input v-model="createToken" data-testid="credential-token" type="password" autocomplete="off" spellcheck="false" required /></label>
-        <label class="field">支付密码<input v-model="createPaymentPassword" data-testid="credential-payment-password" type="password" autocomplete="new-password" required /><small>仅保存；当前不会发起支付。</small></label>
+        <label class="field">支付密码<input v-model="createPaymentPassword" data-testid="credential-payment-password" type="password" autocomplete="new-password" required /><small>单独加密保存；非空抢票队列授权付款，执行器启用后才会执行。</small></label>
         <div class="credential-actions"><button class="primary-button" type="submit" :disabled="creating">{{ creating ? '验证并保存中…' : '验证并保存凭据' }}</button><button class="secondary-button" type="button" data-testid="credential-create-cancel" @click="cancelCreate">清空</button></div>
       </form>
     </section>
@@ -376,7 +376,7 @@ onUnmounted(() => {
         </form>
         <form v-if="paymentPasswordCredentialId === credential.credential_id" class="rotation-form payment-password-form" :data-testid="`payment-password-form-${credential.credential_id}`" @submit.prevent="savePaymentPassword(credential)">
           <label class="field">{{ credential.has_payment_password ? '新支付密码' : '支付密码' }}<input v-model="paymentPassword" type="password" autocomplete="new-password" data-testid="payment-password-input" required /></label>
-          <p class="muted">保存后仅由服务器加密保管；直到未来单独实现支付前，不会读取或发送此密码。</p>
+          <p class="muted">保存后由服务器单独加密保管；此 Token 有非空抢票队列且执行器启用时，系统会读取该密码完成付款。</p>
           <div class="credential-actions"><button class="primary-button" type="submit" :disabled="busyCredentialId === credential.credential_id">加密保存</button><button class="secondary-button" type="button" data-testid="payment-password-cancel" @click="cancelRotation">取消</button></div>
         </form>
       </CredentialCard>
@@ -400,7 +400,7 @@ onUnmounted(() => {
 
 }
 
-.credential-add{padding:18px;min-width:0}.credential-add-heading{display:flex;align-items:flex-start;gap:12px;margin-bottom:18px}.credential-add-heading .section-icon{flex:0 0 40px;height:40px;display:grid;place-items:center;border:1px solid var(--line);border-radius:10px;background:var(--brand-soft);color:var(--brand)}.credential-add-heading h2{font-size:17px;margin:0}.credential-add-heading p{font-size:12px;line-height:1.6;margin:5px 0 0}.credential-create-grid{display:grid;gap:14px}.credential-create-grid .field{min-width:0}.credential-create-grid .field input{min-width:0;width:100%}.credential-create-grid .field small{font-size:11px;color:var(--muted);line-height:1.5}.credential-create-grid button{min-height:42px;font-size:12px}.credential-create-grid .credential-actions{margin-top:2px}
+.credential-add{padding:18px;min-width:0}.credential-add-heading{display:flex;align-items:flex-start;gap:12px;margin-bottom:18px}.credential-add-heading .section-icon{flex:0 0 40px;height:40px;display:grid;place-items:center;border:1px solid var(--line);border-radius:10px;background:var(--brand-soft);color:var(--brand)}.credential-add-heading h2{font-size:17px;margin:0}.credential-add-heading p{font-size:12px;line-height:1.6;margin:5px 0 0}.credential-create-grid{display:grid;gap:14px}.credential-create-grid .field{min-width:0}.credential-create-grid .field input{min-width:0;width:100%}.credential-create-grid .field small{font-size:11px;color:var(--muted);line-height:1.5}.credential-create-grid button{min-height:44px;font-size:12px}.credential-create-grid .credential-actions{margin-top:2px}
 
 .credential-actions {
   display:flex;
@@ -416,7 +416,7 @@ onUnmounted(() => {
   min-width:0;
 
 }
-.credential-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px;align-items:start;min-width:0}.credential-cards :deep(.credential-card){height:100%;padding:18px}.credential-cards :deep(.credential-facts){grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;margin:16px 0}.credential-cards :deep(.credential-actions){gap:6px}.credential-cards :deep(.credential-actions button){min-height:40px;padding:8px 10px;font-size:11px}
+.credential-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px;align-items:start;min-width:0}.credential-cards :deep(.credential-card){height:100%;padding:18px}.credential-cards :deep(.credential-facts){grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;margin:16px 0}.credential-cards :deep(.credential-actions){gap:6px}.credential-cards :deep(.credential-actions button){min-height:44px;padding:8px 10px;font-size:11px}
 
 .section-heading h2 {
   font-size:18px;

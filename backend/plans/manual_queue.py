@@ -1,5 +1,6 @@
-"""Semantic manual candidates. These queues never invoke the legacy execution flow."""
+"""Editable semantic candidates; scheduled execution uses a separate immutable snapshot."""
 from datetime import date
+import unicodedata
 from backend.plans.models import PlanInterpretationContext
 from backend.plans.validation import IntentValidationError, parse_manual_intent, parse_target_date
 
@@ -20,8 +21,15 @@ def parse_queue(payload, context: PlanInterpretationContext, today: date, *, all
         fail('候选队列最多 32 项。')
     candidates, seen = [], set()
     for entry in entries:
-        if type(entry) is not dict or entry.keys() != {'court_preference', 'start_time', 'end_time', 'duration_minutes'}:
-            fail('候选只接受场地名称、起止时间和时长。')
+        base_fields = {'court_preference', 'start_time', 'end_time', 'duration_minutes'}
+        if type(entry) is not dict or entry.keys() not in (base_fields, base_fields | {'scope_label'}):
+            fail('候选只接受预约类别、场地名称、起止时间和时长。')
+        scope_label = entry.get('scope_label')
+        if scope_label is not None and (
+                type(scope_label) is not str or not 1 <= len(scope_label.strip()) <= 100
+                or scope_label != scope_label.strip()
+                or any(unicodedata.category(char) in {'Cc', 'Cs'} for char in scope_label)):
+            fail('预约类别名称无效，请重新读取真实场地后再选择。')
         duration = entry['duration_minutes']
         if type(duration) is not int or duration not in PRIORITY:
             fail('请选择一小时或两个连续小时。')
@@ -39,12 +47,13 @@ def parse_queue(payload, context: PlanInterpretationContext, today: date, *, all
         expected_end = f'{end_minutes // 60:02d}:00'
         if entry['end_time'] != expected_end:
             fail('起止时间必须完整覆盖同一场地的连续一小时或两小时，不能跨日。')
-        key = (duration, start, intent['court_preferences'][0])
+        key = (scope_label, duration, start, intent['court_preferences'][0])
         if key in seen:
             fail('同一队列不能重复加入相同场地与时间。')
         seen.add(key)
+        intent['query_scope_label'] = scope_label
         candidates.append(intent)
     # Stable group priority; preserve user insertion/reorder order within each group.
     candidates.sort(key=lambda item: PRIORITY.index(item['duration_minutes']))
-    return {'kind': QUEUE_KIND, 'queue_contract_version': 1, 'target_date': target.isoformat(),
+    return {'kind': QUEUE_KIND, 'queue_contract_version': 2, 'target_date': target.isoformat(),
             'context': context.to_dict(), 'duration_priority': list(PRIORITY), 'candidates': candidates}

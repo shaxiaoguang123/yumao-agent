@@ -73,7 +73,7 @@ export async function runBaseline(qa) {
     await ctx.page.getByTestId('rotate-visual-disabled').click(); await ctx.page.getByTestId('rotation-token').fill(SYNTHETIC_TOKEN); ctx.state.rotationError = true; await ctx.page.getByTestId('rotation-submit').click(); await ctx.page.getByText('替换 Token 与当前账户不匹配，原凭据保持不变。', { exact: true }).waitFor();
     check(ctx.name, 'failed rotation clears Token and retains version', await ctx.page.getByTestId('rotation-token').inputValue() === '' && ctx.state.credentials.find((c) => c.credential_id === 'visual-disabled').credential_version === 4);
     await screenshot(ctx, 'credential-rotation-error');
-    await ctx.page.getByTestId('credential-token').fill(SYNTHETIC_TOKEN); await ctx.page.getByTestId('credential-label').fill('合成新凭据'); ctx.state.createDelay = 550;
+    await ctx.page.getByTestId('credential-token').fill(SYNTHETIC_TOKEN); await ctx.page.getByTestId('credential-label').fill('合成新凭据'); await ctx.page.getByTestId('credential-payment-password').fill('Synthetic-QA-payment-password'); ctx.state.createDelay = 550;
     await ctx.page.locator('[data-testid=credential-create]').evaluate((form) => { form.requestSubmit(); form.requestSubmit(); }); await ctx.page.getByText('验证并保存中…', { exact: true }).waitFor();
     check(ctx.name, 'create in-flight button disabled', await ctx.page.getByText('验证并保存中…', { exact: true }).isDisabled()); await ctx.page.getByText('凭据已添加。', { exact: true }).waitFor();
     check(ctx.name, 'duplicate create protected and Token cleared', count(ctx, '/api/credentials') === 1 && await ctx.page.getByTestId('credential-token').inputValue() === '');

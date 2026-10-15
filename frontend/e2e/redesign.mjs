@@ -18,8 +18,16 @@ export async function runRedesign(qa) {
   check(ctx.name,'disabled filter is local and leaves API reads unchanged',await ctx.page.locator('.credential-card').count()===1&&count(ctx,'/api/credentials','GET')===reads);
   await ctx.page.getByLabel('凭据状态',{exact:true}).selectOption('all');
   const card=ctx.page.getByTestId('credential-card-visual-confirmed');
-  await card.locator('summary').click();
+  await card.locator('.validation-record > summary').click();
   check(ctx.name,'verification details remain accessible on explicit expansion',await card.getByText('最近发起的验证',{exact:true}).isVisible());
+  check(ctx.name,'automatic execution schedule is no longer on credential management',await ctx.page.getByText('自动执行时间',{exact:true}).count()===0&&count(ctx,'/api/booking-execution/credentials/visual-confirmed/settings','GET')===0);
+  await ctx.page.goto(BASE+'/plans');await ctx.page.getByTestId('plan-tab-current').click();
+  const settings=ctx.page.locator('#plan-panel-current [aria-labelledby="execution-settings-title"]');
+  await settings.locator('.execution-settings-form').waitFor();
+  await settings.getByLabel('队列复核时间').fill('01:15');
+  await settings.getByRole('button',{name:'保存执行设置'}).click();
+  await settings.getByText('已保存；执行器启用后，非空队列会按这些设置处理并执行。',{exact:true}).waitFor();
+  check(ctx.name,'per-Token schedule saves through CSRF-protected API',count(ctx,'/api/booking-execution/credentials/visual-confirmed/settings','PUT')===1&&ctx.state.requests.filter(item=>item.path==='/api/booking-execution/credentials/visual-confirmed/settings'&&item.method==='PUT').every(item=>item.csrfValid===true));
   await layout(ctx);await screenshot(ctx,ctx.name);
  },{},viewport);
 }

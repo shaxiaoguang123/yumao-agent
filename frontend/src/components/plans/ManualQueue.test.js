@@ -9,8 +9,8 @@ import PlanCredentialControl from './PlanCredentialControl.vue';
 import { useManualQueue } from '../../composables/useManualQueue.js';
 
 enableAutoUnmount(afterEach);afterEach(()=>vi.useRealTimers());
-const entry=(court='1号场',duration=120,start='18:00')=>({court_preference:court,duration_minutes:duration,start_time:start,end_time:`${String(Number(start.slice(0,2))+duration/60).padStart(2,'0')}:00`});
-const queue=(entries,version=1)=>({version,target_date:'2026-10-20',candidates:entries.map(e=>({court_preferences:[e.court_preference],preferred_start_times:[e.start_time],duration_minutes:e.duration_minutes}))});
+const entry=(court='1号场',duration=120,start='18:00',scope='羽毛球')=>({court_preference:court,duration_minutes:duration,start_time:start,end_time:`${String(Number(start.slice(0,2))+duration/60).padStart(2,'0')}:00`,scope_label:scope});
+const queue=(entries,version=1)=>({version,target_date:'2026-10-20',candidates:entries.map(e=>({court_preferences:[e.court_preference],preferred_start_times:[e.start_time],duration_minutes:e.duration_minutes,query_scope_label:e.scope_label}))});
 const session=()=>reactive({status:'authenticated',user:{user_id:'a'},csrfToken:'a',invalidationEpoch:0});
 async function setup(overrides={},account=session()){
  const api={queue:vi.fn(async()=>({queue:null})),queues:vi.fn(async()=>({queues:[]})),saveQueue:vi.fn(async(_date,base,entries)=>({queue:queue(entries,base+1)})),...overrides};
@@ -20,7 +20,7 @@ async function setup(overrides={},account=session()){
 
 describe('manual queue interactions',()=>{
  it('renders 09:00–22:00 and adds or cancels continuous hour candidates',async()=>{
-  const wrapper=mount(ManualQueueGrid,{props:{courtNames:['已占用观察场','活动观察场'],entries:[],duration:120}});
+  const wrapper=mount(ManualQueueGrid,{props:{courtNames:['已占用观察场','活动观察场'],entries:[],duration:120,scopeLabel:'羽毛球'}});
   expect(wrapper.findAll('tbody tr')).toHaveLength(13);
   expect(wrapper.find('tbody tr:first-child th').text()).toBe('09:00–10:00');
   expect(wrapper.find('tbody tr:last-child th').text()).toBe('21:00–22:00');
@@ -39,7 +39,7 @@ describe('manual queue interactions',()=>{
  });
  it('keeps the duration queues separate without a manual save form',async()=>{
   const state=reactive({entries:[entry('两小时'),entry('一小时',60)],statusText:'已自动保存',locked:false});
-  const wrapper=mount(ManualQueueWorkspace,{props:{state,courtNames:['两小时','一小时'],targetDate:'2026-10-20'}});
+  const wrapper=mount(ManualQueueWorkspace,{props:{state,courtNames:['两小时','一小时'],scopeLabel:'羽毛球',targetDate:'2026-10-20'}});
   expect(wrapper.get('[data-testid="queue-two-hours"]').attributes('aria-pressed')).toBe('true');
   await wrapper.get('[data-testid="queue-one-hour"]').trigger('click');expect(wrapper.get('[data-testid="queue-one-hour"]').attributes('aria-pressed')).toBe('true');
   expect(wrapper.get('[data-testid="queue-120"]').text()).toContain('两小时');expect(wrapper.get('[data-testid="queue-60"]').text()).toContain('一小时');expect(wrapper.find('form').exists()).toBe(false);

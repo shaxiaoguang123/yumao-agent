@@ -14,6 +14,9 @@ export function createPlanApi(client) {
     queue: (date, credential_id) => client.request(scopedPath(`/api/plans/manual-queues/${encodeURIComponent(date)}`,credential_id)),
     saveQueue: (date, base_version, entries, credential_id) => client.request(`/api/plans/manual-queues/${encodeURIComponent(date)}`, {method:'PUT',body:scopedBody({base_version,entries},credential_id)}),
     queueRevisions: (date, credential_id) => client.request(scopedPath(`/api/plans/manual-queues/${encodeURIComponent(date)}/revisions`,credential_id)),
+    executionQueue: (date, credential_id) => client.request(
+      `/api/booking-execution/credentials/${encodeURIComponent(credential_id)}/queues/${encodeURIComponent(date)}`,
+    ),
     list: (credential_id) => client.request(scopedPath('/api/plans',credential_id)),
     options: () => client.request('/api/plans/options'),
     get: (id, credential_id) => client.request(scopedPath(path(id),credential_id)),

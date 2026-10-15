@@ -542,6 +542,34 @@ class CredentialServiceTests(unittest.TestCase):
         self.assertEqual(enabled.credential.account_binding_state, "confirmed")
         self.assertTrue(enabled.credential.requires_revalidation)
 
+    def test_booking_material_decrypts_payment_password_only_server_side_and_is_version_fenced(self) -> None:
+        service = self._require_service()
+        dto = self._create()
+        material = service.booking_material("user-a", dto.credential_id)
+        self.assertEqual(material.user_id, "user-a")
+        self.assertEqual(material.credential_version, dto.credential_version)
+        self.assertEqual(material.payment_password, "synthetic-payment-password")
+        self.assertNotIn("synthetic-payment-password", repr(material))
+        self.assertNotIn(material.token, repr(material))
+        service.assert_booking_snapshot(material)
+
+        service.set_enabled("user-a", dto.credential_id, dto.credential_version, False, self._next_time())
+        with self.assertRaises(CredentialOperationError) as raised:
+            service.assert_booking_snapshot(material)
+        self.assertEqual(raised.exception.code, "credential_version_conflict")
+
+    def test_booking_material_fails_when_payment_password_is_missing(self) -> None:
+        service = self._require_service()
+        dto = self._create()
+        with closing(connect_database(self.database_path, BUSY_TIMEOUT_MS)) as connection:
+            connection.execute(
+                "DELETE FROM credential_payment_secrets WHERE user_id=? AND credential_id=?",
+                ("user-a", dto.credential_id),
+            )
+        with self.assertRaises(CredentialOperationError) as raised:
+            service.booking_material("user-a", dto.credential_id)
+        self.assertEqual(raised.exception.code, "credential_payment_password_missing")
+
     def test_same_current_token_rotation_returns_without_dispatch_or_revision(self) -> None:
         service = self._require_service()
         token = _token()

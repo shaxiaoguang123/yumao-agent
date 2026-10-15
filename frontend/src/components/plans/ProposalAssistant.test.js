@@ -10,23 +10,31 @@ function fixture({plans=[],proposalResult={status:'ready',questions:[],proposal}
  const planApi={get:vi.fn(async()=>({plan:plan(3,{venue_preference:'latest venue'})})),create:vi.fn(async()=>({plan:saved})),update:vi.fn(async()=>({plan:saved})),...planOverrides};
  const proposalApi={generate:vi.fn(async()=>structuredClone(proposalResult))};
  const session=reactive({status:'authenticated',user:{user_id:'owner'},csrfToken:'csrf-a'});
- return {planApi,proposalApi,session,plans,credentialId};
+ return {planApi,proposalApi,session,plans,credentialId,credentialApi:null,credentialRefreshKey:0};
 }
-async function mountAssistant(config=fixture()) {const {default:component}=await import('./ProposalAssistant.vue');const wrapper=mount(component,{props:{plans:config.plans,planApi:config.planApi,proposalApi:config.proposalApi,session:config.session,credentialId:config.credentialId},global:{stubs:{RouterLink:{template:'<a><slot /></a>'}}}});await flushPromises();return {wrapper,...config};}
+async function mountAssistant(config=fixture()) {const {default:component}=await import('./ProposalAssistant.vue');const wrapper=mount(component,{props:{plans:config.plans,planApi:config.planApi,proposalApi:config.proposalApi,credentialApi:config.credentialApi,credentialRefreshKey:config.credentialRefreshKey,session:config.session,credentialId:config.credentialId},global:{stubs:{RouterLink:{template:'<a><slot /></a>'}}}});await flushPromises();return {wrapper,...config};}
+async function selectExistingPlan(wrapper,planId='synthetic-plan'){await wrapper.get('[data-testid="proposal-mode-edit"]').trigger('click');await wrapper.get('[data-testid="proposal-target"]').setValue(planId);}
 
 describe('proposal assistant',()=>{
+ it('keeps credential readiness, type choices, conversation and input inside one chat workspace',async()=>{
+  const config=fixture();config.credentialApi={list:vi.fn(async()=>({credentials:[{credential_id:'credential-a',label:'Token A',enabled:true,last_confirmed_validation_state:'confirmed_valid',account_binding_state:'confirmed',requires_revalidation:false,expiry_state:'valid',has_payment_password:false}]}))};
+  const {wrapper}=await mountAssistant(config);const chat=wrapper.get('.proposal-chat');
+  expect(wrapper.findAll('.proposal-chat')).toHaveLength(1);expect(chat.find('[data-testid="agent-credential-gate"]').exists()).toBe(true);expect(chat.find('.proposal-mode-picker').exists()).toBe(true);expect(chat.find('.proposal-composer').exists()).toBe(true);
+  expect(wrapper.find('.proposal-assistant > .agent-credential-gate').exists()).toBe(false);expect(chat.get('[data-testid="generate-proposal"]').element.disabled).toBe(true);
+ });
+
  it('previews a ready result and waits for explicit confirmation before saving',async()=>{
-  const {wrapper,planApi,proposalApi}=await mountAssistant();await wrapper.get('[data-testid="proposal-message"]').setValue('新建周末意向');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-  expect(proposalApi.generate).toHaveBeenCalledWith('新建周末意向',null,null,undefined,undefined,'credential-a');expect(wrapper.text()).toContain('建议预览');expect(wrapper.text()).toContain('AI场馆意向');expect(wrapper.text()).toContain('确认后仅保存预约意向，不会预约或付款。');expect(planApi.create).not.toHaveBeenCalled();
+  const {wrapper,planApi,proposalApi}=await mountAssistant();expect(wrapper.findAll('.proposal-mode-card')).toHaveLength(2);await wrapper.get('[data-testid="proposal-field-date"]').trigger('click');expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('预约日期：');await wrapper.get('[data-testid="proposal-message"]').setValue('新建周末意向');expect(wrapper.find('.chat-message-list .chat-row.is-user').exists()).toBe(false);expect(wrapper.get('.proposal-mode-picker').exists()).toBe(true);await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
+  expect(proposalApi.generate).toHaveBeenCalledWith('新建周末意向',null,null,undefined,undefined,'credential-a');expect(wrapper.text()).toContain('建议预览');expect(wrapper.text()).toContain('AI场馆意向');expect(wrapper.text()).toContain('确认后仅保存预约意向，不会预约或付款。');expect(wrapper.get('.proposal-chat-messages').find('[aria-label="AI建议预览"]').exists()).toBe(true);expect(planApi.create).not.toHaveBeenCalled();
   await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.create).toHaveBeenCalledWith(proposal.intent,'credential-a');expect(wrapper.text()).toContain('预约意向已保存');
  });
  it('keeps the save notice when the parent list refreshes to the version just saved',async()=>{
-  const config=fixture({plans:[plan(1)]});const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('更新现有意向');await wrapper.get('[data-testid="proposal-target"]').setValue('synthetic-plan');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('预约意向已保存 · 版本 2');
+  const config=fixture({plans:[plan(1)]});const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('更新现有意向');await selectExistingPlan(wrapper);await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('预约意向已保存 · 版本 2');
   await wrapper.setProps({plans:[plan(2)]});await flushPromises();expect(wrapper.text()).toContain('预约意向已保存 · 版本 2');
   await wrapper.setProps({plans:[plan(3)]});await flushPromises();expect(wrapper.text()).not.toContain('预约意向已保存 · 版本 2');
  });
  it('loads the latest owned plan before proposing an edit and saves with its base version',async()=>{
-  const config=fixture({plans:[plan(2)]});const {wrapper,planApi,proposalApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('改一下场馆');await wrapper.get('[data-testid="proposal-target"]').setValue('synthetic-plan');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();expect(planApi.get).toHaveBeenCalledWith('synthetic-plan');expect(proposalApi.generate).toHaveBeenCalledWith('改一下场馆','synthetic-plan',3);
+  const config=fixture({plans:[plan(2)]});const {wrapper,planApi,proposalApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('改一下场馆');await selectExistingPlan(wrapper);await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();expect(planApi.get).toHaveBeenCalledWith('synthetic-plan');expect(proposalApi.generate).toHaveBeenCalledWith('改一下场馆','synthetic-plan',3);
   await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.update).toHaveBeenCalledWith('synthetic-plan',3,proposal.intent);
  });
  it('renders follow-up questions and keeps the original message when cancelled',async()=>{
@@ -53,7 +61,7 @@ describe('proposal assistant',()=>{
   const planApi={get:vi.fn(async()=>({plan:plan(4,{venue_preference:'最新人工偏好'})})),create:vi.fn(),update:vi.fn(async()=>{throw {status:409,code:'plan_version_conflict'};})};
   const proposalApi={generate:vi.fn(async()=>structuredClone({...{status:'ready',questions:[]},proposal:{...proposal,base_version:3,plan_id:'synthetic-plan'}}))};
   const config=fixture({plans:[plan(2)],planOverrides:planApi});config.proposalApi=proposalApi;
-  const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('保留我的描述');await wrapper.get('[data-testid="proposal-target"]').setValue('synthetic-plan');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
+  const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('保留我的描述');await selectExistingPlan(wrapper);await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
   expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('保留我的描述');expect(wrapper.text()).toContain('建议预览');expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);await wrapper.get('[data-testid="read-latest-regenerate"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('最新人工偏好');expect(proposalApi.generate).toHaveBeenLastCalledWith('保留我的描述','synthetic-plan',4);
  });
  it('treats a missing provider key 409 as a model-settings error, not a plan conflict',async()=>{
@@ -72,7 +80,7 @@ describe('proposal assistant',()=>{
   await wrapper.get('[data-testid="proposal-message"]').setValue('我的文本');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');session.csrfToken='csrf-b';await flushPromises();resolve({status:'ready',questions:[],proposal});await flushPromises();expect(wrapper.find('[aria-label="AI建议预览"]').exists()).toBe(false);expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('我的文本');
  });
  it('clears the natural-language prompt and plan target when the account changes',async()=>{
-  const {wrapper,session}=await mountAssistant(fixture({plans:[plan()]}));await wrapper.get('[data-testid="proposal-message"]').setValue('用户A的私有预约安排');await wrapper.get('[data-testid="proposal-target"]').setValue('synthetic-plan');session.user={user_id:'user-b'};await flushPromises();expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('');expect(wrapper.get('[data-testid="proposal-target"]').element.value).toBe('');
+  const {wrapper,session}=await mountAssistant(fixture({plans:[plan()]}));await wrapper.get('[data-testid="proposal-message"]').setValue('用户A的私有预约安排');await selectExistingPlan(wrapper);session.user={user_id:'user-b'};await flushPromises();expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('');expect(wrapper.get('[data-testid="proposal-mode-new"]').attributes('aria-pressed')).toBe('true');
  });
  it('shows provider setup guidance when a missing provider is returned as a 409',async()=>{
   const config=fixture();config.proposalApi.generate=vi.fn(async()=>{throw {status:409,code:'provider_not_configured'};});const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('新建预约意向');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('尚未配置 AI 模型');expect(wrapper.text()).not.toContain('计划版本已变化');
@@ -85,13 +93,14 @@ describe('proposal assistant',()=>{
   expect(wrapper.text()).toContain('东区体育馆');expect(wrapper.text()).toContain('场地？');
   await wrapper.get('[data-testid="proposal-answer"]').setValue('6号场优先');await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
   expect(proposalApi.generate).toHaveBeenLastCalledWith('下周六18:00打两个小时',null,null,['东区体育馆','6号场优先'],[['场馆？'],['场地？']],'credential-a');expect(planApi.create).not.toHaveBeenCalled();
+  expect(wrapper.text()).toContain('本次操作轨迹');expect(wrapper.text()).toContain('必需信息尚未齐全');expect(wrapper.text()).toContain('预约意向草案已生成');
   await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.create).toHaveBeenCalledWith(proposal.intent,'credential-a');
  });
  it('retains the conversation version on followup and requires explicit latest read after 409',async()=>{
   const config=fixture({plans:[plan(1)]});config.proposalApi.generate=vi.fn().mockResolvedValueOnce({status:'needs_input',questions:['几点？'],proposal:null}).mockRejectedValueOnce({code:'plan_version_conflict',status:409}).mockResolvedValueOnce({status:'needs_input',questions:['请确认？'],proposal:null});
-  const {wrapper,proposalApi,planApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('修改开始时间');await wrapper.get('[data-testid="proposal-target"]').setValue('synthetic-plan');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
+  const {wrapper,proposalApi,planApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('修改开始时间');await selectExistingPlan(wrapper);await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
   await wrapper.get('[data-testid="proposal-answer"]').setValue('19:00');await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
-  expect(planApi.get).toHaveBeenCalledOnce();expect(proposalApi.generate).toHaveBeenLastCalledWith('修改开始时间','synthetic-plan',3,['19:00'],[['几点？']]);expect(wrapper.get('[data-testid="proposal-answer"]').element.value).toBe('19:00');expect(wrapper.get('[data-testid="continue-proposal"]').element.disabled).toBe(true);expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(true);
+  expect(planApi.get).toHaveBeenCalledOnce();expect(proposalApi.generate).toHaveBeenLastCalledWith('修改开始时间','synthetic-plan',3,['19:00'],[['几点？']]);expect(wrapper.get('[data-testid="proposal-answer"]').element.value).toBe('19:00');expect(wrapper.get('[data-testid="continue-proposal"]').element.disabled).toBe(true);expect(wrapper.find('[data-testid="generate-proposal"]').exists()).toBe(false);
   await wrapper.get('[data-testid="read-latest-regenerate"]').trigger('click');await flushPromises();expect(planApi.get).toHaveBeenCalledTimes(2);expect(wrapper.text()).toContain('latest venue');
  });
  it('preserves failed supplement input and clears all conversation data on restart or account change',async()=>{
@@ -100,6 +109,19 @@ describe('proposal assistant',()=>{
   expect(wrapper.text()).toContain('没有访问权限');expect(wrapper.get('[data-testid="proposal-answer"]').element.value).toBe('用户A的场馆');
   session.status='anonymous';await flushPromises();expect(wrapper.find('[data-testid="proposal-answer"]').exists()).toBe(false);
   await wrapper.get('[data-testid="restart-conversation"]').trigger('click');expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('');
+ });
+
+ it('blocks proposal requests until the selected token has a payment password',async()=>{
+  const config=fixture();config.credentialApi={list:vi.fn(async()=>({credentials:[{credential_id:'credential-a',label:'Token A',enabled:true,last_confirmed_validation_state:'confirmed_valid',account_binding_state:'confirmed',requires_revalidation:false,expiry_state:'valid',has_payment_password:false}]}))};
+  const {wrapper,proposalApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('预约需求');
+  expect(wrapper.text()).toContain('尚未设置支付密码');expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(true);
+  await wrapper.get('[data-testid="generate-proposal"]').trigger('click');expect(proposalApi.generate).not.toHaveBeenCalled();
+ });
+ it('does not allow an incomplete ready response to be saved',async()=>{
+  const incomplete={...proposal,intent:{...proposal.intent,preferred_start_times:[],venue_preference:''}};
+  const config=fixture({proposalResult:{status:'ready',questions:[],proposal:incomplete}});
+  const {wrapper,planApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('未写清楚预约信息');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
+  expect(wrapper.text()).toContain('缺少明确的日期、开始时间、时长、场馆或场地偏好');expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);expect(planApi.create).not.toHaveBeenCalled();
  });
 
 });

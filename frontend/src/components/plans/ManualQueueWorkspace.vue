@@ -3,7 +3,7 @@ import { ref } from 'vue';
 import ManualQueueGrid from './ManualQueueGrid.vue';
 import ManualQueuePreview from './ManualQueuePreview.vue';
 import { queueEntries } from '../../composables/useManualQueue.js';
-defineProps({state:{type:Object,required:true},courtNames:{type:Array,default:()=>[]},targetDate:String});
+defineProps({state:{type:Object,required:true},courtNames:{type:Array,default:()=>[]},scopeLabel:{type:String,default:''},targetDate:String});
 const duration=ref(120);
 </script>
 <template>
@@ -11,7 +11,7 @@ const duration=ref(120);
   <header class="manual-queue-toolbar"><div class="duration-segment" role="group" aria-label="候选时长模式"><button type="button" data-testid="queue-two-hours" :aria-pressed="duration===120" @click="duration=120">两小时 <small>优先</small></button><button type="button" data-testid="queue-one-hour" :aria-pressed="duration===60" @click="duration=60">一小时</button></div><span class="queue-save-status" data-testid="queue-save-status" role="status" :class="{'is-error':state.blocked}">{{ state.statusText }}</span></header>
   <div v-if="state.error" class="queue-error" role="alert"><span>{{ state.error }}</span><button class="secondary-button" type="button" @click="state.inspectLatest">读取最新版本</button><button v-if="state.status==='error'&&!state.dirty" class="secondary-button" type="button" @click="state.load">重新读取</button></div>
   <section v-if="state.latest!==undefined" class="queue-latest"><h3>服务端最新版本 {{ state.latest?.version||0 }}</h3><ManualQueuePreview :entries="queueEntries(state.latest)" readonly /><button type="button" class="secondary-button" @click="state.adoptLatest">采用最新版本，替换本地队列</button><button type="button" class="primary-button" @click="state.saveLocalAgainstLatest">保留本地队列，另存新版本</button></section>
-  <div class="queue-workspace-layout"><ManualQueueGrid :court-names="courtNames" :entries="state.entries" :duration="duration" :disabled="state.locked||!targetDate" @change="state.change" /><aside class="queue-preview-panel"><div class="queue-preview-title"><h2>候选队列</h2><button v-if="state.entries.length" type="button" class="text-button" :disabled="state.locked" @click="state.change([])">清空</button></div><ManualQueuePreview :entries="state.entries" :disabled="state.locked" @change="state.change" /><p class="queue-footnote">仅保存意向 · 单场地逐项候选 · 不下单</p></aside></div>
+  <div class="queue-workspace-layout"><ManualQueueGrid :court-names="courtNames" :scope-label="scopeLabel" :entries="state.entries" :duration="duration" :disabled="state.locked||!targetDate" @change="state.change" /><aside class="queue-preview-panel"><div class="queue-preview-title"><h2>候选队列</h2><button v-if="state.entries.length" type="button" class="text-button" :disabled="state.locked" @click="state.change([])">清空</button></div><ManualQueuePreview :entries="state.entries" :disabled="state.locked" @change="state.change" /><p class="queue-footnote">保存队列只存预约意向；复核后生成独立执行快照。非空队列授权执行器预约并付款。</p></aside></div>
  </section>
 </template>
 <style scoped>

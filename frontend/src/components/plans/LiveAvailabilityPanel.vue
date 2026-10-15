@@ -6,9 +6,9 @@ import TokenExpiryBadge from './TokenExpiryBadge.vue';
 import { useLiveAvailability } from '../../composables/useLiveAvailability.js';
 import LiveAvailabilityGrid from './LiveAvailabilityGrid.vue';
 const props=defineProps({credentialId:{type:String,default:''},credentialRefreshKey:{type:Number,default:0},calendarState:{type:Object,default:null},refreshKey:{type:Number,default:0},selectionDisabled:Boolean,api:{type:Object,required:true},credentialApi:{type:Object,required:true},session:{type:Object,required:true},targetDate:{type:String,default:''},contextKey:{type:String,default:''}});
-const emit=defineEmits(['date-change','court-labels','update:credentialId']);
+const emit=defineEmits(['date-change','court-labels','queue-scope','update:credentialId']);
 const state=useLiveAvailability({api:props.api,credentialApi:props.credentialApi,session:()=>props.session,targetDate:()=>props.targetDate,contextKey:()=>props.contextKey});
-const {autoLoading,refreshAvailability,enabled,optionsLoading,optionsError,credentials,credentialsError,eligibleCredentials,selectedCredentialId,categoriesLoading,gridLoading,grid,gridExpired,error,message,initialize,refreshCredentials}=state;
+const {autoLoading,refreshAvailability,enabled,optionsLoading,optionsError,credentials,credentialsError,eligibleCredentials,selectedCredentialId,selectedCategory,categoriesLoading,gridLoading,grid,gridExpired,error,message,initialize,refreshCredentials}=state;
 watch(()=>props.credentialId,value=>{if(value!==selectedCredentialId.value)selectedCredentialId.value=value;});
 watch(selectedCredentialId,value=>emit('update:credentialId',value));
 watch(()=>props.credentialRefreshKey,()=>refreshCredentials());
@@ -16,6 +16,7 @@ watch(()=>props.refreshKey,()=>refreshAvailability());
 const busy=computed(()=>autoLoading.value||categoriesLoading.value||gridLoading.value);
 const selectedCredential=computed(()=>credentials.value.find(item=>item.credential_id===selectedCredentialId.value)||credentials.value[0]||null);
 watch(grid,value=>{if(value)emit('court-labels',value.courts.map(court=>court.display_name));});
+watch(selectedCategory,value=>emit('queue-scope',value?.label||''),{immediate:true});
 watch(selectedCredentialId,()=>emit('court-labels',[]));
 </script>
 <template>

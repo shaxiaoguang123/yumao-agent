@@ -47,6 +47,7 @@ class AppSettings:
     booking_currency_code: str | None
     booking_currency_minor_unit_exponent: int | None
     live_availability_enabled: bool = False
+    booking_execution_enabled: bool = False
     llm_service_default: Mapping[str, str] | None = field(default=None, repr=False)
     availability_simulation_enabled: bool = False
     token_expiring_soon_window_seconds: int = 604800
@@ -230,6 +231,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
     live_availability_flag = source.get("LIVE_AVAILABILITY_ENABLED", "false")
     if live_availability_flag not in {"true", "false"}:
         raise ValueError("LIVE_AVAILABILITY_ENABLED must be true or false")
+    booking_execution_flag = source.get("BOOKING_EXECUTION_ENABLED", "false")
+    if booking_execution_flag not in {"true", "false"}:
+        raise ValueError("BOOKING_EXECUTION_ENABLED must be true or false")
 
     raw_origins = source.get("APP_ALLOWED_ORIGINS", "")
     allowed_origins = tuple(origin.strip().rstrip("/") for origin in raw_origins.split(",") if origin.strip())
@@ -242,10 +246,13 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
     booking_timezone_name = _booking_timezone_name(source)
     booking_currency_code, booking_currency_minor_unit_exponent = _booking_currency_metadata(source)
     upstream_item_aes_key_ascii, upstream_item_aes_iv_ascii = _upstream_item_cipher(source)
-    if live_availability_flag == "true" and not (
+    if (live_availability_flag == "true" or booking_execution_flag == "true") and not (
         upstream_item_aes_key_ascii and upstream_item_aes_iv_ascii
     ):
-        raise ValueError("LIVE_AVAILABILITY_ENABLED requires the official read-only request cipher")
+        raise ValueError("live availability or booking execution requires the official request cipher")
+    upstream_read_min_interval_ms = _optional_positive_int(source, "UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS")
+    if booking_execution_flag == "true" and upstream_read_min_interval_ms is None:
+        raise ValueError("BOOKING_EXECUTION_ENABLED requires UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS")
     encryption_keyring = parse_credential_keyring(
         source.get("APP_CREDENTIAL_ENCRYPTION_KEYS"),
         source.get("APP_CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID"),
@@ -304,9 +311,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         upstream_origin=_https_origin(source),
         upstream_item_aes_key_ascii=upstream_item_aes_key_ascii,
         upstream_item_aes_iv_ascii=upstream_item_aes_iv_ascii,
-        upstream_get_user_info_min_interval_ms=_optional_positive_int(
-            source, "UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS"
-        ),
+        upstream_get_user_info_min_interval_ms=upstream_read_min_interval_ms,
         upstream_connect_timeout_seconds=connect_timeout,
         upstream_read_timeout_seconds=read_timeout,
         upstream_total_deadline_seconds=total_deadline,
@@ -318,6 +323,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         booking_currency_code=booking_currency_code,
         booking_currency_minor_unit_exponent=booking_currency_minor_unit_exponent,
         live_availability_enabled=(app_env == "development" and live_availability_flag == "true"),
+        booking_execution_enabled=booking_execution_flag == "true",
         token_expiring_soon_window_seconds=_positive_int(
             source, "TOKEN_EXPIRING_SOON_WINDOW_SECONDS", 604800
         ),

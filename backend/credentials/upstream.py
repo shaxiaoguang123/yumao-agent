@@ -27,6 +27,7 @@ class BoundedHttpResponse:
     retry_after_header: str | None = field(repr=False)
     error_code: str | None
     dispatch_state: DispatchState = "uncertain"
+    server_date_header: str | None = field(default=None, repr=False)
 
 
 def _bounded_retry_after(headers) -> str | None:
@@ -90,6 +91,7 @@ class UpstreamHttpTransport:
         response = None
         status_code = None
         retry_after = None
+        server_date_header = None
         try:
             session = self._session_factory()
             # A validation attempt must not inherit a cookie, netrc auth, proxy, or
@@ -115,6 +117,9 @@ class UpstreamHttpTransport:
                 )
 
             headers_received = getattr(response, "headers", {})
+            candidate_date = headers_received.get("Date")
+            if isinstance(candidate_date, str) and len(candidate_date) <= 128:
+                server_date_header = candidate_date
             content_length = headers_received.get("Content-Length")
             if isinstance(content_length, str) and content_length.isdecimal():
                 if int(content_length) > self._max_response_bytes:
@@ -157,6 +162,7 @@ class UpstreamHttpTransport:
                 retry_after,
                 None,
                 "complete",
+                server_date_header,
             )
         except (requests.RequestException, OSError, TimeoutError, ValueError):
             return BoundedHttpResponse(

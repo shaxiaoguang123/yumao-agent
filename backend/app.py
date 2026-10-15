@@ -23,6 +23,7 @@ from backend.venue_catalog import VenueCatalogService
 from backend.ai.call_guard import AICallGuard
 from backend.api.booking_window import booking_window_bp
 from backend.api.ai_models import ai_models_bp
+from backend.api.booking_execution import booking_execution_bp
 from backend.ai.service import AIProviderService
 from backend.ai.key_dependencies import check_ai_provider_key_dependencies
 from backend.booking_window import BookingWindowPolicy
@@ -36,7 +37,12 @@ from backend.credentials.key_dependencies import check_credential_key_dependenci
 from backend.credentials.keyring import CredentialKeyring
 from backend.credentials.request_gate import UpstreamRequestGate
 from backend.credentials.service import CredentialService
+from backend.execution.settings import ExecutionSettingsService
 from backend.credentials.upstream import UpstreamContractAdapter, UpstreamHttpTransport
+from backend.execution.engine import BookingExecutionEngine
+from backend.execution.protocol import OfficialBookingProtocol
+from backend.execution.repository import BookingExecutionRepository
+from backend.execution.scheduler import BookingScheduler
 from backend.db import CURRENT_SCHEMA_VERSION, check_schema_ready
 from backend.settings import load_settings
 
@@ -134,7 +140,7 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         booking_window_policy=booking_window_policy,
         item_aes_key_ascii=settings.upstream_item_aes_key_ascii,
         item_aes_iv_ascii=settings.upstream_item_aes_iv_ascii,
-        enabled=settings.live_availability_enabled,
+        enabled=(settings.live_availability_enabled or settings.booking_execution_enabled),
         timezone_name=settings.booking_timezone_name,
     )
 
@@ -167,13 +173,47 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
     app.extensions["credential_token_cipher"] = cipher
     app.extensions["credential_upstream_adapter"] = adapter
     app.extensions["upstream_request_gate"] = gate
+    app.extensions["upstream_http_transport"] = transport
     app.extensions["credential_service"] = credential_service
     app.extensions["live_availability_service"] = live_availability_service
+    app.extensions["execution_settings_service"] = ExecutionSettingsService(
+        settings.database_path, settings.sqlite_busy_timeout_ms,
+        worker_enabled=settings.booking_execution_enabled,
+    )
     app.extensions["dummy_password_hash"] = create_dummy_password_hash()
     app.extensions["plan_service"] = PlanService(
         settings.database_path, settings.sqlite_busy_timeout_ms,
         booking_window_policy,
         settings.booking_currency_code, settings.booking_currency_minor_unit_exponent,
+    )
+    booking_protocol = OfficialBookingProtocol(
+        credential_service=credential_service,
+        transport=transport,
+        item_aes_key_ascii=settings.upstream_item_aes_key_ascii,
+        item_aes_iv_ascii=settings.upstream_item_aes_iv_ascii,
+    )
+    booking_execution_engine = BookingExecutionEngine(
+        database_path=settings.database_path,
+        busy_timeout_ms=settings.sqlite_busy_timeout_ms,
+        plan_service=app.extensions["plan_service"],
+        credential_service=credential_service,
+        protocol=booking_protocol,
+        timezone_name=settings.booking_timezone_name,
+        worker_enabled=settings.booking_execution_enabled,
+    )
+    execution_repository = BookingExecutionRepository(
+        settings.database_path, settings.sqlite_busy_timeout_ms,
+    )
+    app.extensions["booking_execution_protocol"] = booking_protocol
+    app.extensions["booking_execution_engine"] = booking_execution_engine
+    app.extensions["booking_execution_repository"] = execution_repository
+    app.extensions["booking_scheduler"] = BookingScheduler(
+        settings_service=app.extensions["execution_settings_service"],
+        engine=booking_execution_engine,
+        repository=execution_repository,
+        plan_service=app.extensions["plan_service"],
+        timezone_name=settings.booking_timezone_name,
+        worker_enabled=settings.booking_execution_enabled,
     )
     app.extensions["ai_provider_service"] = AIProviderService(
         database_path=settings.database_path,
@@ -201,4 +241,5 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
     app.register_blueprint(availability_live_bp)
     app.register_blueprint(booking_window_bp)
     app.register_blueprint(ai_models_bp)
+    app.register_blueprint(booking_execution_bp)
     return app

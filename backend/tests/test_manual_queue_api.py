@@ -8,7 +8,7 @@ import test_plans_api as plan_tests
 
 def entry(court='人工场1', start='18:00', duration=120, end=None):
     return dict(court_preference=court, start_time=start, duration_minutes=duration,
-                end_time=end or f'{int(start[:2])+duration//60:02d}:00')
+                end_time=end or f'{int(start[:2])+duration//60:02d}:00', scope_label='羽毛球')
 
 
 class ManualQueueTests(unittest.TestCase):
@@ -22,6 +22,8 @@ class ManualQueueTests(unittest.TestCase):
         q=self.save_queue([entry('一小时',duration=60),entry('首选'),entry('备选')]).get_json()['queue']
         self.assertEqual([i['duration_minutes'] for i in q['candidates']],[120,120,60])
         self.assertEqual([i['court_preferences'][0] for i in q['candidates']],['首选','备选','一小时'])
+        self.assertEqual([i['query_scope_label'] for i in q['candidates']],['羽毛球','羽毛球','羽毛球'])
+        self.assertEqual(q['queue_contract_version'],2)
         self.assertEqual(q['duration_priority'],[120,60])
         for i in q['candidates']:
             self.assertFalse(i['fallback_policy']['allow_any_court_in_venue'])

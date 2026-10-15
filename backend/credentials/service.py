@@ -5,6 +5,7 @@ import sqlite3
 import time
 import unicodedata
 import uuid
+from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
@@ -60,6 +61,18 @@ class _TokenCandidate:
     expires_at_utc_ms: int | None
     fingerprint: str = field(repr=False)
     fingerprint_key_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class BookingCredentialMaterial:
+    """Short-lived server-side material for one scheduled execution."""
+
+    user_id: str
+    credential_id: str
+    credential_version: int
+    token_revision_id: str
+    token: str = field(repr=False)
+    payment_password: str = field(repr=False)
 
 
 class CredentialService:
@@ -419,6 +432,79 @@ class CredentialService:
                 or current["current_token_revision_id"] != row["current_token_revision_id"]):
             raise CredentialOperationError("credential_version_conflict", 409)
         return response
+
+    def booking_material(self, user_id: str, credential_id: str) -> BookingCredentialMaterial:
+        """Decrypt one confirmed credential and its separate payment secret in memory only."""
+        self._validate_user_id(user_id)
+        if not isinstance(credential_id, str) or not credential_id:
+            raise CredentialOperationError("credential_not_found", 404)
+        row, _revision = self._snapshot(user_id, credential_id)
+        now = self._now()
+        if not row["enabled"]:
+            raise CredentialOperationError("credential_disabled", 409)
+        if row["requires_revalidation"] or row["last_confirmed_validation_state"] != "confirmed_valid":
+            raise CredentialOperationError("credential_requires_revalidation", 409)
+        if row["account_binding_state"] != "confirmed":
+            raise CredentialOperationError("credential_account_binding_unresolved", 409)
+        if row["token_expires_at_utc_ms"] is not None and row["token_expires_at_utc_ms"] <= now:
+            raise CredentialOperationError("credential_token_expired", 422)
+        connection = connect_database(self.database_path, self.busy_timeout_ms)
+        try:
+            secret = connection.execute(
+                """SELECT secret_revision, ciphertext, nonce, tag, encryption_key_version
+                   FROM credential_payment_secrets WHERE user_id=? AND credential_id=?""",
+                (user_id, credential_id),
+            ).fetchone()
+        finally:
+            connection.close()
+        if secret is None:
+            raise CredentialOperationError("credential_payment_password_missing", 409)
+        try:
+            payment_password = self.payment_secret_cipher.decrypt(
+                EncryptedPaymentSecret(
+                    ciphertext=secret["ciphertext"], nonce=secret["nonce"],
+                    tag=secret["tag"], key_id=secret["encryption_key_version"],
+                ),
+                user_id=user_id,
+                credential_id=credential_id,
+                revision=secret["secret_revision"],
+                key_id=secret["encryption_key_version"],
+            ).decode("utf-8", errors="strict")
+        except (PaymentSecretError, UnicodeDecodeError) as exc:
+            raise CredentialOperationError("credential_secret_unavailable", 503) from exc
+        token = self._decrypt_snapshot_token(row, user_id, credential_id)
+        return BookingCredentialMaterial(
+            user_id=user_id,
+            credential_id=credential_id,
+            credential_version=row["credential_version"],
+            token_revision_id=row["current_token_revision_id"],
+            token=token,
+            payment_password=payment_password,
+        )
+
+    def assert_booking_snapshot(self, material: BookingCredentialMaterial) -> None:
+        """Fence every scheduled upstream step against Token changes or disablement."""
+        if not isinstance(material, BookingCredentialMaterial):
+            raise CredentialOperationError("credential_version_conflict", 409)
+        row, _revision = self._snapshot(material.user_id, material.credential_id)
+        if (row["credential_version"] != material.credential_version
+                or row["current_token_revision_id"] != material.token_revision_id):
+            raise CredentialOperationError("credential_version_conflict", 409)
+        if not row["enabled"]:
+            raise CredentialOperationError("credential_disabled", 409)
+        if row["requires_revalidation"] or row["last_confirmed_validation_state"] != "confirmed_valid":
+            raise CredentialOperationError("credential_requires_revalidation", 409)
+        if row["account_binding_state"] != "confirmed":
+            raise CredentialOperationError("credential_account_binding_unresolved", 409)
+        if row["token_expires_at_utc_ms"] is not None and row["token_expires_at_utc_ms"] <= self._now():
+            raise CredentialOperationError("credential_token_expired", 422)
+        with closing(connect_database(self.database_path, self.busy_timeout_ms)) as connection:
+            secret = connection.execute(
+                "SELECT 1 FROM credential_payment_secrets WHERE user_id=? AND credential_id=?",
+                (material.user_id, material.credential_id),
+            ).fetchone()
+        if secret is None:
+            raise CredentialOperationError("credential_payment_password_missing", 409)
 
     def _identity(self, result: AdapterValidationResult) -> tuple[bytes, str] | None:
         if not self.account_continuity_capability:

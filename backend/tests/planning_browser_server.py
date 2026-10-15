@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import ipaddress
 import json
 import re
@@ -19,6 +20,7 @@ from backend.ai.planning import PlanningService
 from backend.ai.service import AIProviderService
 from backend.auth.passwords import hash_password
 from backend.credentials.keyring import CredentialKeyring
+from backend.credentials.contracts import AdapterValidationResult
 from backend.db import connect_database
 from backend.migrate import migrate_database
 from backend.tests.support import credential_test_settings
@@ -86,6 +88,23 @@ class SyntheticPlanningTransport:
         return json.dumps({'status':'ready','intent':intent,'questions':[],'evidence':evidence}, ensure_ascii=False)
 
 
+class SyntheticCredentialAdapter:
+    """Accept only deterministic preview tokens; never contacts the upstream service."""
+    def validate_token(self, _token):
+        return AdapterValidationResult(
+            'success', 'synthetic_preview_credential', b'synthetic-preview-account',
+            'getuserinfo-idserial-v1', '2xx', None, 'complete', 200,
+        )
+
+
+def synthetic_token(marker: str, now_utc_ms: int) -> str:
+    def encode(value: bytes) -> str:
+        return base64.urlsafe_b64encode(value).rstrip(b'=').decode('ascii')
+    header = encode(b'{"alg":"none","typ":"JWT"}')
+    payload = encode(json.dumps({'exp': now_utc_ms // 1000 + 30 * 86_400, 'marker': marker}).encode())
+    return f'{header}.{payload}.synthetic-signature'
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output',required=True)
@@ -117,6 +136,7 @@ def main():
     record()
     migrate_database(database,5000)
     app = create_app({**credential_test_settings(database),'APP_ENV':'development','APP_ALLOWED_ORIGINS':args.origin,
+                      'UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS':'10',
                       'AVAILABILITY_SIMULATION_ENABLED':'true' if args.simulation else 'false',
                       'BOOKING_TIMEZONE':'Asia/Shanghai','BOOKING_CURRENCY_CODE':'CNY','BOOKING_CURRENCY_MINOR_UNIT_EXPONENT':'2'})
     settings = app.extensions['app_settings']
@@ -132,6 +152,16 @@ def main():
             user = 'synthetic-planning-'+suffix
             name = 'plan_user_'+suffix
             db.execute('INSERT INTO users(user_id,username,normalized_username,password_hash,role,status,created_at_utc_ms,updated_at_utc_ms) VALUES(?,?,?,?,?,?,?,?)', (user,name,name,password,'user','active',now,now))
+    credential_service = app.extensions['credential_service']
+    credential_service.adapter = SyntheticCredentialAdapter()
+    for index, suffix in enumerate(('a','b')):
+        if index:
+            time.sleep(0.025)
+        credential_now = time.time_ns() // 1_000_000
+        credential_service.create(
+            f'synthetic-planning-{suffix}', 'Synthetic planning credential',
+            synthetic_token(suffix, credential_now), credential_now, 'Synthetic-only-payment-password',
+        )
     server = make_server('127.0.0.1',args.port,app,threaded=True)
     manifest = {'origin':f'http://127.0.0.1:{server.server_port}','database_path':str(database),
                 'users':['plan_user_a','plan_user_b'],'provider':'synthetic Fake Provider; NOT real supplier verification',

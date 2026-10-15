@@ -1,17 +1,17 @@
 <script setup>
 import { computed, ref } from 'vue';
 import { candidateKey } from '../../composables/useManualQueue.js';
-const props=defineProps({courtNames:{type:Array,default:()=>[]},entries:{type:Array,default:()=>[]},duration:{type:Number,default:120},disabled:Boolean});
+const props=defineProps({courtNames:{type:Array,default:()=>[]},entries:{type:Array,default:()=>[]},duration:{type:Number,default:120},scopeLabel:{type:String,default:''},disabled:Boolean});
 const emit=defineEmits(['change']);
 const fromHour=9,untilHour=22,error=ref('');
 const courts=computed(()=>[...new Set([...props.courtNames,...props.entries.map(e=>e.court_preference)].filter(v=>typeof v==='string'&&v.trim()).map(v=>v.trim()))].slice(0,32));
 const rows=computed(()=>Array.from({length:Math.max(0,untilHour-fromHour)},(_,index)=>({start:fromHour+index,end:fromHour+index+1})));
 const clock=hour=>`${String(hour).padStart(2,'0')}:00`;
-function selected(row,court){return props.entries.some(e=>e.duration_minutes===props.duration&&e.court_preference===court&&Number(e.start_time.slice(0,2))<=row.start&&Number(e.end_time.slice(0,2))>=row.end);}
+function selected(row,court){return props.entries.some(e=>e.duration_minutes===props.duration&&e.scope_label===props.scopeLabel&&e.court_preference===court&&Number(e.start_time.slice(0,2))<=row.start&&Number(e.end_time.slice(0,2))>=row.end);}
 function toggle(row,court){
  if(props.disabled)return;error.value='';
- const entry={court_preference:court,start_time:clock(row.start),end_time:clock(row.start+props.duration/60),duration_minutes:props.duration};
- const existing=props.entries.find(e=>candidateKey(e)===candidateKey(entry))||props.entries.find(e=>e.duration_minutes===props.duration&&e.court_preference===court&&e.start_time<=entry.start_time&&e.end_time>entry.start_time);
+ const entry={court_preference:court,start_time:clock(row.start),end_time:clock(row.start+props.duration/60),duration_minutes:props.duration,scope_label:props.scopeLabel};
+ const existing=props.entries.find(e=>candidateKey(e)===candidateKey(entry))||props.entries.find(e=>e.duration_minutes===props.duration&&e.scope_label===props.scopeLabel&&e.court_preference===court&&e.start_time<=entry.start_time&&e.end_time>entry.start_time);
  if(existing){emit('change',props.entries.filter(e=>e!==existing));return;}
  if(row.start+props.duration/60>untilHour||row.start+props.duration/60>24){error.value='两小时候选必须完整覆盖两个连续小时，请选择更早的开始格。';return;}
  if(props.entries.length>=32){error.value='候选最多 32 项，请先移除不需要的候选。';return;}
@@ -20,10 +20,11 @@ function toggle(row,court){
 </script>
 <template>
  <div class="manual-queue-grid">
-  <div class="queue-grid-heading"><span>09:00–22:00 · {{ duration===120?'连续两小时':'一小时' }}</span></div>
+  <div class="queue-grid-heading"><span>09:00–22:00 · {{ duration===120?'连续两小时':'一小时' }}</span><span v-if="scopeLabel">预约类别：{{ scopeLabel }}</span></div>
   <p v-if="error" class="form-error" role="alert">{{ error }}</p>
-  <p v-if="!courts.length" class="muted">先在“查询场地”读取场地名称，再选择预约偏好。</p>
-  <div v-else class="queue-table-scroll" tabindex="0" aria-label="场地与时间偏好网格，可横向滚动"><table><thead><tr><th scope="col">时间</th><th v-for="court in courts" :key="court" scope="col">{{ court }}</th></tr></thead><tbody><tr v-for="(row,index) in rows" :key="row.start"><th scope="row">{{ clock(row.start) }}–{{ clock(row.end) }}</th><td v-for="(court,column) in courts" :key="court"><button type="button" class="queue-cell" :class="{'is-selected':selected(row,court)}" :data-testid="`queue-cell-${index}-${column}`" :aria-label="`${court} ${clock(row.start)}开始 ${duration===120?'两小时':'一小时'}候选`" :aria-pressed="selected(row,court)" :disabled="disabled" @click="toggle(row,court)"><span v-if="selected(row,court)">✓</span></button></td></tr></tbody></table></div>
+  <p v-if="!scopeLabel" class="muted">请先在“查询场地”读取当前 Token 的真实预约类别和场地；未读取前不能加入执行队列。</p>
+  <p v-else-if="!courts.length" class="muted">读取到预约类别后，请先查询场地，再选择预约意向。</p>
+  <div v-else class="queue-table-scroll" tabindex="0" aria-label="场地与时间偏好网格，可横向滚动"><table><thead><tr><th scope="col">时间</th><th v-for="court in courts" :key="court" scope="col">{{ court }}</th></tr></thead><tbody><tr v-for="(row,index) in rows" :key="row.start"><th scope="row">{{ clock(row.start) }}–{{ clock(row.end) }}</th><td v-for="(court,column) in courts" :key="court"><button type="button" class="queue-cell" :class="{'is-selected':selected(row,court)}" :data-testid="`queue-cell-${index}-${column}`" :aria-label="`${scopeLabel} ${court} ${clock(row.start)}开始 ${duration===120?'两小时':'一小时'}候选`" :aria-pressed="selected(row,court)" :disabled="disabled||!scopeLabel" @click="toggle(row,court)"><span v-if="selected(row,court)">✓</span></button></td></tr></tbody></table></div>
  </div>
 </template>
 <style scoped>

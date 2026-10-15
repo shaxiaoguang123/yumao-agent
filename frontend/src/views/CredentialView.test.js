@@ -60,6 +60,20 @@ function makeApi({ credentials = [], ...overrides } = {}) {
     setPaymentPassword: vi.fn().mockResolvedValue({ result: 'payment_password_saved', credential: credential({ has_payment_password: true }) }),
     update: vi.fn().mockResolvedValue({ result: 'credential_updated', credential: credential() }),
     remove: vi.fn().mockResolvedValue(undefined),
+    executionSettings: vi.fn(async credentialId => ({
+      credential_id: credentialId,
+      version: 0,
+      settings: {
+        reconciliation_time: '00:30', clock_calibration_lead_ms: 1000, start_offset_ms: 0,
+        booking_node_delay_ms: 0, booking_by_time_delay_ms: 0, get_user_info_delay_ms: 0,
+        get_children_delay_ms: 0, get_pay_price_delay_ms: 0, create_booking_delay_ms: 0,
+        open_platform_pay_order_delay_ms: 0, payment_verify_delay_ms: 0,
+      },
+      worker_enabled: false,
+    })),
+    updateExecutionSettings: vi.fn(async (credentialId, version, settings) => ({
+      credential_id: credentialId, version: version + 1, settings, worker_enabled: false,
+    })),
     ...overrides,
   };
 }
@@ -85,6 +99,13 @@ async function mountView(api) {
 }
 
 describe('Credential management view', () => {
+  it('keeps automatic execution settings with reservation plans', async () => {
+    const api = makeApi({ credentials: [credential({ has_payment_password: true })] });
+    const { wrapper } = await mountView(api);
+    expect(wrapper.text()).not.toContain('自动执行时间');
+    expect(api.executionSettings).not.toHaveBeenCalled();
+  });
+
   it('discards a rotation draft when local filtering hides its credential', async()=>{
     const api=makeApi({credentials:[credential()]});const {wrapper}=await mountView(api);
     await wrapper.get('[data-testid="rotate-credential-a"]').trigger('click');
