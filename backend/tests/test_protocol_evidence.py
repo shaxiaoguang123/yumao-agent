@@ -29,6 +29,10 @@ class ProtocolEvidenceTests(unittest.TestCase):
         })
         self.assertEqual(report["findings"]["venue_name_to_parent_scope"], "partial")
         self.assertEqual(report["findings"]["venue_list_response"], "missing")
+        self.assertEqual(report["findings"]["conflict_list_semantics"], "confirmed")
+        self.assertEqual(report["findings"]["availability_status_semantics"], "partial")
+        self.assertIn("availability_status_semantics", report["blocking_findings"]["recorded_availability"])
+        self.assertIn("physical_venue_label_to_parent_scope", report["blocking_findings"]["recorded_availability"])
 
     def test_booking_node_scope_chain_is_separate_from_physical_venue_evidence(self):
         report = assess_evidence(CURRENT_EVIDENCE)
