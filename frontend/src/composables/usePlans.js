@@ -1,13 +1,14 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { copy, newIntent } from '../utils/planForm.js';
 
-export function usePlans(api, session) {
+export function usePlans(api, session, targetCredentialId=()=>null) {
   const plans=ref([]), context=shallowRef(null), defaultWindow=shallowRef(null), catalog=shallowRef(null), source=shallowRef(null);
   const listStatus=shallowRef('idle'), metadataError=shallowRef(''), saving=shallowRef(false), message=shallowRef('');
   const saveError=shallowRef(''), fields=shallowRef({}), conflict=shallowRef(false), latest=shallowRef(null), latestError=shallowRef('');
   const history=ref([]), historyPlanId=shallowRef(null), historyStatus=shallowRef('idle');
   const windowState=shallowRef(null), windowError=shallowRef(''), uncertain=shallowRef(false);
   const authorized=computed(()=>session?.status==='authenticated' && Boolean(session.user?.user_id));
+  const credentialId=computed(()=>typeof targetCredentialId==='function'?targetCredentialId():targetCredentialId?.value||targetCredentialId||null);
   const canCreate=computed(()=>authorized.value && context.value && defaultWindow.value && !saving.value);
   let alive=true, epoch=0, sourceSelectionSequence=0, listSequence=0, windowSequence=0, historySequence=0, latestSequence=0;
   let suspendedDraft=null,recoveryUserId=null,lastInvalidationEpoch=session?.invalidationEpoch??0;
@@ -23,7 +24,7 @@ export function usePlans(api, session) {
     if (!authorized.value || saving.value) return;
     const generation=epoch, sequence=++listSequence;
     listStatus.value='loading';
-    try { const result=await api.list();if(valid(generation)&&sequence===listSequence){plans.value=result.plans;listStatus.value='ready';} }
+    try { const result=credentialId.value?await api.list(credentialId.value):await api.list();if(valid(generation)&&sequence===listSequence){plans.value=result.plans;listStatus.value='ready';} }
     catch {if(valid(generation)&&sequence===listSequence){plans.value=[];listStatus.value='error';}}
   }
   async function initialize() {
@@ -36,7 +37,7 @@ export function usePlans(api, session) {
   function setSource(plan) {
     sourceSelectionSequence++;
     windowSequence++;clearFeedback();
-    source.value={planId:plan.plan_id,baseVersion:plan.version,intent:copy(plan.intent),context:copy(plan.context)};
+    source.value={planId:plan.plan_id,baseVersion:plan.version,credentialId:plan.credential_id||null,intent:copy(plan.intent),context:copy(plan.context)};
     suspendedDraft={userId:session.user.user_id,source:copy(source.value)};
     windowState.value=plan.booking_window;windowError.value='';
   }
@@ -68,7 +69,7 @@ export function usePlans(api, session) {
     const generation=epoch, selected=source.value;
     saving.value=true;saveError.value='';fields.value={};message.value='';
     try {
-      const result=selected.planId ? await api.update(selected.planId,selected.baseVersion,intent) : await api.create(intent);
+      const result=selected.planId ? (selected.credentialId?await api.update(selected.planId,selected.baseVersion,intent,selected.credentialId):await api.update(selected.planId,selected.baseVersion,intent)) : (credentialId.value?await api.create(intent,credentialId.value):await api.create(intent));
       if(!valid(generation))return;
       plans.value=[result.plan,...plans.value.filter(item=>item.plan_id!==result.plan.plan_id)];listStatus.value='ready';
       setSource(result.plan);message.value=`已保存预约意向 · 版本 ${result.plan.version}`;
@@ -85,7 +86,7 @@ export function usePlans(api, session) {
     if(!authorized.value || !source.value?.planId)return;
     const generation=epoch, sequence=++latestSequence, selected=source.value;
     latest.value=null;latestError.value='';
-    try {const result=await api.get(selected.planId);if(valid(generation)&&sequence===latestSequence&&source.value===selected)latest.value=result.plan;}
+    try {const result=selected.credentialId?await api.get(selected.planId,selected.credentialId):await api.get(selected.planId);if(valid(generation)&&sequence===latestSequence&&source.value===selected)latest.value=result.plan;}
     catch {if(valid(generation)&&sequence===latestSequence)latestError.value='最新版本读取失败，请重试；表单内容已保留。';}
   }
   function adoptLatest(){if(latest.value&&!saving.value)setSource(latest.value);}
@@ -93,14 +94,15 @@ export function usePlans(api, session) {
     if(!authorized.value)return;
     const generation=epoch,sequence=++historySequence;
     historyPlanId.value=planId;history.value=[];historyStatus.value='loading';
-    try {const result=await api.revisions(planId);if(valid(generation)&&sequence===historySequence){history.value=result.revisions;historyStatus.value='ready';}}
+    const plan=plans.value.find(item=>item.plan_id===planId);
+    try {const result=plan?.credential_id?await api.revisions(planId,plan.credential_id):await api.revisions(planId);if(valid(generation)&&sequence===historySequence){history.value=result.revisions;historyStatus.value='ready';}}
     catch {if(valid(generation)&&sequence===historySequence)historyStatus.value='error';}
   }
   function closeHistory(){historyPlanId.value=null;history.value=[];historySequence++;}
   async function remove(plan){
     if(!authorized.value||saving.value)return;
     const generation=epoch;saving.value=true;saveError.value='';message.value='';
-    try{await api.remove(plan.plan_id,plan.version);if(!valid(generation))return;
+    try{if(plan.credential_id)await api.remove(plan.plan_id,plan.version,plan.credential_id);else await api.remove(plan.plan_id,plan.version);if(!valid(generation))return;
       plans.value=plans.value.filter(item=>item.plan_id!==plan.plan_id);
       if(source.value?.planId===plan.plan_id){source.value=null;suspendedDraft=null;}
       message.value='计划已删除，历史修订已保留。';
@@ -108,7 +110,7 @@ export function usePlans(api, session) {
     finally{if(valid(generation))saving.value=false;}
   }
   function acknowledgeUncertain(){if(authorized.value)uncertain.value=false;}
-  watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken,session?.invalidationEpoch],()=>{
+  watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken,session?.invalidationEpoch,credentialId.value],()=>{
     const userId=session?.user?.user_id||null;
     const invalidationEpoch=session?.invalidationEpoch??0;
     const invalidated=invalidationEpoch!==lastInvalidationEpoch;

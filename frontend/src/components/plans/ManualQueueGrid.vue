@@ -3,9 +3,9 @@ import { computed, ref } from 'vue';
 import { candidateKey } from '../../composables/useManualQueue.js';
 const props=defineProps({courtNames:{type:Array,default:()=>[]},entries:{type:Array,default:()=>[]},duration:{type:Number,default:120},disabled:Boolean});
 const emit=defineEmits(['change']);
-const from=ref(0),until=ref(24),error=ref('');
+const fromHour=9,untilHour=22,error=ref('');
 const courts=computed(()=>[...new Set([...props.courtNames,...props.entries.map(e=>e.court_preference)].filter(v=>typeof v==='string'&&v.trim()).map(v=>v.trim()))].slice(0,32));
-const rows=computed(()=>Array.from({length:Math.max(0,until.value-from.value)},(_,index)=>({start:from.value+index,end:from.value+index+1})));
+const rows=computed(()=>Array.from({length:Math.max(0,untilHour-fromHour)},(_,index)=>({start:fromHour+index,end:fromHour+index+1})));
 const clock=hour=>`${String(hour).padStart(2,'0')}:00`;
 function selected(row,court){return props.entries.some(e=>e.duration_minutes===props.duration&&e.court_preference===court&&Number(e.start_time.slice(0,2))<=row.start&&Number(e.end_time.slice(0,2))>=row.end);}
 function toggle(row,court){
@@ -13,14 +13,14 @@ function toggle(row,court){
  const entry={court_preference:court,start_time:clock(row.start),end_time:clock(row.start+props.duration/60),duration_minutes:props.duration};
  const existing=props.entries.find(e=>candidateKey(e)===candidateKey(entry))||props.entries.find(e=>e.duration_minutes===props.duration&&e.court_preference===court&&e.start_time<=entry.start_time&&e.end_time>entry.start_time);
  if(existing){emit('change',props.entries.filter(e=>e!==existing));return;}
- if(row.start+props.duration/60>until.value||row.start+props.duration/60>24){error.value='两小时候选必须完整覆盖两个连续小时，请选择更早的开始格。';return;}
+ if(row.start+props.duration/60>untilHour||row.start+props.duration/60>24){error.value='两小时候选必须完整覆盖两个连续小时，请选择更早的开始格。';return;}
  if(props.entries.length>=32){error.value='候选最多 32 项，请先移除不需要的候选。';return;}
  emit('change',[...props.entries,entry]);
 }
 </script>
 <template>
  <div class="manual-queue-grid">
-  <div class="queue-grid-heading"><span>点击开始格 · {{ duration===120?'连续两小时':'一小时' }}</span><details class="queue-range"><summary>{{ clock(from) }}–{{ clock(until) }}</summary><div><label>开始<select v-model.number="from" aria-label="网格开始小时"><option v-for="h in 24" :key="h-1" :value="h-1">{{ clock(h-1) }}</option></select></label><label>结束<select v-model.number="until" aria-label="网格结束小时"><option v-for="h in 24" :key="h" :value="h">{{ clock(h) }}</option></select></label></div></details></div>
+  <div class="queue-grid-heading"><span>09:00–22:00 · {{ duration===120?'连续两小时':'一小时' }}</span></div>
   <p v-if="error" class="form-error" role="alert">{{ error }}</p>
   <p v-if="!courts.length" class="muted">先在“查询场地”读取场地名称，再选择预约偏好。</p>
   <div v-else class="queue-table-scroll" tabindex="0" aria-label="场地与时间偏好网格，可横向滚动"><table><thead><tr><th scope="col">时间</th><th v-for="court in courts" :key="court" scope="col">{{ court }}</th></tr></thead><tbody><tr v-for="(row,index) in rows" :key="row.start"><th scope="row">{{ clock(row.start) }}–{{ clock(row.end) }}</th><td v-for="(court,column) in courts" :key="court"><button type="button" class="queue-cell" :class="{'is-selected':selected(row,court)}" :data-testid="`queue-cell-${index}-${column}`" :aria-label="`${court} ${clock(row.start)}开始 ${duration===120?'两小时':'一小时'}候选`" :aria-pressed="selected(row,court)" :disabled="disabled" @click="toggle(row,court)"><span v-if="selected(row,court)">✓</span></button></td></tr></tbody></table></div>

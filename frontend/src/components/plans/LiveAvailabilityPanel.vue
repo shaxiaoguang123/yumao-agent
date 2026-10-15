@@ -37,7 +37,6 @@ watch(selectedCredentialId,()=>emit('court-labels',[]));
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <LiveAvailabilityGrid v-if="grid" :grid="grid" :expired="gridExpired" :context-key="contextKey" :selection-disabled="selectionDisabled" query-only />
     <div v-if="!grid&&!error" :aria-busy="busy" class="live-empty"><AppIcon name="court" /><p>{{ busy?'正在读取当天场地…':'请选择日期或刷新场地' }}</p></div>
-    <details class="live-source-help"><summary aria-label="只读查询与场馆绑定有什么区别？"><AppIcon name="info" />查询说明</summary><p v-if="message" class="muted">{{ message }}</p><p class="muted">查询只显示官方观察状态。预约偏好请使用“选择预约”，该页面不写计划或下单。</p></details>
    </template>
   </div>
  </section>

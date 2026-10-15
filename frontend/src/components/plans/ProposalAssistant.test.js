@@ -5,20 +5,20 @@ import { intent, plan } from './testFixtures.js';
 
 enableAutoUnmount(afterEach);
 const proposal={intent:{...intent,venue_preference:'AI场馆意向'},context:{},kind:'unbound_draft',plan_id:null,base_version:null,before_intent:null,changes:[{field:'venue_preference',before:'',after:'AI场馆意向'}],booking_window:{can_book:false},provider:{name:'Test provider',model:'test-model'},can_book:false,can_pay:false,can_create_job:false,can_query_upstream:false};
-function fixture({plans=[],proposalResult={status:'ready',questions:[],proposal},planOverrides={}}={}){
+function fixture({plans=[],proposalResult={status:'ready',questions:[],proposal},planOverrides={},credentialId='credential-a'}={}){
  const saved=plan(2,{venue_preference:'AI场馆意向'});
  const planApi={get:vi.fn(async()=>({plan:plan(3,{venue_preference:'latest venue'})})),create:vi.fn(async()=>({plan:saved})),update:vi.fn(async()=>({plan:saved})),...planOverrides};
  const proposalApi={generate:vi.fn(async()=>structuredClone(proposalResult))};
  const session=reactive({status:'authenticated',user:{user_id:'owner'},csrfToken:'csrf-a'});
- return {planApi,proposalApi,session,plans};
+ return {planApi,proposalApi,session,plans,credentialId};
 }
-async function mountAssistant(config=fixture()) {const {default:component}=await import('./ProposalAssistant.vue');const wrapper=mount(component,{props:{plans:config.plans,planApi:config.planApi,proposalApi:config.proposalApi,session:config.session},global:{stubs:{RouterLink:{template:'<a><slot /></a>'}}}});await flushPromises();return {wrapper,...config};}
+async function mountAssistant(config=fixture()) {const {default:component}=await import('./ProposalAssistant.vue');const wrapper=mount(component,{props:{plans:config.plans,planApi:config.planApi,proposalApi:config.proposalApi,session:config.session,credentialId:config.credentialId},global:{stubs:{RouterLink:{template:'<a><slot /></a>'}}}});await flushPromises();return {wrapper,...config};}
 
 describe('proposal assistant',()=>{
  it('previews a ready result and waits for explicit confirmation before saving',async()=>{
   const {wrapper,planApi,proposalApi}=await mountAssistant();await wrapper.get('[data-testid="proposal-message"]').setValue('新建周末意向');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-  expect(proposalApi.generate).toHaveBeenCalledWith('新建周末意向',null,null);expect(wrapper.text()).toContain('建议预览');expect(wrapper.text()).toContain('AI场馆意向');expect(wrapper.text()).toContain('确认后仅保存预约意向，不会预约或付款。');expect(planApi.create).not.toHaveBeenCalled();
-  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.create).toHaveBeenCalledWith(proposal.intent);expect(wrapper.text()).toContain('预约意向已保存');
+  expect(proposalApi.generate).toHaveBeenCalledWith('新建周末意向',null,null,undefined,undefined,'credential-a');expect(wrapper.text()).toContain('建议预览');expect(wrapper.text()).toContain('AI场馆意向');expect(wrapper.text()).toContain('确认后仅保存预约意向，不会预约或付款。');expect(planApi.create).not.toHaveBeenCalled();
+  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.create).toHaveBeenCalledWith(proposal.intent,'credential-a');expect(wrapper.text()).toContain('预约意向已保存');
  });
  it('keeps the save notice when the parent list refreshes to the version just saved',async()=>{
   const config=fixture({plans:[plan(1)]});const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('更新现有意向');await wrapper.get('[data-testid="proposal-target"]').setValue('synthetic-plan');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('预约意向已保存 · 版本 2');
@@ -84,8 +84,8 @@ describe('proposal assistant',()=>{
   await wrapper.get('[data-testid="proposal-answer"]').setValue('东区体育馆');await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
   expect(wrapper.text()).toContain('东区体育馆');expect(wrapper.text()).toContain('场地？');
   await wrapper.get('[data-testid="proposal-answer"]').setValue('6号场优先');await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
-  expect(proposalApi.generate).toHaveBeenLastCalledWith('下周六18:00打两个小时',null,null,['东区体育馆','6号场优先'],[['场馆？'],['场地？']]);expect(planApi.create).not.toHaveBeenCalled();
-  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.create).toHaveBeenCalledOnce();
+  expect(proposalApi.generate).toHaveBeenLastCalledWith('下周六18:00打两个小时',null,null,['东区体育馆','6号场优先'],[['场馆？'],['场地？']],'credential-a');expect(planApi.create).not.toHaveBeenCalled();
+  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.create).toHaveBeenCalledWith(proposal.intent,'credential-a');
  });
  it('retains the conversation version on followup and requires explicit latest read after 409',async()=>{
   const config=fixture({plans:[plan(1)]});config.proposalApi.generate=vi.fn().mockResolvedValueOnce({status:'needs_input',questions:['几点？'],proposal:null}).mockRejectedValueOnce({code:'plan_version_conflict',status:409}).mockResolvedValueOnce({status:'needs_input',questions:['请确认？'],proposal:null});

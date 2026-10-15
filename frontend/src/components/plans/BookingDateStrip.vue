@@ -1,19 +1,28 @@
 <script setup>
 import { computed } from 'vue';
 import AppIcon from '../AppIcon.vue';
-const props=defineProps({state:{type:Object,default:null},modelValue:{type:String,default:''},busy:Boolean});
+// Show one useful date beyond the three-day strip: the selected custom date,
+// or (when viewing the short window) the first later date with a saved queue.
+const props=defineProps({state:{type:Object,default:null},modelValue:{type:String,default:''},busy:Boolean,extraDate:{type:String,default:''}});
 const emit=defineEmits(['update:modelValue','refresh']);
 const dates=computed(()=>(props.state?.queryable_target_dates||[]).slice(0,3));
+const extraDate=computed(()=>{
+ const selected=props.modelValue;
+ if(selected&&!dates.value.includes(selected))return selected;
+ const candidate=props.extraDate;
+ return candidate&&candidate>=(dates.value.at(-1)||'')&&!dates.value.includes(candidate)?candidate:'';
+});
 function choose(date){if(date===props.modelValue)emit('refresh');else emit('update:modelValue',date);}
-const labels=['今天','明天','后天'];
 function weekday(value){return new Intl.DateTimeFormat('zh-CN',{weekday:'short',timeZone:'UTC'}).format(new Date(`${value}T12:00:00Z`));}
+function monthDay(value){return value.slice(5).replace('-','/')}
 </script>
 <template>
- <section class="booking-date-strip" aria-label="人工查看日期">
-  <p v-if="!state" class="muted" role="status">正在读取日期…</p>
+ <section class="booking-date-strip" aria-label="预约日期">
+  <p v-if="!props.state" class="muted" role="status">正在读取日期…</p>
   <div class="date-strip-options">
-   <button v-for="(date,index) in dates" :key="date" type="button" :data-testid="`browse-date-${index}`" :aria-pressed="modelValue===date" :disabled="busy" :title="`${date} ${weekday(date)}${index===2?'（默认）':''}`" @click="choose(date)"><span>{{ labels[index] }}</span><strong>{{ date.slice(5).replace('-','/') }}</strong></button>
-   <label class="more-date" :title="state?.business_timezone_name"><AppIcon name="calendar" /><input data-testid="browse-more-date" type="date" aria-label="更多查看日期" :value="modelValue" :disabled="busy || !state" @input="choose($event.target.value)" /></label>
+   <button v-for="(date,index) in dates" :key="date" type="button" :data-testid="`browse-date-${index}`" :aria-pressed="props.modelValue===date" :disabled="props.busy" :title="`${date} ${weekday(date)}${index===2?'（默认）':''}`" @click="choose(date)"><span>{{ weekday(date) }}</span><strong>{{ monthDay(date) }}</strong></button>
+   <button v-if="extraDate" type="button" class="extra-date-button" data-testid="browse-date-extra" :aria-pressed="props.modelValue===extraDate" :disabled="props.busy" :title="`${extraDate} ${weekday(extraDate)}`" @click="choose(extraDate)"><span>{{ weekday(extraDate) }}</span><strong>{{ monthDay(extraDate) }}</strong></button>
+   <label class="more-date" :title="props.state?.business_timezone_name"><AppIcon name="calendar" /><input data-testid="browse-more-date" type="date" aria-label="更多查看日期" :value="props.modelValue" :disabled="props.busy || !props.state" @input="choose($event.target.value)" /></label>
    <slot name="actions" />
   </div>
  </section>

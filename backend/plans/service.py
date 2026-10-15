@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 import uuid
 from contextlib import closing, contextmanager
@@ -27,6 +28,7 @@ _CURRENT = """SELECT p.*, r.intent_json, r.intent_sha256, r.revision_number,
               ON r.revision_id=p.current_revision_id AND r.plan_id=p.plan_id
                  AND r.user_id=p.user_id AND r.revision_number=p.version
               WHERE p.user_id=?"""
+_SCOPE_UNSPECIFIED = object()
 
 
 class PlanService:
@@ -64,50 +66,89 @@ class PlanService:
             raise PlanError("plan_not_found", 404)
         return row
 
-    def _dto(self, row, now):
+    @staticmethod
+    def _credential_scope_tag(user_id, credential_id):
+        if not isinstance(credential_id, str) or not credential_id:
+            return None
+        material = f"yumao:credential-plan-scope:v1\0{user_id}\0{credential_id}".encode("utf-8")
+        return hashlib.sha256(material).hexdigest()[:32]
+
+    @staticmethod
+    def _stored_scope_tag(plan_id):
+        if not isinstance(plan_id, str):
+            return None
+        parts = plan_id.split(":")
+        if len(parts) == 3 and parts[0] in {"agent-v1", "manual-queue-v2"} and re.fullmatch(r"[0-9a-f]{32}", parts[1]):
+            return parts[1]
+        return None
+
+    @classmethod
+    def _matches_scope(cls, user_id, plan_id, credential_id):
+        stored = cls._stored_scope_tag(plan_id)
+        return stored is None or stored == cls._credential_scope_tag(user_id, credential_id)
+
+    @classmethod
+    def _assert_scope(cls, user_id, plan_id, credential_id):
+        if not cls._matches_scope(user_id, plan_id, credential_id):
+            raise PlanError("plan_not_found", 404)
+
+    def _dto(self, row, now, credential_id=None):
         snapshot = json.loads(row["intent_json"])
+        scoped_credential = credential_id if self._stored_scope_tag(row["plan_id"]) == self._credential_scope_tag(row["user_id"], credential_id) else None
         return {
             "plan_id": row["plan_id"], "version": row["version"], "current_revision_id": row["current_revision_id"],
             "created_at_utc_ms": row["created_at_utc_ms"], "updated_at_utc_ms": row["updated_at_utc_ms"],
+            "credential_id": scoped_credential,
             "intent_sha256": row["intent_sha256"], **snapshot,
             "can_query_upstream": False, "can_book": False, "can_pay": False, "can_create_job": False,
             "booking_window": describe_window(self.policy, date.fromisoformat(snapshot["intent"]["target_date"]), now, snapshot["context"]["timezone_name"]),
         }
 
-    def create_plan(self, user_id: str, payload: dict, now_utc_ms: int) -> dict:
+    def create_plan(self, user_id: str, payload: dict, now_utc_ms: int, credential_id=None) -> dict:
         snapshot = self._parse(payload, self.active_context, now_utc_ms)
-        plan_id, revision_id = str(uuid.uuid4()), str(uuid.uuid4())
+        scope_tag = self._credential_scope_tag(user_id, credential_id)
+        plan_id = f"agent-v1:{scope_tag}:{uuid.uuid4()}" if scope_tag else str(uuid.uuid4())
+        revision_id = str(uuid.uuid4())
         with self._transaction() as db:
             db.execute("INSERT INTO booking_plans VALUES (?,?,?,?,?,?)", (plan_id, user_id, revision_id, 1, now_utc_ms, now_utc_ms))
             db.execute("INSERT INTO booking_plan_revisions VALUES (?,?,?,?,?,?,?,?)", (revision_id, plan_id, user_id, 1, snapshot.canonical_json, snapshot.sha256, user_id, now_utc_ms))
-            result = self._dto(self._owned(db, user_id, plan_id), now_utc_ms)
+            result = self._dto(self._owned(db, user_id, plan_id), now_utc_ms, credential_id)
         return result
 
-    def list_plans(self, user_id: str, now_utc_ms: int | None = None) -> list[dict]:
+    def list_plans(self, user_id: str, now_utc_ms: int | None = None, credential_id=None) -> list[dict]:
         now = now_utc_ms if now_utc_ms is not None else time.time_ns() // 1_000_000
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
-            return [self._dto(row, now) for row in db.execute(_CURRENT + " ORDER BY p.updated_at_utc_ms DESC,p.plan_id", (user_id,)) if json.loads(row["intent_json"])["kind"] != QUEUE_KIND and not json.loads(row["intent_json"]).get("deleted", False)]
+            rows = db.execute(_CURRENT + " ORDER BY p.updated_at_utc_ms DESC,p.plan_id", (user_id,))
+            return [self._dto(row, now, credential_id) for row in rows
+                    if json.loads(row["intent_json"])["kind"] != QUEUE_KIND
+                    and not json.loads(row["intent_json"]).get("deleted", False)
+                    and (credential_id is None or self._stored_scope_tag(row["plan_id"]) in
+                         (None, self._credential_scope_tag(user_id, credential_id)))]
 
-    def get_plan(self, user_id: str, plan_id: str, now_utc_ms: int | None = None) -> dict:
+    def get_plan(self, user_id: str, plan_id: str, now_utc_ms: int | None = None, credential_id=_SCOPE_UNSPECIFIED) -> dict:
         now = now_utc_ms if now_utc_ms is not None else time.time_ns() // 1_000_000
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
+            if credential_id is not _SCOPE_UNSPECIFIED:
+                self._assert_scope(user_id, plan_id, credential_id)
             row = self._owned(db, user_id, plan_id)
             if json.loads(row["intent_json"])["kind"] == QUEUE_KIND or json.loads(row["intent_json"]).get("deleted", False):
                 raise PlanError("plan_not_found", 404)
-            return self._dto(row, now)
+            return self._dto(row, now, None if credential_id is _SCOPE_UNSPECIFIED else credential_id)
 
-    def list_revisions(self, user_id: str, plan_id: str, now_utc_ms: int | None = None) -> list[dict]:
+    def list_revisions(self, user_id: str, plan_id: str, now_utc_ms: int | None = None, credential_id=None) -> list[dict]:
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
+            self._assert_scope(user_id, plan_id, credential_id)
             current = self._owned(db, user_id, plan_id)
             if json.loads(current["intent_json"])["kind"] == QUEUE_KIND:
                 raise PlanError("plan_not_found", 404)
             rows = db.execute("SELECT revision_id, revision_number,intent_json,intent_sha256,created_at_utc_ms FROM booking_plan_revisions WHERE user_id=? AND plan_id=? ORDER BY revision_number DESC", (user_id, plan_id)).fetchall()
             return [{"revision_id": row["revision_id"], "revision_number": row["revision_number"], "created_at_utc_ms": row["created_at_utc_ms"], "intent_sha256": row["intent_sha256"], **json.loads(row["intent_json"])} for row in rows]
 
-    def update_plan(self, user_id: str, plan_id: str, base_version: int, payload: dict, now_utc_ms: int) -> dict:
+    def update_plan(self, user_id: str, plan_id: str, base_version: int, payload: dict, now_utc_ms: int, credential_id=None) -> dict:
         if type(base_version) is not int or not 1 <= base_version <= 9007199254740991:
             raise PlanError("invalid_plan", 400, {"base_version": "请提供有效的计划版本。"})
         with self._transaction() as db:
+            self._assert_scope(user_id, plan_id, credential_id)
             current = self._owned(db, user_id, plan_id)
             if current["version"] != base_version:
                 raise PlanError("plan_version_conflict", 409)
@@ -117,29 +158,34 @@ class PlanService:
             context = PlanInterpretationContext(saved["timezone_name"], saved["currency_code"], saved["currency_minor_unit_exponent"])
             snapshot = self._parse(payload, context, now_utc_ms, json.loads(current["intent_json"])["intent"]["target_date"])
             if snapshot.canonical_json == current["intent_json"]:
-                return self._dto(current, now_utc_ms)
+                return self._dto(current, now_utc_ms, credential_id)
             revision_id = str(uuid.uuid4())
             db.execute("INSERT INTO booking_plan_revisions VALUES (?,?,?,?,?,?,?,?)", (revision_id, plan_id, user_id, base_version + 1, snapshot.canonical_json, snapshot.sha256, user_id, now_utc_ms))
             changed = db.execute("UPDATE booking_plans SET current_revision_id=?, version=version+1,updated_at_utc_ms=? WHERE user_id=? AND plan_id=? AND version=?", (revision_id, now_utc_ms, user_id, plan_id, base_version))
             if changed.rowcount != 1:
                 raise PlanError("plan_version_conflict", 409)
-            result = self._dto(self._owned(db, user_id, plan_id), now_utc_ms)
+            result = self._dto(self._owned(db, user_id, plan_id), now_utc_ms, credential_id)
         return result
 
 
-    @staticmethod
-    def _queue_id(user_id, target_date):
+    @classmethod
+    def _queue_id(cls, user_id, target_date, credential_id=None):
         # Deterministic identity prevents duplicate creations after a lost response.
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"yumao:manual-queue:v1:{user_id}:{target_date}"))
+        if credential_id is None:
+            return str(uuid.uuid5(uuid.NAMESPACE_URL, f"yumao:manual-queue:v1:{user_id}:{target_date}"))
+        tag = cls._credential_scope_tag(user_id, credential_id)
+        stable_id = uuid.uuid5(uuid.NAMESPACE_URL, f"yumao:manual-queue:v2:{user_id}:{credential_id}:{target_date}")
+        return f"manual-queue-v2:{tag}:{stable_id}"
 
-    def _queue_dto(self, row):
+    def _queue_dto(self, row, credential_id=None):
         snapshot = json.loads(row["intent_json"])
+        scoped_credential = credential_id if self._stored_scope_tag(row["plan_id"]) == self._credential_scope_tag(row["user_id"], credential_id) else None
         now = time.time_ns() // 1_000_000
         today = BookingWindowPolicy(snapshot["context"]["timezone_name"]).business_date_at_utc(now)
         within_window = date.fromisoformat(snapshot["target_date"]) in self.policy.queryable_target_dates(now)
         state = ("deleted" if snapshot.get("deleted") else "expired" if snapshot["target_date"] < today.isoformat()
                  else "draft" if within_window else "outside_window")
-        return {"plan_id": row["plan_id"], "version": row["version"],
+        return {"plan_id": row["plan_id"], "credential_id": scoped_credential, "version": row["version"],
                 "current_revision_id": row["current_revision_id"], "intent_sha256": row["intent_sha256"],
                 "updated_at_utc_ms": row["updated_at_utc_ms"], **snapshot,
                 "plan_status": state, "execution_state": "not_started",
@@ -147,28 +193,32 @@ class PlanService:
                                        and not snapshot.get("deleted", False)),
                 "can_query_upstream": False, "can_book": False, "can_pay": False, "can_create_job": False}
 
-    def get_manual_queue(self, user_id, target_date):
+    def get_manual_queue(self, user_id, target_date, credential_id=None):
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
-            row = db.execute(_CURRENT + " AND p.plan_id=?", (user_id, self._queue_id(user_id, target_date))).fetchone()
-            return self._queue_dto(row) if row else None
+            row = db.execute(_CURRENT + " AND p.plan_id=?", (user_id, self._queue_id(user_id, target_date, credential_id))).fetchone()
+            return self._queue_dto(row, credential_id) if row else None
 
-    def list_manual_queues(self, user_id):
+    def list_manual_queues(self, user_id, credential_id=None):
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
-            return [self._queue_dto(row) for row in db.execute(_CURRENT + " ORDER BY p.updated_at_utc_ms DESC,p.plan_id", (user_id,))
-                    if json.loads(row["intent_json"])["kind"] == QUEUE_KIND and not json.loads(row["intent_json"]).get("deleted", False)]
+            rows = db.execute(_CURRENT + " ORDER BY p.updated_at_utc_ms DESC,p.plan_id", (user_id,))
+            return [self._queue_dto(row, credential_id) for row in rows
+                    if json.loads(row["intent_json"])["kind"] == QUEUE_KIND
+                    and not json.loads(row["intent_json"]).get("deleted", False)
+                    and (credential_id is None or self._stored_scope_tag(row["plan_id"]) in
+                         (None, self._credential_scope_tag(user_id, credential_id)))]
 
-    def manual_queue_revisions(self, user_id, target_date):
-        identifier = self._queue_id(user_id, target_date)
+    def manual_queue_revisions(self, user_id, target_date, credential_id=None):
+        identifier = self._queue_id(user_id, target_date, credential_id)
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
             self._owned(db, user_id, identifier)
             rows = db.execute("SELECT revision_id, revision_number,intent_json,created_at_utc_ms FROM booking_plan_revisions WHERE user_id=? AND plan_id=? ORDER BY revision_number DESC", (user_id, identifier)).fetchall()
             return [{"revision_id": row["revision_id"], "revision_number": row["revision_number"],
                      "created_at_utc_ms": row["created_at_utc_ms"], **json.loads(row["intent_json"])} for row in rows]
 
-    def save_manual_queue(self, user_id, target_date, base_version, entries, now):
+    def save_manual_queue(self, user_id, target_date, base_version, entries, now, credential_id=None):
         if type(base_version) is not int or not 0 <= base_version <= 9007199254740991:
             raise PlanError("invalid_plan", 400)
-        identifier = self._queue_id(user_id, target_date)
+        identifier = self._queue_id(user_id, target_date, credential_id)
         with self._transaction() as db:
             row = db.execute(_CURRENT + " AND p.plan_id=?", (user_id, identifier)).fetchone()
             if (row["version"] if row else 0) != base_version:
@@ -181,7 +231,7 @@ class PlanService:
                 raise PlanError("invalid_plan", 400, exc.fields) from exc
             encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
             if row and encoded == row["intent_json"]:
-                return self._queue_dto(row)
+                return self._queue_dto(row, credential_id)
             revision_id = str(uuid.uuid4())
             if not row:
                 db.execute("INSERT INTO booking_plans VALUES (?,?,?,?,?,?)", (identifier, user_id, revision_id, 1, now, now))
@@ -190,30 +240,32 @@ class PlanService:
                 changed = db.execute("UPDATE booking_plans SET current_revision_id=?, version=version+1,updated_at_utc_ms=? WHERE user_id=? AND plan_id=? AND version=?", (revision_id, now, user_id, identifier, base_version))
                 if changed.rowcount != 1:
                     raise PlanError("plan_version_conflict", 409)
-            return self._queue_dto(self._owned(db, user_id, identifier))
+            return self._queue_dto(self._owned(db, user_id, identifier), credential_id)
 
 
-    def delete_plan(self, user_id, plan_id, base_version, now):
+    def delete_plan(self, user_id, plan_id, base_version, now, credential_id=None):
         if type(base_version) is not int or not 1 <= base_version <= 9007199254740991:
             raise PlanError("invalid_plan", 400)
         with self._transaction() as db:
+            self._assert_scope(user_id, plan_id, credential_id)
             row = self._owned(db, user_id, plan_id)
             snapshot = json.loads(row["intent_json"])
             if snapshot["kind"] == QUEUE_KIND or snapshot.get("deleted"):
                 raise PlanError("plan_not_found", 404)
             self._delete_snapshot(db, row, snapshot, base_version, now)
 
-    def delete_manual_queue(self, user_id, target_date, base_version, now):
+    def delete_manual_queue(self, user_id, target_date, base_version, now, credential_id=None):
         if type(base_version) is not int or not 1 <= base_version <= 9007199254740991:
             raise PlanError("invalid_plan", 400)
         with self._transaction() as db:
-            row = self._owned(db, user_id, self._queue_id(user_id, target_date))
+            self._assert_scope(user_id, self._queue_id(user_id, target_date, credential_id), credential_id)
+            row = self._owned(db, user_id, self._queue_id(user_id, target_date, credential_id))
             snapshot = json.loads(row["intent_json"])
             if snapshot.get("deleted") and row["version"] == base_version:
-                return self._queue_dto(row)
+                return self._queue_dto(row, credential_id)
             snapshot["candidates"] = []
             self._delete_snapshot(db, row, snapshot, base_version, now)
-            return self._queue_dto(self._owned(db, user_id, row["plan_id"]))
+            return self._queue_dto(self._owned(db, user_id, row["plan_id"]), credential_id)
 
     def _delete_snapshot(self, db, row, snapshot, base_version, now):
         if row["version"] != base_version:

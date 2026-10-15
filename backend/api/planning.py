@@ -34,14 +34,18 @@ def _storage(_exc):
 @require_session
 @require_csrf
 def proposals():
-    body = _body({"message", "plan_id", "base_version"}, {"message", "plan_id", "base_version", "answers", "follow_up_questions"})
+    body = _body({"message", "plan_id", "base_version"}, {"message", "plan_id", "base_version", "answers", "follow_up_questions", "credential_id"})
     if "answers" in body and type(body["answers"]) is not list:
         raise PlanError("invalid_planning_request", 400)
     user_id = g.session_context.user.user_id
+    credential_id = body.get("credential_id")
+    if credential_id is not None:
+        if type(credential_id) is not str or not credential_id or current_app.extensions["credential_service"].get_for_user(user_id, credential_id) is None:
+            raise PlanError("credential_not_found", 404)
     with current_app.extensions["ai_call_guard"].hold(user_id):
         result = current_app.extensions["planning_service"].propose(
             user_id, body["message"], body["plan_id"], body["base_version"],
             time.time_ns() // 1_000_000, answers=body.get("answers"),
-            follow_up_questions=body.get("follow_up_questions"),
+            follow_up_questions=body.get("follow_up_questions"), credential_id=credential_id,
         )
     return jsonify(result)

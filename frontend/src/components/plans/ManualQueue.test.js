@@ -4,6 +4,7 @@ import { defineComponent, reactive, ref } from 'vue';
 import ManualQueueGrid from './ManualQueueGrid.vue';
 import ManualQueuePreview from './ManualQueuePreview.vue';
 import ManualQueueWorkspace from './ManualQueueWorkspace.vue';
+import BookingDateStrip from './BookingDateStrip.vue';
 import PlanCredentialControl from './PlanCredentialControl.vue';
 import { useManualQueue } from '../../composables/useManualQueue.js';
 
@@ -13,21 +14,23 @@ const queue=(entries,version=1)=>({version,target_date:'2026-10-20',candidates:e
 const session=()=>reactive({status:'authenticated',user:{user_id:'a'},csrfToken:'a',invalidationEpoch:0});
 async function setup(overrides={},account=session()){
  const api={queue:vi.fn(async()=>({queue:null})),queues:vi.fn(async()=>({queues:[]})),saveQueue:vi.fn(async(_date,base,entries)=>({queue:queue(entries,base+1)})),...overrides};
- let state;const date=ref('2026-10-20');
- const wrapper=mount(defineComponent({setup(){state=useManualQueue(api,account,()=>date.value);return{};},template:'<div />'}));await flushPromises();return{state,api,account,date,wrapper};
+ let state;const date=ref('2026-10-20'),credential=ref('credential-a');
+ const wrapper=mount(defineComponent({setup(){state=useManualQueue(api,account,()=>date.value,()=>credential.value);return{};},template:'<div />'}));await flushPromises();return{state,api,account,date,credential,wrapper};
 }
 
 describe('manual queue interactions',()=>{
- it('adds a full continuous two-hour block from one start cell and cancels exact candidate',async()=>{
+ it('renders 09:00–22:00 and adds or cancels continuous hour candidates',async()=>{
   const wrapper=mount(ManualQueueGrid,{props:{courtNames:['已占用观察场','活动观察场'],entries:[],duration:120}});
-  await wrapper.get('[data-testid="queue-cell-18-0"]').trigger('click');
-  expect(wrapper.findAll('tbody tr')).toHaveLength(24);
+  expect(wrapper.findAll('tbody tr')).toHaveLength(13);
+  expect(wrapper.find('tbody tr:first-child th').text()).toBe('09:00–10:00');
+  expect(wrapper.find('tbody tr:last-child th').text()).toBe('21:00–22:00');
+  await wrapper.get('[data-testid="queue-cell-9-0"]').trigger('click');
   expect(wrapper.emitted('change')[0][0]).toEqual([entry('已占用观察场')]);
   await wrapper.setProps({entries:[entry('已占用观察场')]});
-  expect(wrapper.get('[data-testid="queue-cell-19-0"]').attributes('aria-pressed')).toBe('true');
-  await wrapper.get('[data-testid="queue-cell-18-0"]').trigger('click');expect(wrapper.emitted('change').at(-1)[0]).toEqual([]);
-  await wrapper.get('[data-testid="queue-cell-23-1"]').trigger('click');expect(wrapper.text()).toContain('两个连续小时');
-  await wrapper.setProps({duration:60});await wrapper.get('[data-testid="queue-cell-23-1"]').trigger('click');expect(wrapper.emitted('change').at(-1)[0]).toContainEqual(entry('活动观察场',60,'23:00'));
+  expect(wrapper.get('[data-testid="queue-cell-10-0"]').attributes('aria-pressed')).toBe('true');
+  await wrapper.get('[data-testid="queue-cell-9-0"]').trigger('click');expect(wrapper.emitted('change').at(-1)[0]).toEqual([]);
+  await wrapper.get('[data-testid="queue-cell-12-1"]').trigger('click');expect(wrapper.text()).toContain('两个连续小时');
+  await wrapper.setProps({duration:60});await wrapper.get('[data-testid="queue-cell-12-1"]').trigger('click');expect(wrapper.emitted('change').at(-1)[0]).toContainEqual(entry('活动观察场',60,'21:00'));
  });
  it('reorders only inside its group and removes one candidate without affecting the other queue',async()=>{
   const wrapper=mount(ManualQueuePreview,{props:{entries:[entry('首选'),entry('备选'),entry('一小时',60)]}});
@@ -43,11 +46,31 @@ describe('manual queue interactions',()=>{
  });
 });
 
+describe('weekday date strip',()=>{
+ const state={business_timezone_name:'Asia/Shanghai',queryable_target_dates:['2026-10-15','2026-10-16','2026-10-17']};
+ it('shows weekday labels and only one later queue date',async()=>{
+  const wrapper=mount(BookingDateStrip,{props:{state,modelValue:'2026-10-15',extraDate:'2026-10-20'}});
+  expect(wrapper.get('[data-testid="browse-date-0"]').text()).toContain('周四');
+  expect(wrapper.get('[data-testid="browse-date-0"]').text()).toContain('10/15');
+  expect(wrapper.findAll('[data-testid^="browse-date-"]')).toHaveLength(4);
+  expect(wrapper.get('[data-testid="browse-date-extra"]').text()).toContain('周二');
+  await wrapper.get('[data-testid="browse-date-extra"]').trigger('click');
+  expect(wrapper.emitted('update:modelValue').at(-1)).toEqual(['2026-10-20']);
+ });
+ it('shows a selected custom date and hides the extra date when neither applies',()=>{
+  const selected=mount(BookingDateStrip,{props:{state,modelValue:'2026-10-18'}});
+  expect(selected.get('[data-testid="browse-date-extra"]').text()).toContain('周日');
+  expect(selected.get('[data-testid="browse-date-extra"]').text()).toContain('10/18');
+  const plain=mount(BookingDateStrip,{props:{state,modelValue:'2026-10-15'}});
+  expect(plain.find('[data-testid="browse-date-extra"]').exists()).toBe(false);
+ });
+});
+
 describe('automatic persistence',()=>{
  it('coalesces edits, preserves priority and uses returned base version',async()=>{
   vi.useFakeTimers();const {state,api}=await setup();state.change([entry('1h',60)]);state.change([entry('1h',60),entry('2h')]);
   expect(api.saveQueue).not.toHaveBeenCalled();await vi.advanceTimersByTimeAsync(451);await flushPromises();
-  expect(api.saveQueue.mock.calls[0]).toEqual(['2026-10-20',0,[entry('2h'),entry('1h',60)]]);expect(state.version).toBe(1);expect(state.dirty).toBe(false);
+  expect(api.saveQueue.mock.calls[0]).toEqual(['2026-10-20',0,[entry('2h'),entry('1h',60)],'credential-a']);expect(state.version).toBe(1);expect(state.dirty).toBe(false);
   state.change([entry('2h')]);await vi.advanceTimersByTimeAsync(451);expect(api.saveQueue.mock.calls[1][1]).toBe(1);
  });
  it('serializes changes during save rather than losing the later selection',async()=>{

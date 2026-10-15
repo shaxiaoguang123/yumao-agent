@@ -7,7 +7,7 @@ import BookingWindowStatus from './BookingWindowStatus.vue';
 import ConversationFollowUp from './ConversationFollowUp.vue';
 import { providerErrorMessage } from '../../api/providerErrors.js';
 
-const props=defineProps({plans:{type:Array,default:()=>[]},planApi:{type:Object,required:true},proposalApi:{type:Object,required:true},session:{type:Object,required:true}});
+const props=defineProps({plans:{type:Array,default:()=>[]},planApi:{type:Object,required:true},proposalApi:{type:Object,required:true},session:{type:Object,required:true},credentialId:{type:String,default:''}});
 const emit=defineEmits(['saved','refresh-request']);
 const message=ref(''),targetId=shallowRef(''),proposal=shallowRef(null),status=shallowRef('idle');
 const questions=ref([]),error=shallowRef(''),savedNotice=shallowRef(''),latest=shallowRef(null),latestError=shallowRef('');
@@ -23,16 +23,16 @@ const targetChanged=computed(()=>Boolean(generatedFor.value)&&(
  || (currentTarget.value&&selectedPlan.value&&generatedFor.value.listVersion!==selectedPlan.value.version)
  || generatedFor.value.message!==message.value.trim()
 ));
-const canSave=computed(()=>status.value==='ready'&&proposal.value?.can_book===false&&generatedFor.value&&!targetChanged.value&&!needsRegeneration.value&&!uncertainSave.value&&!busySaving.value);
+const canSave=computed(()=>status.value==='ready'&&proposal.value?.can_book===false&&generatedFor.value&&(generatedFor.value.planId||generatedFor.value.credentialId)&&!targetChanged.value&&!needsRegeneration.value&&!uncertainSave.value&&!busySaving.value);
 const questionList=computed(()=>Array.isArray(questions.value)?questions.value:[]);
 let alive=true,epoch=0,requestId=0;
 const authorized=()=>props.session.status==='authenticated'&&Boolean(props.session.user?.user_id);
 function valid(generation,userId,csrfToken){return alive&&generation===epoch&&authorized()&&props.session.user?.user_id===userId&&props.session.csrfToken===csrfToken;}
 function resetForSession(values,previous){
  epoch++;requestId++;proposal.value=null;generatedFor.value=null;status.value='idle';questions.value=[];latest.value=null;latestError.value='';error.value='';savedNotice.value='';needsRegeneration.value=false;uncertainSave.value=false;verificationLoading.value=false;verificationComplete.value=false;verificationResult.value=null;ownSavedVersion.value=null;busySaving.value=false;answers.value=[];questionHistory.value=[];answer.value='';conversationBase.value=null;
- if(previous&&(previous[1]!==values[1]||values[0]!=='authenticated')){message.value='';targetId.value='';}
+ if(previous&&(previous[1]!==values[1]||previous[3]!==values[3]||values[0]!=='authenticated')){message.value='';targetId.value='';}
 }
-watch(()=>[props.session.status,props.session.user?.user_id,props.session.csrfToken],resetForSession,{flush:'sync'});
+watch(()=>[props.session.status,props.session.user?.user_id,props.session.csrfToken,props.credentialId],resetForSession,{flush:'sync'});
 watch(()=>[message.value,targetId.value,selectedPlan.value?.version],(current,previous)=>{
  requestId++;
  if(status.value==='generating')status.value='idle';
@@ -82,15 +82,18 @@ async function generate({forceLatest=false,latestPlan=null,supplement=false}={})
  status.value='generating';error.value='';savedNotice.value='';latestError.value='';proposal.value=null;generatedFor.value=null;needsRegeneration.value=false;uncertainSave.value=false;verificationComplete.value=false;verificationResult.value=null;
  try{
   let plan=latestPlan;
-  if(selectedId&&!conversationBase.value&&!plan){const response=await props.planApi.get(selectedId);if(!valid(generation,id,csrf)||sequence!==requestId)return;plan=response.plan;}
+  if(selectedId&&!conversationBase.value&&!plan){const scope=selectedPlan.value?.credential_id;const response=scope?await props.planApi.get(selectedId,scope):await props.planApi.get(selectedId);if(!valid(generation,id,csrf)||sequence!==requestId)return;plan=response.plan;}
   if(!conversationBase.value||forceLatest)conversationBase.value={planId:selectedId,version:plan?.version??null};
   if(forceLatest&&plan)latest.value=plan;
   const baseVersion=conversationBase.value.version;
-  const result=nextAnswers.length?await props.proposalApi.generate(userMessage,selectedId,baseVersion,nextAnswers,nextQuestions):await props.proposalApi.generate(userMessage,selectedId,baseVersion);
+  const scopedCredentialId=selectedId?(plan?.credential_id||selectedPlan.value?.credential_id||null):(props.credentialId||null);
+  const result=scopedCredentialId
+   ? (nextAnswers.length?await props.proposalApi.generate(userMessage,selectedId,baseVersion,nextAnswers,nextQuestions,scopedCredentialId):await props.proposalApi.generate(userMessage,selectedId,baseVersion,undefined,undefined,scopedCredentialId))
+   : (nextAnswers.length?await props.proposalApi.generate(userMessage,selectedId,baseVersion,nextAnswers,nextQuestions):await props.proposalApi.generate(userMessage,selectedId,baseVersion));
   if(!valid(generation,id,csrf)||sequence!==requestId)return;
   answers.value=nextAnswers;questionHistory.value=nextQuestions;if(supplement)answer.value='';
   proposal.value=result.proposal;questions.value=result.questions||[];status.value=result.status;
-  generatedFor.value={message:userMessage,planId:selectedId,baseVersion:result.proposal?.base_version??baseVersion,listVersion};
+  generatedFor.value={message:userMessage,planId:selectedId,credentialId:scopedCredentialId,baseVersion:result.proposal?.base_version??baseVersion,listVersion};
   if(forceLatest&&plan)latest.value=plan;
  }catch(err){
   if(!valid(generation,id,csrf)||sequence!==requestId)return;
@@ -102,7 +105,7 @@ async function readLatestAndRegenerate(){
  if(!targetId.value||!authorized()||busySaving.value)return;
  const generation=epoch,id=props.session.user.user_id,csrf=props.session.csrfToken,sequence=requestId,selected=targetId.value,capturedMessage=message.value.trim();
  latest.value=null;latestError.value='';error.value='';needsRegeneration.value=true;
- try{const result=await props.planApi.get(selected);if(!valid(generation,id,csrf)||sequence!==requestId||selected!==targetId.value||capturedMessage!==message.value.trim())return;latest.value=result.plan;await generate({forceLatest:true,latestPlan:result.plan,supplement:Boolean(answer.value.trim())});}
+ try{const scope=selectedPlan.value?.credential_id;const result=scope?await props.planApi.get(selected,scope):await props.planApi.get(selected);if(!valid(generation,id,csrf)||sequence!==requestId||selected!==targetId.value||capturedMessage!==message.value.trim())return;latest.value=result.plan;await generate({forceLatest:true,latestPlan:result.plan,supplement:Boolean(answer.value.trim())});}
  catch{if(valid(generation,id,csrf))latestError.value='最新版本读取失败，描述和当前建议仍保留。请重试。';}
 }
 async function saveProposal(){
@@ -110,8 +113,8 @@ async function saveProposal(){
  busySaving.value=true;error.value='';savedNotice.value='';
  try{
   const result=captured.planId
-   ? await props.planApi.update(captured.planId,captured.baseVersion,proposal.value.intent)
-   : await props.planApi.create(proposal.value.intent);
+   ? (captured.credentialId?await props.planApi.update(captured.planId,captured.baseVersion,proposal.value.intent,captured.credentialId):await props.planApi.update(captured.planId,captured.baseVersion,proposal.value.intent))
+   : (captured.credentialId?await props.planApi.create(proposal.value.intent,captured.credentialId):await props.planApi.create(proposal.value.intent));
   if(!valid(generation,id,csrf))return;
   savedNotice.value=`预约意向已保存 · 版本 ${result.plan.version}`;ownSavedVersion.value=captured.planId?{planId:captured.planId,version:result.plan.version}:null;proposal.value=null;generatedFor.value=null;status.value='saved';needsRegeneration.value=false;conversationBase.value=null;answers.value=[];questionHistory.value=[];answer.value='';emit('saved',result.plan);emit('refresh-request');
  }catch(err){
@@ -128,8 +131,8 @@ async function verifyAmbiguousSave(){
  const generation=epoch,id=props.session.user.user_id,csrf=props.session.csrfToken,sequence=++requestId,selected=generatedFor.value?.planId||null;
  verificationLoading.value=true;verificationComplete.value=false;verificationResult.value=null;latestError.value='';
  try{
-  if(selected){const response=await props.planApi.get(selected);if(!valid(generation,id,csrf)||sequence!==requestId)return;verificationResult.value={type:'plan',plan:response.plan};latest.value=response.plan;}
-  else{const response=await props.planApi.list();if(!valid(generation,id,csrf)||sequence!==requestId)return;verificationResult.value={type:'list',plans:response.plans||[]};}
+  if(selected){const scope=generatedFor.value?.credentialId??props.credentialId;const response=scope?await props.planApi.get(selected,scope):await props.planApi.get(selected);if(!valid(generation,id,csrf)||sequence!==requestId)return;verificationResult.value={type:'plan',plan:response.plan};latest.value=response.plan;}
+  else{const response=props.credentialId?await props.planApi.list(props.credentialId):await props.planApi.list();if(!valid(generation,id,csrf)||sequence!==requestId)return;verificationResult.value={type:'list',plans:response.plans||[]};}
   verificationComplete.value=true;
  }catch{if(valid(generation,id,csrf)&&sequence===requestId)latestError.value='核对读取失败，描述和建议已保留；请重试读取。';}
  finally{if(valid(generation,id,csrf)&&sequence===requestId)verificationLoading.value=false;}
@@ -144,7 +147,7 @@ onBeforeUnmount(()=>{alive=false;epoch++;requestId++;});
   <div class="proposal-heading"><h2 id="proposal-title">描述预约需求</h2><RouterLink class="proposal-settings" :to="{name:'ai-models'}" aria-label="模型设置" title="模型设置"><AppIcon name="settings" /></RouterLink></div>
 
   <label class="field">要整理的内容<textarea v-model="message" data-testid="proposal-message" rows="4" maxlength="4000" :disabled="busySaving||uncertainSave" placeholder="例如：把日期改成下周六晚上，优先 18:30，想约城北球馆的 6 号场。" /></label>
-  <label class="field">应用到<select v-model="targetId" data-testid="proposal-target" :disabled="busySaving||uncertainSave"><option value="">新建预约计划</option><option v-for="plan in plans" :key="plan.plan_id" :value="plan.plan_id">编辑：{{ plan.intent.venue_preference }} · {{ plan.intent.target_date }} · 版本 {{ plan.version }}</option></select></label>
+  <label class="field">应用到<select v-model="targetId" data-testid="proposal-target" :disabled="busySaving||uncertainSave"><option value="">新建预约计划</option><option v-for="plan in plans" :key="plan.plan_id" :value="plan.plan_id">编辑：{{ plan.intent.venue_preference }} · {{ plan.intent.target_date }} · {{ plan.credential_id?'当前凭据':'历史未关联凭据' }} · v{{ plan.version }}</option></select></label>
   <div class="proposal-actions"><button class="primary-button" data-testid="generate-proposal" type="button" :disabled="status==='generating'||busySaving||uncertainSave||needsRegeneration||!message.trim()" @click="generate()">{{ status==='generating'?'正在生成…':'生成建议预览' }}</button><button class="secondary-button" data-testid="restart-conversation" type="button" :disabled="busySaving||uncertainSave" @click="restartConversation">重新开始</button></div>
   <p v-if="error" class="proposal-feedback error" role="alert">{{ error }} <RouterLink v-if="error.includes('尚未配置')||error.includes('模型设置')||error.includes('密钥')" :to="{name:'ai-models'}">前往设置AI模型</RouterLink></p>
   <p v-if="latestError" class="proposal-feedback error" role="alert">{{ latestError }}</p><p v-if="savedNotice" class="proposal-feedback success" role="status">{{ savedNotice }}</p>
