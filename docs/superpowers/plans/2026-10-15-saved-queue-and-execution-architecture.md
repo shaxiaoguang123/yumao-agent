@@ -12,11 +12,33 @@ For each business date:
 2. Build an immutable candidate-execution snapshot from that queue revision and that credential's real `bookingByTime` response. Offer all court columns returned for the current credential/date; resolve each saved court preference only against that same response's court list, and skip unknown or ambiguous names rather than guessing. Do not populate availability or court choices from synthetic data. Keep the saved queue unchanged and record which candidates were removed and why.
 3. Use the raw response conflict markers to remove booked cells and the blocked activity/unbookable categories described in the evidence note. Do not interpret the entire pre-opening gray grid as permanently unavailable: the official client initially paints the whole grid as `course7` outside its booking-time window, then overlays cells from `conflictList`.
 4. Before the execution window, calibrate against Beijing time (the proposed default is 1 second before 07:30). At 07:30 plus that credential's configured millisecond offset, obtain fresh state and assemble the final reservation request from the current response. The 00:30 snapshot is only candidate pruning; it is never the final request payload or proof that a slot remains open.
-5. Store per-credential controls for the 00:30 reconciliation time, clock-calibration lead time, post-07:30 start offset, and measured/configured delay for each verified stage (availability read, price lookup, order creation, and any separately authorized payment stage). Record query start/end times for each stage. If clock calibration or a required fresh response fails, do not run using stale state.
+5. Store per-credential controls for the 00:30 reconciliation time, clock-calibration lead time, post-07:30 start offset, and measured/configured delay for each verified stage (availability read, price lookup, order creation, and payment). Record query start/end times for each stage. If clock calibration or a required fresh response fails, do not run using stale state.
 
 If a queue is edited after its 00:30 snapshot, the execution work must pin and display the exact queue revision it will use; applying a later edit requires rebuilding the snapshot. If the credential or Token revision changes, stop and require a fresh preflight rather than silently switching credentials. Agent-generated proposals are not part of this schedule; this version covers the manually saved two-hour and one-hour queues.
 
 The reviewed `req/1.js` frontend bundle confirms display/selection rules, not a running scheduler or successful reservation contract. Its release association and physical court-to-venue mapping remain unverified. The reviewed legacy Python flow contains no CAPTCHA/sliding-challenge call; do not add a separate challenge request. If the reservation service returns a challenge or rejects the request, stop safely for user attention rather than bypassing that control.
+
+## Proposed end-to-end flow for review
+
+The existing frontend stays as-is. It continues to save the user's separate two-hour priority and one-hour fallback queues. A saved, non-empty queue for the exact `D+2` date is the scheduled intent; saving it makes no upstream call immediately.
+
+### 00:30 candidate reconciliation
+
+For every enabled credential, the scheduler reads only that owner's queue for `D+2`. It pins the queue revision and Token revision, then calls `bookingByTime` using that credential's real Token. The candidate grid uses every court in that response; each saved court name is resolved only against that same response. No queue means no request and no job.
+
+For each candidate, map its one-hour or two-hour interval onto the response rows. A two-hour choice must cover two consecutive rows. Remove candidates that intersect a booked marker or an activity/unbookable marker from `conflictList`, and save the outcome in a separate execution snapshot without changing the user's queue. The client-side whole-grid `course7` fill before `bookingstarttime` is a display gate; it must not be mistaken for explicit `course7` entries in the raw conflict list. A 00:30 survivor is only a candidate for later checking.
+
+### 07:30 execution
+
+At the configured calibration lead time (initial proposal: 1 second before 07:30), compare the server clock with its trusted Beijing-time source. If time cannot be trusted, hold that credential's work. At 07:30 plus the credential's start offset, process two-hour candidates in saved order, then one-hour candidates in saved order.
+
+At the start of that credential's execution session, load account context with `getUserInfo`/`getChildren`. Before each candidate attempt, fetch fresh `bookingByTime` state and rebuild the candidate fields from that response. If the current booking window is closed, a conflict marker now blocks any row, the court name no longer resolves uniquely, or the Token/queue revision changed, skip or hold the candidate; never send a payload built from the 00:30 response. For an eligible candidate, continue with `getPayPrice`, `createBookingBytime`, `openPlatformPayOrder`, and order verification through `payOrderForPhone`/`payOrderDetails`. Do not silently fall back to a default reservation person if account-context lookup fails.
+
+The legacy flow makes a fresh `bookingByTime` call for each candidate and permits up to three rounds. For the scheduled worker, the safer initial proposal is one ordered pass, with a fresh availability read before each candidate; retry only a stage whose outcome is known to be safe. If order creation or payment may have succeeded but its response is uncertain, reconcile the order before trying another candidate. Stop the credential's queue after authoritative success.
+
+Clock calibration, reconciliation time, post-07:30 offset, and each stage's configured delay are stored per credential. Record request start/end and elapsed time for every upstream stage. The worker processes each owner/credential independently, serializes order writes for one credential, and applies shared upstream rate limits across users. A failure for one credential must not switch to another credential's Token or queue.
+
+This flow currently interprets the requested payment stage as automatic payment of the matching order using that credential's encrypted payment-password revision. The quoted `getPayPrice` amount must be tied to the same candidate and order, and payment is complete only after authoritative order verification. Price ceiling and the exact retry policy are review items before implementation.
 
 ## Goal
 
@@ -82,7 +104,7 @@ Add tenant-bound foreign keys and compound uniqueness for every owner-scoped rel
 
 At 00:30, the scheduler creates a job only after an authenticated-owner/credential-scoped lookup finds a non-empty queue for the exact `D+2` date and an enabled, usable credential. In one transaction it pins the queue and Token revisions and derives a stable idempotency key from the owner, credential, target date, queue revision, and schedule-policy version. Reprocessing the same input returns the same job. It must not silently follow later edits to a queue or credential.
 
-If a user edits a queue after the 00:30 snapshot, the job keeps its pinned revision. The UI must make that visible and offer an explicit cancel-and-rebuild path. A queue added after the snapshot needs a deliberate preflight rerun before 07:30 or it is skipped for that opening; the next daily D+2 pass targets a different date. If the selected credential or Token revision changes before execution, fail closed into `needs_attention`; do not switch to a different Token. Payment-password revision changes block only a separately authorized payment stage.
+If a user edits a queue after the 00:30 snapshot, the job keeps its pinned revision. The UI must make that visible and offer an explicit cancel-and-rebuild path. A queue added after the snapshot needs a deliberate preflight rerun before 07:30 or it is skipped for that opening; the next daily D+2 pass targets a different date. If the selected credential or Token revision changes before execution, fail closed into `needs_attention`; do not switch to a different Token. Payment-password revision changes block the payment stage.
 
 ### Worker and concurrency
 
@@ -117,16 +139,14 @@ scheduled/preflight -> cancel_requested -> canceled
 
 Token and payment password are distinct secrets. Store each encrypted with purpose-specific authenticated context and independent revisions. Public credential DTOs expose only presence/revision metadata. The execution job pins those revisions but never copies secret values.
 
-The worker may decrypt the Token only around an approved request callback. The payment password may be decrypted only in a later, separately authorized payment stage after an authoritative unpaid order has been identified. It must never be sent to an LLM, stored in job/attempt snapshots, logged, returned to the browser, or copied into a booking request before the payment contract is verified.
-
-Do not infer unattended payment consent from adding a password. Payment needs a separate explicit product decision and authorization, plus amount/order verification and idempotency/reconciliation behavior.
+The worker may decrypt the Token only around an approved request callback. For the requested payment stage, it may decrypt only the password revision paired with the same credential, after an authoritative unpaid order has been identified. Neither secret may be sent to an LLM, stored in job/attempt snapshots, logged, returned to the browser, or copied into unrelated requests. The payment adapter must bind the quoted amount to the created order, enforce the reviewed price ceiling, and reconcile uncertain results before retrying.
 
 ## Proposed rollout and acceptance
 
 1. **Design and evidence:** verify official reservation, order lookup, payment request, venue mapping, opening-time policy, and supported cancellation/idempotency behavior. Do not use a live account to probe write/payment calls.
 2. **Persistence/API:** add job/attempt schemas, ownership constraints, idempotent job creation, queue revision pinning, cancel semantics, and read-only job history. Test two users, multiple credentials per user, several dates per credential, stale queue versions, and secret rotation races.
 3. **Dry-run executor:** claim jobs, validate pinned revisions and opening windows, produce candidate decisions without sending reservation requests. Add lease/fencing, crash recovery, cancellation races, rate limits, and unknown-state tests.
-4. **Reservation adapter:** only after reviewed protocol evidence and an explicit authorization boundary, add a narrowly scoped reservation request; require authoritative reconciliation and keep payment disabled.
-5. **Payment:** separate design and approval. Implement only after order identity, amount, payment-password wire format, retry semantics, and user authorization are proven.
+4. **Reservation adapter:** only after reviewed protocol evidence and the saved-queue authorization boundary are clear, add a narrowly scoped reservation request; require authoritative reconciliation and keep payment disabled until its amount and retry gates are implemented.
+5. **Payment:** implement the requested stage only after order identity, amount, payment-password wire format, per-credential price ceiling, and retry/reconciliation behavior are proven.
 
 No execution layer is implemented in this branch. The present UI and APIs continue to save and read intent only.
