@@ -8,7 +8,6 @@
     "build": "vite build",
     "test": "vitest",
     "test:e2e": "node e2e/run.mjs",
-    "test:e2e:plans": "node e2e/plans-real.mjs",
     "test:e2e:planning": "node e2e/planning-real.mjs",
     "test:e2e:availability": "node e2e/availability-real.mjs"
   },

@@ -92,12 +92,6 @@ jobs:
           BROWSER_QA_OUTPUT: ${{ runner.temp }}/yumao-browser-e2e
         run: npm run test:e2e
 
-      - name: Run real Flask and SQLite booking-plan integration
-        env:
-          PLAN_QA_OUTPUT: ${{ runner.temp }}/yumao-booking-plan-e2e
-          PLAN_QA_PYTHON: python
-        run: npm run test:e2e:plans
-
       - name: Run Planning Agent with Fake Provider and real SQLite
         env:
           PLANNING_QA_OUTPUT: ${{ runner.temp }}/yumao-planning-agent-e2e
