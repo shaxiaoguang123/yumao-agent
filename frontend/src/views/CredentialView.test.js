@@ -269,6 +269,37 @@ describe('Credential management view', () => {
     expect(wrapper.text()).not.toContain('raw message');
   });
 
+  it('shows an actionable reason for backend mutations that fail without echoing server text', async () => {
+    const api = makeApi({ credentials: [], create: vi.fn().mockRejectedValue(Object.assign(new Error('private traceback'), {
+      kind: 'network',
+    })) });
+    const { wrapper } = await mountView(api);
+    await wrapper.get('[data-testid="credential-label"]').setValue('Primary');
+    await wrapper.get('[data-testid="credential-token"]').setValue('synthetic-token');
+    await wrapper.get('[data-testid="credential-payment-password"]').setValue('synthetic-payment-password');
+    await wrapper.get('[data-testid="credential-create"]').trigger('submit');
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain('本次操作结果未确认');
+    expect(wrapper.get('[role="alert"]').text()).toContain('刷新凭据列表核对');
+    expect(wrapper.text()).not.toContain('private traceback');
+    expect(wrapper.text()).not.toContain('synthetic-token');
+  });
+
+  it('explains a known credential write failure and recommends reconciliation', async () => {
+    const api = makeApi({ credentials: [], create: vi.fn().mockRejectedValue(Object.assign(new Error('private database detail'), {
+      code: 'credential_write_failed',
+    })) });
+    const { wrapper } = await mountView(api);
+    await wrapper.get('[data-testid="credential-label"]').setValue('Primary');
+    await wrapper.get('[data-testid="credential-token"]').setValue('synthetic-token');
+    await wrapper.get('[data-testid="credential-payment-password"]').setValue('synthetic-payment-password');
+    await wrapper.get('[data-testid="credential-create"]').trigger('submit');
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain('服务器未能保存凭据');
+    expect(wrapper.get('[role="alert"]').text()).toContain('刷新凭据列表确认结果');
+    expect(wrapper.text()).not.toContain('private database detail');
+  });
+
   it('clears the create form when the user cancels', async () => {
     const api = makeApi({ credentials: [] });
     const { wrapper } = await mountView(api);

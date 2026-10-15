@@ -45,7 +45,10 @@ const safeErrors = {
   invalid_request: '输入内容无效，请检查后重试。',
   invalid_credential_label: '名称长度须为 1 到 128 个字符，且不能包含控制字符。',
   invalid_credential_token: 'Token 格式无效，请重新输入。',
+  invalid_credential_enabled: '凭据启用状态无效，请刷新后重试。',
+  invalid_credential_version: '凭据版本无效，请刷新凭据列表后重试。',
   invalid_payment_password: '支付密码格式无效，请检查后重试。',
+  invalid_user: '登录用户状态无效，请重新登录后重试。',
   credential_token_expired: '此 Token 已过期，请替换 Token。',
   credential_token_invalid: '此 Token 已确认无效，请替换 Token。',
   credential_account_already_configured: '此上游账户已绑定到本用户的其他凭据，请重新启用或轮换已有凭据。',
@@ -53,6 +56,16 @@ const safeErrors = {
   credential_account_reconfirmation_required: '账户连续性需要重新确认；当前凭据不能轮换。',
   credential_account_mismatch: '替换 Token 与当前账户不匹配，原凭据保持不变。',
   credential_version_conflict: '凭据已更新，请刷新后重试。',
+  credential_requires_revalidation: '凭据状态需要重新验证；请先重新验证 Token 后再操作。',
+  credential_write_failed: '服务器未能保存凭据。请刷新凭据列表确认结果后，再决定是否重试。',
+  credential_update_failed: '服务器未能更新凭据。请刷新凭据列表确认当前状态后重试。',
+  credential_delete_failed: '服务器未能确认删除结果。请刷新凭据列表核对后再操作。',
+  credential_validation_write_failed: '验证结果暂未写入。请刷新凭据状态后重新验证。',
+  credential_rotation_write_failed: 'Token 轮换结果暂未确认。请刷新凭据并核对当前 Token 状态后重试。',
+  credential_secret_unavailable: '凭据密钥暂不可用，请检查服务端加密配置后重试。',
+  credential_snapshot_unavailable: '凭据状态暂时无法读取，请刷新后重试。',
+  credential_fingerprint_key_unavailable: '凭据校验暂不可用，请检查服务端密钥配置。',
+  upstream_read_failed: '上游 Token 验证未完成，凭据未标记为有效；请检查 Token 状态后重试。',
   validation_stale: '验证结果已过期，凭据状态未被覆盖。请重新加载后再试。',
   validation_rate_limited: '上游请求暂时受到限流，请稍后重试。',
   validation_not_configured: '上游验证尚未配置，Token 未保存。',
@@ -64,8 +77,31 @@ const safeErrors = {
   credential_not_found: '找不到此凭据，请刷新列表。',
 };
 
-function safeMessage(error) {
-  return safeErrors[error?.code] || '操作未完成，请重试。';
+function safeMessage(error, { mutation = false } = {}) {
+  if (safeErrors[error?.code]) return safeErrors[error.code];
+  if (error?.message === 'invalid_response') return '凭据服务返回的数据格式异常，请重新读取。';
+  if (error?.kind === 'network') {
+    return mutation
+      ? '与凭据服务的连接中断，本次操作结果未确认。请先刷新凭据列表核对，再决定是否重试。'
+      : '无法连接凭据服务，请确认本地服务正在运行后重新读取。';
+  }
+  if (error?.kind === 'timeout') {
+    return mutation
+      ? '凭据操作等待超时，结果未确认。请先刷新凭据列表核对，再决定是否重试。'
+      : '读取凭据超时，请稍后刷新重试。';
+  }
+  if (typeof error?.code === 'string' && /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(error.code)) {
+    return `服务端返回错误码 ${error.code}。${mutation ? '请先刷新凭据列表核对当前状态，再决定是否重试。' : '请重新读取后重试。'}`;
+  }
+  if (error?.status >= 500) {
+    return mutation
+      ? `凭据服务暂时异常（HTTP ${error.status}），操作结果未确认。请先刷新列表核对，再决定是否重试。`
+      : `凭据服务暂时异常（HTTP ${error.status}），请稍后重新读取。`;
+  }
+  if (error?.status === 409) return '凭据状态已变化，请刷新列表后重试。';
+  return mutation
+    ? '凭据服务未确认本次操作。请先刷新列表核对状态，再决定是否重试。'
+    : '无法读取凭据状态，请重试。';
 }
 
 async function loadCredentials() {
@@ -144,7 +180,7 @@ async function createCredential() {
     successMessage.value = '凭据已添加。';
     await loadCredentials();
   } catch (error) {
-    errorMessage.value = safeMessage(error);
+    errorMessage.value = safeMessage(error, { mutation: true });
   } finally {
     createToken.value = '';
     createPaymentPassword.value = '';
@@ -162,7 +198,7 @@ async function savePaymentPassword(credential) {
     successMessage.value = '支付密码已单独加密保存；此操作没有发起支付。';
     paymentPasswordCredentialId.value = '';
   } catch (error) {
-    errorMessage.value = safeMessage(error);
+    errorMessage.value = safeMessage(error, { mutation: true });
   } finally {
     paymentPassword.value = '';
     busyCredentialId.value = '';
@@ -179,7 +215,7 @@ async function runCredentialAction(credential, action, successText) {
     await action();
     successMessage.value = successText;
   } catch (error) {
-    errorMessage.value = safeMessage(error);
+    errorMessage.value = safeMessage(error, { mutation: true });
   } finally {
     busyCredentialId.value = '';
     await loadCredentials();
@@ -238,7 +274,7 @@ async function rotateCredential(credential) {
     rotationCredentialId.value = '';
     successMessage.value = 'Token 已轮换。';
   } catch (error) {
-    errorMessage.value = safeMessage(error);
+    errorMessage.value = safeMessage(error, { mutation: true });
   } finally {
     rotationToken.value = '';
     busyCredentialId.value = '';

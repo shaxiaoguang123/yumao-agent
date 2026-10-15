@@ -13,15 +13,18 @@ import ManualQueuePreview from './ManualQueuePreview.vue';
 import PlanCredentialControl from './PlanCredentialControl.vue';
 import { useManualQueue, queueEntries } from '../../composables/useManualQueue.js';
 import { usePlans } from '../../composables/usePlans.js';
+import { visibleIntentPlans, visibleManualQueuePlans } from '../../utils/planQueueVisibility.js';
 const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('planningProposalApi',null);
 const liveApi=inject('liveAvailabilityApi',null),credentialApi=inject('credentialApi',null);
 const courtOptions=shallowRef([]),queryDate=shallowRef(''),selectedCredentialId=shallowRef(''),credentialRefreshKey=shallowRef(0),planDateFilter=shallowRef(''),pendingDeletePlan=shallowRef(null);
 const activeSection=shallowRef('query'),manualDate=shallowRef('');
 const {plans,defaultWindow,listStatus,metadataError,saving,message,saveError,history,historyPlanId,historyStatus,authorized,refresh,initialize,remove,showHistory,closeHistory}=usePlans(api,session,()=>selectedCredentialId.value);
-const visiblePlans=computed(()=>plans.value.filter(plan=>!planDateFilter.value||plan.intent.target_date===planDateFilter.value));
+const visiblePlans=computed(()=>visibleIntentPlans(plans.value,{dateFilter:planDateFilter.value,businessDate:defaultWindow.value?.business_date||''}));
 function queueChanged(date){queueState.refreshList();if(date===manualDate.value&&!queueState.dateLocked)queueState.load();}
 function selectQueue(date,credentialId=selectedCredentialId.value){if(queueState.dateLocked||!credentialId)return;if(credentialId!==selectedCredentialId.value)selectedCredentialId.value=credentialId;manualDate.value=date;activeSection.value='manual';}
 const queueState=useManualQueue(api,session,()=>manualDate.value,()=>selectedCredentialId.value);
+const visibleQueuePlans=computed(()=>visibleManualQueuePlans(queueState.queues,{dateFilter:planDateFilter.value,businessDate:defaultWindow.value?.business_date||''}));
+const planCount=computed(()=>visiblePlans.value.length+visibleQueuePlans.value.filter(queue=>queue.candidates?.length).length);
 const upcomingQueueDate=computed(()=>{
  const lastQuickDate=defaultWindow.value?.queryable_target_dates?.slice(0,3).at(-1);
  if(!lastQuickDate)return '';
@@ -46,7 +49,7 @@ const queryContextKey=computed(()=>JSON.stringify({user:session?.user?.user_id,e
   <h1 class="sr-only">预约计划</h1>
   <div v-if="!authorized" class="panel"><p role="alert">{{ session?.status==='unauthenticated' ? '登录状态已失效，请重新登录。' : '暂时无法确认登录状态，请重试。' }}</p></div>
   <template v-else>
-   <PlanSectionTabs v-model="activeSection" :plan-count="plans.length+queueState.queues.filter(q=>q.candidates.length).length" />
+   <PlanSectionTabs v-model="activeSection" :plan-count="planCount" />
    <p v-if="metadataError" class="form-error" role="alert">日期范围读取失败，请重试。 <button class="secondary-button" type="button" @click="initialize">重新读取</button></p>
    <p v-if="message" class="form-success" role="status">{{ message }}</p>
    <p v-if="saveError" class="form-error" role="alert">{{ saveError }}</p>
@@ -69,10 +72,10 @@ const queryContextKey=computed(()=>JSON.stringify({user:session?.user?.user_id,e
     <div v-if="credentialApi" class="ticket-filter-credential"><PlanCredentialControl v-model="selectedCredentialId" :api="credentialApi" :session="session" :timezone-name="defaultWindow?.business_timezone_name||'Asia/Shanghai'" :disabled="queueState.dateLocked" @updated="credentialRefreshKey++" /></div>
     <label class="ticket-filter-date"><AppIcon name="calendar" /><input v-model="planDateFilter" type="date" aria-label="抢票计划日期" /></label>
     <button type="button" class="text-button ticket-filter-all" @click="planDateFilter=''">全部日期</button>
-    <div class="ticket-filter-meta"><span class="ticket-filter-count">{{ visiblePlans.length+queueState.queues.filter(q=>(q.candidates.length||planDateFilter)&&(!planDateFilter||q.target_date===planDateFilter)).length }} 份计划</span><button type="button" class="text-button" :disabled="saving||queueState.dateLocked" aria-label="重新读取抢票计划" @click="refresh();queueState.refreshList()"><AppIcon name="refresh" /></button></div>
+    <div class="ticket-filter-meta"><span class="ticket-filter-count">{{ visiblePlans.length+visibleQueuePlans.length }} 份计划</span><button type="button" class="text-button" :disabled="saving||queueState.dateLocked" aria-label="重新读取抢票计划" @click="refresh();queueState.refreshList()"><AppIcon name="refresh" /></button></div>
    </div>
 
-   <section v-if="plans.length||listStatus==='loading'||listStatus==='error'" class="panel" aria-labelledby="plans-list-title"><div class="plan-section-heading"><h2 id="plans-list-title">Agent 意向</h2><button data-testid="refresh-plans" class="secondary-button" type="button" :disabled="saving || listStatus==='loading'" @click="refresh();queueState.refreshList()" aria-label="刷新计划" title="刷新计划"><AppIcon name="refresh" /></button></div>
+   <section v-if="visiblePlans.length||listStatus==='loading'||listStatus==='error'" class="panel" aria-labelledby="plans-list-title"><div class="plan-section-heading"><h2 id="plans-list-title">Agent 意向</h2><button data-testid="refresh-plans" class="secondary-button" type="button" :disabled="saving || listStatus==='loading'" @click="refresh();queueState.refreshList()" aria-label="刷新计划" title="刷新计划"><AppIcon name="refresh" /></button></div>
     <p v-if="listStatus==='loading'" class="muted" role="status">正在读取计划…</p>
     <p v-else-if="listStatus==='error'" class="form-error" role="alert">计划读取失败，请检查网络后刷新重试。</p>
     <div v-else class="plan-list"><article v-for="plan in visiblePlans" :key="plan.plan_id" class="plan-card"><div><span class="plan-draft-tag">{{ !plan.credential_id?'历史未关联凭据':plan.intent.target_date<(defaultWindow?.business_date||'')?'已过期 · 未执行':(defaultWindow?.queryable_target_dates||[]).includes(plan.intent.target_date)?'未执行 · 当前凭据':'窗口外 · 未执行' }}</span><h3>{{ plan.intent.venue_preference }}</h3><p>{{ plan.intent.target_date }} · {{ plan.intent.preferred_start_times.join(' → ') }} · {{ plan.intent.duration_minutes }} 分钟</p><p class="muted">版本 {{ plan.version }} · {{ plan.intent.court_preferences.join(' → ') || '场地未指定' }}</p></div><div class="plan-actions"><button data-testid="history-plan" class="text-button" type="button" :disabled="saving" @click="showHistory(plan.plan_id)">版本历史</button><button class="text-button" type="button" :disabled="saving" :aria-label="`删除计划${plan.intent.venue_preference}`" @click="pendingDeletePlan=plan">删除</button></div></article></div>

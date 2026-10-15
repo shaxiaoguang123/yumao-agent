@@ -34,6 +34,20 @@ describe('AI models settings',()=>{
   expect(api.discoverSaved).toHaveBeenCalledWith('model-1');
   await wrapper.get('[data-testid="discovered-model-select"]').setValue('new-model');expect(wrapper.get('[name="model"]').element.value).toBe('new-model');
  });
+ it('shows a local-service network reason when model discovery has no structured backend error',async()=>{
+  const {wrapper}=await mountPanel(fixture({discoverSaved:vi.fn(async()=>{throw Object.assign(new Error('private stack detail'),{kind:'network'});})}));
+  await wrapper.findAll('button').find(button=>button.text()==='编辑').trigger('click');
+  await wrapper.get('[data-testid="discover-models"]').trigger('click');await flushPromises();
+  expect(wrapper.get('.model-discovery-error').text()).toContain('浏览器无法连接预约工作台服务');
+  expect(wrapper.text()).not.toContain('private stack detail');
+ });
+ it('maps provider discovery authorization failures to actionable safe guidance',async()=>{
+  const {wrapper}=await mountPanel(fixture({discoverSaved:vi.fn(async()=>{throw Object.assign(new Error('private provider body'),{code:'provider_auth_failed'});})}));
+  await wrapper.findAll('button').find(button=>button.text()==='编辑').trigger('click');
+  await wrapper.get('[data-testid="discover-models"]').trigger('click');await flushPromises();
+  expect(wrapper.get('.model-discovery-error').text()).toContain('认证失败');
+  expect(wrapper.text()).not.toContain('private provider body');
+ });
  it('creates a model and never displays a saved secret or echoes it into the edit form',async()=>{
   const {wrapper,api}=await mountPanel();
   await wrapper.get('.add-model').trigger('click');await wrapper.get('[name="name"]').setValue('New provider');await wrapper.get('[name="base_url"]').setValue('https://new.test/v1');await wrapper.get('[name="model"]').setValue('new-chat');await wrapper.get('[name="api_key"]').setValue('do-not-echo-this');await wrapper.get('form').trigger('submit');await flushPromises();

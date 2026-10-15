@@ -89,6 +89,8 @@ def _resolve_public(host: str, timeout: float = 2.0) -> list[str]:
         raise ProviderFailure("provider_dns_timeout", 504) from None
     except ProviderFailure:
         raise
+    except socket.gaierror:
+        raise ProviderFailure("provider_dns_resolution_failed") from None
     except (OSError, ValueError):
         raise ProviderFailure("provider_unavailable") from None
 
@@ -196,13 +198,23 @@ class PinnedChatCompletionsTransport:
                             404:'provider_model_or_endpoint_not_found',429:'provider_rate_limited'}.get(response.status,'provider_request_failed')
                 if method == "GET" and suffix == "/models" and response.status == 404:
                     category = "provider_model_discovery_unavailable"
+                elif response.status in (408, 504):
+                    category = "provider_timeout"
+                elif response.status in (400, 422):
+                    category = "provider_request_rejected"
+                elif 500 <= response.status <= 599:
+                    category = "provider_server_error"
                 raise ProviderFailure(category)
             return b"".join(chunks)
         except ProviderFailure:
             raise
+        except ssl.SSLCertVerificationError:
+            raise ProviderFailure("provider_tls_verification_failed") from None
+        except ssl.SSLError:
+            raise ProviderFailure("provider_tls_failed") from None
         except TimeoutError:
             raise ProviderFailure("provider_timeout", 504) from None
-        except (OSError, ssl.SSLError, ValueError, HTTPException):
+        except (OSError, ValueError, HTTPException):
             if time.monotonic() >= deadline:
                 raise ProviderFailure("provider_timeout", 504) from None
             raise ProviderFailure("provider_unavailable") from None

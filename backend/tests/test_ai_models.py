@@ -315,6 +315,40 @@ class AIModelTests(unittest.TestCase):
         self.assertEqual(RecordingConnection.last.request_kwargs["headers"]["Authorization"],"Bearer discovery-key")
         self.assertIsNone(RecordingConnection.last.request_kwargs["body"])
 
+    def test_model_discovery_reports_safe_provider_http_failure_categories(self):
+        import socket
+        class FakeSocket:
+            def settimeout(self, _value): pass
+        class Response:
+            def __init__(self,status): self.status=status; self.sent=False
+            def read1(self,_size):
+                if self.sent:return b""
+                self.sent=True
+                return b'{"message":"private provider response"}'
+        class Connection:
+            status=401
+            def __init__(self,*_args,**_kwargs): self.sock=FakeSocket()
+            def connect(self): pass
+            def request(self,*_args,**_kwargs): pass
+            def getresponse(self): return Response(self.status)
+            def close(self): self.sock=None
+        transport=PinnedChatCompletionsTransport(resolver=lambda _host:["93.184.216.34"])
+        config=ProviderConfig("m","m","https://vendor.example/v1","model","none")
+        for status,expected in ((401,"provider_auth_failed"),(403,"provider_access_denied"),
+                                (404,"provider_model_discovery_unavailable"),(429,"provider_rate_limited"),
+                                (503,"provider_server_error")):
+            with self.subTest(status=status), patch("backend.ai.provider._PinnedHTTPSConnection",Connection):
+                Connection.status=status
+                with self.assertRaises(ProviderFailure) as caught:
+                    transport.list_models(config)
+            self.assertEqual(caught.exception.code,expected)
+            self.assertNotIn("private provider response",str(caught.exception))
+
+        with patch("backend.ai.provider.socket.getaddrinfo",side_effect=socket.gaierror("private resolver text")):
+            with self.assertRaises(ProviderFailure) as dns:
+                _resolve_public("vendor.example")
+        self.assertEqual(dns.exception.code,"provider_dns_resolution_failed")
+
     def test_cipher_binds_user_model_revision_and_uses_derived_key(self):
         cipher = ProviderKeyCipher(KEYRING)
         envelope = cipher.encrypt(b"secret",user_id="a",model_id="m",revision="r1",key_id="enc-v1")

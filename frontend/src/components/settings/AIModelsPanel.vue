@@ -4,7 +4,7 @@ import AppIcon from '../AppIcon.vue';
 import ModelPresetPicker from './ModelPresetPicker.vue';
 import ModelEditorForm from './ModelEditorForm.vue';
 import PlanSnapshotDetails from '../plans/PlanSnapshotDetails.vue';
-import { providerErrorMessage } from '../../api/providerErrors.js';
+import { providerDiscoveryErrorMessage, providerErrorMessage } from '../../api/providerErrors.js';
 
 const api=inject('aiModelsApi');
 const session=inject('sessionStore');
@@ -39,7 +39,7 @@ async function discoverModels(config){
   if(!Array.isArray(result?.models))throw new Error('invalid_model_list');
   discoveredModels.value=result.models;
   notice.value=result.models.length?`读取到 ${result.models.length} 个模型，选择后会填入模型名称。`:'服务商返回了空模型列表，请检查 API Key 权限。';
- }catch(failure){if(valid(generation,id)&&request===discoverySequence)discoveryError.value=failure?.code?testErrorMessage(failure.code):'读取模型列表失败，请检查 HTTPS 接口地址、API Key 和服务商权限。';}
+ }catch(failure){if(valid(generation,id)&&request===discoverySequence)discoveryError.value=providerDiscoveryErrorMessage(failure);}
  finally{if(valid(generation,id)&&request===discoverySequence)discovering.value=false;}
 }
 async function removeModel(model){if(busy.value||!authorized())return;const generation=epoch,id=session.user.user_id;busy.value=true;parsingResult.value=null;error.value='';notice.value='';
