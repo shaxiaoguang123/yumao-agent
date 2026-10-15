@@ -6,6 +6,8 @@ const messages = {
   provider_model_or_endpoint_not_found: '模型或接口地址不存在，请检查模型名称和兼容接口地址。',
   provider_rate_limited: '服务商请求过于频繁，请稍后再测试或生成。',
   provider_response_invalid: '模型返回的响应不符合兼容接口要求，请检查接口或更换模型。',
+  provider_models_response_invalid: '服务商返回的模型列表无法识别。',
+  provider_model_discovery_unavailable: '当前服务商未提供兼容的模型列表接口，请手动填写模型名称。',
   invalid_model_proposal: '连接正常，但模型返回的计划结构或字段依据不符合要求，请更换模型或调整配置。',
   provider_timeout: '连接超时，请检查服务地址和网络后重试。',
   provider_dns_timeout: '连接超时，请检查服务地址和网络后重试。',

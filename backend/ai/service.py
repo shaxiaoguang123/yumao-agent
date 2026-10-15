@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 import unicodedata
@@ -12,6 +13,9 @@ from backend.ai.crypto import EncryptedProviderKey, ProviderKeyCipher
 from backend.ai.provider import ProviderConfig, ProviderFailure, PinnedChatCompletionsTransport, _resolve_public, validate_base_url
 from backend.credentials.keyring import CredentialKeyring
 from backend.db import connect_database
+
+
+_MODEL_ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}\Z")
 
 
 class AIModelError(Exception):
@@ -103,14 +107,28 @@ class AIProviderService:
             models = [self._dto(row) for row in rows]
             selected = prefs["selected_model_id"] if prefs else None
             default = prefs["default_model_id"] if prefs else None
-            selected_exists = selected == "service_default" or any(row["model_id"] == selected for row in rows)
-            default_exists = default == "service_default" or any(row["model_id"] == default for row in rows)
-            effective = selected if selected_exists else (default if default_exists else ("service_default" if self.service_default else None))
+            effective = self._effective_model_id(db, user_id, selected, default, rows)
             return {"models": models, "service_default": self.service_default.public() if self.service_default else None,
                     "selected_model_id": selected, "default_model_id": default,
                     "effective_model_id": effective}
         finally:
             db.close()
+
+    def _effective_model_id(self, db, user_id, selected, default, rows=None):
+        rows = rows if rows is not None else db.execute(
+            "SELECT model_id FROM ai_models WHERE user_id=? ORDER BY created_at_utc_ms,model_id", (user_id,)
+        ).fetchall()
+        available = {row["model_id"] for row in rows}
+        for candidate in (selected, default, "service_default"):
+            if candidate == "service_default" and self.service_default is not None:
+                return "service_default"
+            if isinstance(candidate, str) and candidate in available:
+                return candidate
+        # A single configured model is unambiguous. Make it usable even before
+        # the user separately saves it as the selected or default model.
+        if len(rows) == 1:
+            return rows[0]["model_id"]
+        return None
 
     def create(self, user_id, name, base_url, model, auth_mode, api_key=None):
         name, base_url, model, auth_mode = self._validate_fields(name, base_url, model, auth_mode, api_key)
@@ -126,6 +144,16 @@ class AIProviderService:
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (model_id,user_id,name,base_url,model,auth_mode,
                 envelope.ciphertext if envelope else None,envelope.nonce if envelope else None,envelope.tag if envelope else None,
                 envelope.key_id if envelope else None,revision,1,now,now))
+            if self.service_default is None and db.execute(
+                "SELECT 1 FROM ai_model_preferences WHERE user_id=?", (user_id,)
+            ).fetchone() is None:
+                first_model = db.execute(
+                    "SELECT model_id FROM ai_models WHERE user_id=? ORDER BY created_at_utc_ms,model_id LIMIT 1", (user_id,)
+                ).fetchone()["model_id"]
+                db.execute(
+                    "INSERT INTO ai_model_preferences(user_id,selected_model_id,default_model_id,updated_at_utc_ms) VALUES(?,?,NULL,?)",
+                    (user_id, first_model, now),
+                )
             db.execute("COMMIT")
             return {"id": model_id, "name": name, "base_url": base_url, "model": model, "auth_mode": auth_mode,
                     "has_api_key": envelope is not None, "version": 1, "source": "user"}
@@ -246,13 +274,14 @@ class AIProviderService:
             pref = db.execute("SELECT selected_model_id,default_model_id FROM ai_model_preferences WHERE user_id=?", (user_id,)).fetchone()
             selected = pref["selected_model_id"] if pref else None
             default = pref["default_model_id"] if pref else None
-            chosen = selected or default
-            if chosen == "service_default": config = self.service_default
+            chosen = self._effective_model_id(db, user_id, selected, default)
+            if chosen == "service_default":
+                config = self.service_default
             elif chosen:
-                row = db.execute("SELECT * FROM ai_models WHERE user_id=? AND model_id=?",(user_id,chosen)).fetchone()
+                row = db.execute("SELECT * FROM ai_models WHERE user_id=? AND model_id=?", (user_id, chosen)).fetchone()
                 config = self._config(row) if row else None
             else:
-                config = self.service_default
+                config = None
             return (config,config.public()) if config else None
         finally: db.close()
 
@@ -293,6 +322,39 @@ class AIProviderService:
             if not config: raise AIModelError("provider_not_found",404)
         finally: db.close()
         return config
+
+    def discover_model_ids(self, user_id: str, *, base_url=None, auth_mode=None, api_key=None,
+                           model_id: str | None = None) -> dict:
+        """Fetch model identifiers once, using either saved or unsaved provider credentials."""
+        if model_id is not None:
+            config = self.explicit_config(user_id, model_id)
+        else:
+            _, normalized_url, _, normalized_auth = self._validate_fields(
+                "Model discovery", base_url, "model-discovery", auth_mode, api_key,
+            )
+            config = ProviderConfig(
+                "model-discovery", "Model discovery", normalized_url, "model-discovery",
+                normalized_auth, api_key if normalized_auth == "bearer" else None,
+            )
+        self._validate_destination(config.base_url)
+        try:
+            raw_models = self.transport.list_models(config)
+        except ProviderFailure as exc:
+            raise AIModelError(exc.code, exc.status) from None
+        except AttributeError:
+            raise AIModelError("provider_model_discovery_unavailable", 502) from None
+
+        identifiers: list[str] = []
+        seen: set[str] = set()
+        for item in raw_models:
+            identifier = item.get("id") if isinstance(item, Mapping) else None
+            if not isinstance(identifier, str) or not _MODEL_ID_RE.fullmatch(identifier) or identifier in seen:
+                continue
+            seen.add(identifier)
+            identifiers.append(identifier)
+            if len(identifiers) >= 500:
+                break
+        return {"models": identifiers}
 
     def test(self, user_id, model_id):
         config = self.explicit_config(user_id, model_id)

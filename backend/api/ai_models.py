@@ -77,6 +77,29 @@ def create_model():
     return jsonify({"model": result}), 201
 
 
+@ai_models_bp.post("/discover")
+@require_session
+@require_csrf
+def discover_unsaved_model_ids():
+    body = _body({"base_url", "auth_mode"}, {"base_url", "auth_mode", "api_key"})
+    with current_app.extensions["ai_call_guard"].hold(_user_id()):
+        result = _service().discover_model_ids(
+            _user_id(), base_url=body["base_url"], auth_mode=body["auth_mode"],
+            api_key=body.get("api_key"),
+        )
+    return jsonify(result)
+
+
+@ai_models_bp.post("/<model_id>/discover")
+@require_session
+@require_csrf
+def discover_saved_model_ids(model_id):
+    _body(set(), set())
+    with current_app.extensions["ai_call_guard"].hold(_user_id()):
+        result = _service().discover_model_ids(_user_id(), model_id=model_id)
+    return jsonify(result)
+
+
 @ai_models_bp.patch("/<model_id>")
 @require_session
 @require_csrf

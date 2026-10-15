@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 enableAutoUnmount(afterEach);
 const model={id:'model-1',name:'Work model',base_url:'https://provider.test/v1',model:'chat-model',auth_mode:'bearer',has_api_key:true,version:1,source:'user'};
-function fixture(overrides={}){return {list:vi.fn(async()=>({models:[model],service_default:{...model,id:'service_default',name:'Service'},selected_model_id:'model-1',default_model_id:'service_default',effective_model_id:'model-1'})),create:vi.fn(async()=>({})),update:vi.fn(async()=>({})),remove:vi.fn(async()=>({})),preferences:vi.fn(async()=>({})),test:vi.fn(async()=>({ok:true,message:'连接成功'})),...overrides};}
+function fixture(overrides={}){return {list:vi.fn(async()=>({models:[model],service_default:{...model,id:'service_default',name:'Service'},selected_model_id:'model-1',default_model_id:'service_default',effective_model_id:'model-1'})),create:vi.fn(async()=>({})),update:vi.fn(async()=>({})),remove:vi.fn(async()=>({})),preferences:vi.fn(async()=>({})),discover:vi.fn(async()=>({models:['deepseek-flash','qwen-plus']})),discoverSaved:vi.fn(async()=>({models:['chat-model','new-model']})),test:vi.fn(async()=>({ok:true,message:'连接成功'})),...overrides};}
 async function mountPanel(api=fixture()) {const {default:component}=await import('./AIModelsPanel.vue');const session=reactive({status:'authenticated',user:{user_id:'owner'},csrfToken:'csrf-a'});const wrapper=mount(component,{global:{provide:{aiModelsApi:api,sessionStore:session}}});await flushPromises();return {wrapper,api,session};}
 
 describe('AI models settings',()=>{
@@ -18,7 +18,21 @@ describe('AI models settings',()=>{
   expect(api.create).not.toHaveBeenCalled();expect(api.test).not.toHaveBeenCalled();
   await wrapper.get('[name="api_key"]').setValue('private-pending-key');await wrapper.get('[name="model_preset"]').setValue('openai');
   expect(wrapper.get('[name="api_key"]').element.value).toBe('');expect(wrapper.get('[name="base_url"]').element.value).toBe('https://api.openai.com/v1');
-  expect(wrapper.get('.model-quick-guide a').attributes('href')).toBe('https://api-docs.deepseek.com/quick_start');
+  expect(wrapper.get('.model-quick-guide a').attributes('href')).toBe('https://api-docs.deepseek.com/api/list-models/');
+ });
+ it('reads available model IDs only on request and fills the editable model field',async()=>{
+  const {wrapper,api}=await mountPanel();await wrapper.get('[data-testid="preset-deepseek"]').trigger('click');await wrapper.get('[name="api_key"]').setValue('ephemeral-discovery-key');
+  await wrapper.get('[data-testid="discover-models"]').trigger('click');await flushPromises();
+  expect(api.discover).toHaveBeenCalledWith({base_url:'https://api.deepseek.com',auth_mode:'bearer',api_key:'ephemeral-discovery-key'});
+  expect(wrapper.findAll('[data-testid="discovered-model-select"] option').map(option=>option.element.value)).toEqual(['','deepseek-flash','qwen-plus']);
+  await wrapper.get('[data-testid="discovered-model-select"]').setValue('qwen-plus');expect(wrapper.get('[name="model"]').element.value).toBe('qwen-plus');
+  expect(wrapper.text()).not.toContain('ephemeral-discovery-key');expect(api.create).not.toHaveBeenCalled();
+ });
+ it('uses a saved model secret for a deliberate model-list request while editing',async()=>{
+  const {wrapper,api}=await mountPanel();await wrapper.findAll('button').find(button=>button.text()==='编辑').trigger('click');
+  await wrapper.get('[data-testid="discover-models"]').trigger('click');await flushPromises();
+  expect(api.discoverSaved).toHaveBeenCalledWith('model-1');
+  await wrapper.get('[data-testid="discovered-model-select"]').setValue('new-model');expect(wrapper.get('[name="model"]').element.value).toBe('new-model');
  });
  it('creates a model and never displays a saved secret or echoes it into the edit form',async()=>{
   const {wrapper,api}=await mountPanel();

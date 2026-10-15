@@ -9,25 +9,39 @@ import { providerErrorMessage } from '../../api/providerErrors.js';
 const api=inject('aiModelsApi');
 const session=inject('sessionStore');
 const preset=shallowRef(null);
-function choosePreset(value){editing.value=null;preset.value=value;adding.value=true;}
+function choosePreset(value){clearDiscovery();editing.value=null;preset.value=value;adding.value=true;}
 const state=ref(null),editing=shallowRef(null),adding=shallowRef(false);
-const loading=shallowRef(false),busy=shallowRef(false),error=shallowRef(''),notice=shallowRef(''),testingId=shallowRef('');
+const loading=shallowRef(false),busy=shallowRef(false),discovering=shallowRef(false),error=shallowRef(''),notice=shallowRef(''),discoveryError=shallowRef(''),discoveredModels=shallowRef([]),testingId=shallowRef('');
 const selected=shallowRef(''),defaultId=shallowRef('');
 const userModels=computed(()=>state.value?.models||[]);
-let alive=true,epoch=0,sequence=0;
+let alive=true,epoch=0,sequence=0,discoverySequence=0;
 const authorized=()=>session?.status==='authenticated'&&Boolean(session.user?.user_id);
 function valid(generation,id){return alive&&generation===epoch&&id===session?.user?.user_id&&authorized();}
 const testErrorMessage=providerErrorMessage;
 const parsingResult=shallowRef(null),testingKind=shallowRef('');
+function clearDiscovery(){discoverySequence++;discovering.value=false;discoveredModels.value=[];discoveryError.value='';}
 async function load(){
  if(!authorized())return;const generation=epoch,id=session.user.user_id,request=++sequence;loading.value=true;error.value='';
- try{const result=await api.list();if(valid(generation,id)&&request===sequence){state.value=result;selected.value=result.selected_model_id||'';defaultId.value=result.default_model_id||'';}}
+ try{const result=await api.list();if(valid(generation,id)&&request===sequence){state.value=result;const configuredIds=new Set([...(result.models||[]).map(model=>model.id),...(result.service_default?['service_default']:[])]);selected.value=configuredIds.has(result.selected_model_id)?result.selected_model_id:result.effective_model_id||'';defaultId.value=result.default_model_id||'';}}
  catch{if(valid(generation,id)&&request===sequence){state.value=null;error.value='AI模型配置读取失败，请重试。';}}
  finally{if(valid(generation,id)&&request===sequence)loading.value=false;}
 }
 async function saveModel(payload){if(busy.value||!authorized())return;const generation=epoch,id=session.user.user_id;busy.value=true;parsingResult.value=null;error.value='';notice.value='';
  try{if(editing.value)await api.update(editing.value.id,payload);else await api.create(payload);if(!valid(generation,id))return;notice.value='模型配置已保存。';editing.value=null;adding.value=false;await load();}
  catch{if(valid(generation,id))error.value='模型保存失败，请检查配置后重试。';}finally{if(valid(generation,id))busy.value=false;}}
+async function discoverModels(config){
+ if(busy.value||discovering.value||!authorized())return;
+ const generation=epoch,id=session.user.user_id,request=++discoverySequence;
+ discovering.value=true;discoveredModels.value=[];discoveryError.value='';error.value='';notice.value='';
+ try{
+  const result=config.saved_model_id?await api.discoverSaved(config.saved_model_id):await api.discover(config);
+  if(!valid(generation,id)||request!==discoverySequence)return;
+  if(!Array.isArray(result?.models))throw new Error('invalid_model_list');
+  discoveredModels.value=result.models;
+  notice.value=result.models.length?`读取到 ${result.models.length} 个模型，选择后会填入模型名称。`:'服务商返回了空模型列表，请检查 API Key 权限。';
+ }catch(failure){if(valid(generation,id)&&request===discoverySequence)discoveryError.value=failure?.code?testErrorMessage(failure.code):'读取模型列表失败，请检查 HTTPS 接口地址、API Key 和服务商权限。';}
+ finally{if(valid(generation,id)&&request===discoverySequence)discovering.value=false;}
+}
 async function removeModel(model){if(busy.value||!authorized())return;const generation=epoch,id=session.user.user_id;busy.value=true;parsingResult.value=null;error.value='';notice.value='';
  try{await api.remove(model.id,model.version);if(!valid(generation,id))return;notice.value='模型已删除。';await load();}
  catch{if(valid(generation,id))error.value='模型删除失败，可能已被其他窗口更新；请重新读取。';}finally{if(valid(generation,id))busy.value=false;}}
@@ -48,9 +62,9 @@ async function testParsing(model){
  }catch(failure){if(valid(generation,id))error.value=testErrorMessage(failure?.code);}
  finally{if(valid(generation,id))testingId.value='';}
 }
-function editModel(model){preset.value=null;adding.value=false;editing.value={...model};}
-function cancelEdit(){preset.value=null;editing.value=null;adding.value=false;}
-watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken],()=>{epoch++;sequence++;loading.value=false;busy.value=false;testingId.value='';testingKind.value='';parsingResult.value=null;state.value=null;editing.value=null;adding.value=false;preset.value=null;selected.value='';defaultId.value='';error.value='';notice.value='';if(authorized())void load();},{immediate:true,flush:'sync'});
+function editModel(model){clearDiscovery();preset.value=null;adding.value=false;editing.value={...model};}
+function cancelEdit(){clearDiscovery();preset.value=null;editing.value=null;adding.value=false;}
+watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken],()=>{epoch++;sequence++;clearDiscovery();loading.value=false;busy.value=false;testingId.value='';testingKind.value='';parsingResult.value=null;state.value=null;editing.value=null;adding.value=false;preset.value=null;selected.value='';defaultId.value='';error.value='';notice.value='';if(authorized())void load();},{immediate:true,flush:'sync'});
 onBeforeUnmount(()=>{alive=false;epoch++;sequence++;});
 </script>
 
@@ -83,7 +97,7 @@ onBeforeUnmount(()=>{alive=false;epoch++;sequence++;});
     <p class="muted">使用服务器合成语句，仅验证本次解析；不保存计划，也不代表可执行预约。</p>
    </section>
    <button v-if="!adding&&!editing" class="secondary-button add-model" type="button" :disabled="busy" @click="adding=true">添加AI模型</button>
-   <ModelEditorForm v-if="adding||editing" :model="editing" :initial-preset="preset" :busy="busy" @submit="saveModel" @cancel="cancelEdit" />
+   <ModelEditorForm v-if="adding||editing" :model="editing" :initial-preset="preset" :busy="busy||discovering" :discover-busy="discovering" :discovered-models="discoveredModels" :discovery-error="discoveryError" @submit="saveModel" @cancel="cancelEdit" @discover="discoverModels" @clear-discovery="clearDiscovery" />
   </section>
  </div>
 </template>

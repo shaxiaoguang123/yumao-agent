@@ -19,6 +19,9 @@ KEYRING = CredentialKeyring({"enc-v1": bytes(range(32, 64))}, "enc-v1")
 
 class FakeTransport:
     def __init__(self): self.calls = []
+    def list_models(self, config):
+        self.calls.append((config, "GET /models"))
+        return [{"id":"deepseek-flash"},{"id":"qwen-plus"},{"id":"deepseek-flash"},{"id":"bad id"},{"name":"missing-id"}]
     def chat(self, config, messages):
         self.calls.append((config, messages))
         return "synthetic reply"
@@ -141,6 +144,34 @@ class AIModelTests(unittest.TestCase):
         self.assertEqual(body["models"][0]["has_api_key"], True)
         self.assertNotIn("'api_key':", str(body))
 
+    def test_model_discovery_is_explicit_secret_safe_and_owner_scoped(self):
+        body={"base_url":"https://vendor.example/v1","auth_mode":"bearer","api_key":"ephemeral-discovery-secret"}
+        response=self.a.post('/api/ai/models/discover',json=body,headers=self._headers(self.csrf_a))
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.get_json(),{"models":["deepseek-flash","qwen-plus"]})
+        self.assertNotIn(b"ephemeral-discovery-secret",response.data)
+        config,operation=self.transport.calls[-1]
+        self.assertEqual((operation,config.api_key),("GET /models","ephemeral-discovery-secret"))
+        self.assertEqual(self.service.list_models('user-a')['models'],[])
+        self.assertEqual(self.a.post('/api/ai/models/discover',json=body,headers=self._headers()).status_code,403)
+
+        saved=self._create().get_json()['model']
+        response=self.a.post(f"/api/ai/models/{saved['id']}/discover",json={},headers=self._headers(self.csrf_a))
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(self.transport.calls[-1][0].api_key,"user-secret-synthetic")
+        self.assertEqual(self.b.post(f"/api/ai/models/{saved['id']}/discover",json={},headers=self._headers(self.csrf_b)).status_code,404)
+        self.assertEqual(self.app.test_client().post(f"/api/ai/models/{saved['id']}/discover",json={},headers=self._headers()).status_code,401)
+
+    def test_model_discovery_validates_endpoint_and_requires_ephemeral_key(self):
+        for body in (
+            {"base_url":"http://vendor.example/v1","auth_mode":"bearer","api_key":"secret"},
+            {"base_url":"https://vendor.example/v1","auth_mode":"bearer"},
+            {"base_url":"https://vendor.example/v1","auth_mode":"none","api_key":"secret"},
+        ):
+            response=self.a.post('/api/ai/models/discover',json=body,headers=self._headers(self.csrf_a))
+            self.assertEqual(response.status_code,400)
+        self.assertEqual(self.transport.calls,[])
+
     def test_crud_preferences_secret_replace_delete_and_fake_test(self):
         created = self._create().get_json()["model"]
         model_id = created["id"]
@@ -256,6 +287,33 @@ class AIModelTests(unittest.TestCase):
             with self.assertRaises(ProviderFailure) as oversized:
                 limited.chat(ProviderConfig("m","m","https://vendor.example/v1","model","none"),[{"role":"user","content":"x"}])
         self.assertEqual(oversized.exception.code,"provider_response_too_large")
+
+    def test_pinned_transport_reads_models_with_get_and_bearer_auth(self):
+        import json
+        class FakeSocket:
+            def settimeout(self, _value): pass
+        class Response:
+            status=200
+            def __init__(self): self.sent=False
+            def read1(self,size):
+                if self.sent:return b""
+                self.sent=True
+                return b'{"object":"list","data":[{"id":"deepseek-flash"}]}'[:size]
+        class RecordingConnection:
+            last=None
+            def __init__(self,*_args,**_kwargs):self.sock=FakeSocket();self.response=Response();RecordingConnection.last=self
+            def connect(self):pass
+            def request(self,*args,**kwargs):self.request_args=args;self.request_kwargs=kwargs
+            def getresponse(self):return self.response
+            def close(self):self.sock=None
+        transport=PinnedChatCompletionsTransport(resolver=lambda _host:["93.184.216.34"])
+        config=ProviderConfig("m","m","https://vendor.example/v1","model","bearer","discovery-key")
+        with patch("backend.ai.provider._PinnedHTTPSConnection",RecordingConnection):
+            models=transport.list_models(config)
+        self.assertEqual(models,[{"id":"deepseek-flash"}])
+        self.assertEqual(RecordingConnection.last.request_args[:2],("GET","/v1/models"))
+        self.assertEqual(RecordingConnection.last.request_kwargs["headers"]["Authorization"],"Bearer discovery-key")
+        self.assertIsNone(RecordingConnection.last.request_kwargs["body"])
 
     def test_cipher_binds_user_model_revision_and_uses_derived_key(self):
         cipher = ProviderKeyCipher(KEYRING)
