@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 _MIGRATION_NAME_RE = re.compile(r"\A(?P<version>[0-9]{4})_[a-z0-9_]+\.sql\Z")
 
 _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
@@ -46,6 +46,10 @@ _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
         "initial_validation_result", "initial_validation_at_utc_ms", "created_by_user_id",
         "secret_material_active", "ciphertext", "nonce", "tag", "encryption_key_version",
         "ciphertext_cleared_at_utc_ms",
+    }),
+    "credential_payment_secrets": frozenset({
+        "user_id", "credential_id", "secret_revision", "ciphertext", "nonce", "tag",
+        "encryption_key_version", "updated_at_utc_ms",
     }),
     "credential_validation_observations": frozenset({
         "validation_attempt_id", "user_id", "credential_id", "operation_kind",
@@ -213,6 +217,7 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
         for name, columns in _REQUIRED_COLUMNS.items()
         if (schema_version >= 6 or name not in {"ai_models", "ai_model_preferences"})
         and (schema_version >= 5 or name not in {"booking_plans", "booking_plan_revisions"})
+        and (schema_version >= 7 or name != "credential_payment_secrets")
         and (schema_version >= 2 or name not in {
             "credentials",
             "credential_token_revisions",
@@ -251,6 +256,8 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
             ("credential_token_revisions", ("user_id", "credential_id", "revision_id")),
             ("credential_token_revisions", ("user_id", "credential_id", "revision_number")),
         )
+        if schema_version >= 7:
+            required_composite_uniques += (("credential_payment_secrets", ("user_id", "credential_id")),)
         for table_name, columns in required_composite_uniques:
             if not _has_unique_columns(connection, table_name, columns):
                 raise SchemaNotReadyError(f"required composite uniqueness is missing from {table_name}")
@@ -310,6 +317,14 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
                 (("active_user_id", "user_id"), ("active_credential_id", "credential_id")),
             ),
         )
+        if schema_version >= 7:
+            composite_foreign_keys += (
+                (
+                    "credential_payment_secrets",
+                    "credentials",
+                    (("user_id", "user_id"), ("credential_id", "credential_id")),
+                ),
+            )
         for table_name, parent_table, column_map in composite_foreign_keys:
             if not _has_composite_foreign_key(connection, table_name, parent_table, column_map):
                 raise SchemaNotReadyError(f"required tenant-bound foreign key is missing from {table_name}")

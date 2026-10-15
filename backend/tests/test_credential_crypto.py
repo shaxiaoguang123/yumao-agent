@@ -10,6 +10,10 @@ from backend.credentials.crypto import (
     TokenCipherKeyUnavailable,
 )
 from backend.credentials.keyring import parse_credential_keyring
+from backend.credentials.payment_secret import (
+    CredentialPaymentSecretCipher,
+    PaymentSecretError,
+)
 
 
 def _keyring(key_id: str = "enc-v1", material: bytes = bytes(range(32))):
@@ -84,6 +88,35 @@ class CredentialTokenCipherTests(unittest.TestCase):
 
         self.assertNotIn("synthetic.jwt.token", str(raised.exception))
         self.assertNotIn(envelope.ciphertext.hex(), str(raised.exception))
+
+
+class CredentialPaymentSecretCipherTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.cipher = CredentialPaymentSecretCipher(_keyring())
+        self.context = {
+            "user_id": "user-1",
+            "credential_id": "credential-1",
+            "revision": 2,
+            "key_id": "enc-v1",
+        }
+
+    def test_round_trip_uses_versioned_secret_specific_envelope(self) -> None:
+        secret = b"synthetic-payment-secret"
+        envelope = self.cipher.encrypt(secret, **self.context)
+        self.assertEqual((len(envelope.nonce), len(envelope.tag)), (12, 16))
+        self.assertEqual(self.cipher.decrypt(envelope, **self.context), secret)
+        self.assertNotIn(secret.decode(), repr(envelope))
+
+    def test_ciphertext_authenticates_owner_credential_revision_and_key(self) -> None:
+        envelope = self.cipher.encrypt(b"secret", **self.context)
+        for context in (
+            {**self.context, "user_id": "user-2"},
+            {**self.context, "credential_id": "credential-2"},
+            {**self.context, "revision": 3},
+            {**self.context, "key_id": "enc-v2"},
+        ):
+            with self.subTest(context=context), self.assertRaises(PaymentSecretError):
+                self.cipher.decrypt(envelope, **context)
 
 
 if __name__ == "__main__":

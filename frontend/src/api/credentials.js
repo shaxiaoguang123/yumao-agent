@@ -10,10 +10,16 @@ export function createCredentialApi(client) {
     list() {
       return client.request('/api/credentials');
     },
-    create({ label, token }) {
+    create({ label, token, payment_password }) {
       return client.request('/api/credentials', {
         method: 'POST',
-        body: { label, token },
+        body: { label, token, payment_password },
+      });
+    },
+    setPaymentPassword(credentialId, payment_password, expectedCredentialVersion) {
+      return client.request(`${credentialPath(credentialId)}/payment-password`, {
+        method: 'PUT',
+        body: { payment_password, expected_credential_version: expectedCredentialVersion },
       });
     },
     validate(credentialId, expectedCredentialVersion, expectedRevisionId) {

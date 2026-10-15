@@ -35,8 +35,9 @@ def check_credential_key_dependencies(
                 row["encryption_key_version"]
                 for row in connection.execute(
                     """SELECT DISTINCT encryption_key_version
-                       FROM credential_token_revisions
-                       WHERE secret_material_active=1"""
+                       FROM credential_token_revisions WHERE secret_material_active=1
+                       UNION
+                       SELECT DISTINCT encryption_key_version FROM credential_payment_secrets"""
                 ).fetchall()
             }
             current_token_dependencies = {

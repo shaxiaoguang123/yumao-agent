@@ -10,6 +10,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from backend.credentials.keyring import CredentialKeyring
+from backend.credentials.service import CredentialOperationError
 from backend.credentials.request_gate import GateDecision, GateOperationContext, UpstreamRequestGate
 from backend.db import connect_database
 from backend.migrate import migrate_database
@@ -127,7 +128,7 @@ class CredentialServiceTests(unittest.TestCase):
 
     def _create(self, user_id: str = "user-a", token: str | None = None, label: str = "Home"):
         return self._require_service().create(
-            user_id, label, token or _token(), self._next_time()
+            user_id, label, token or _token(), self._next_time(), "synthetic-payment-password"
         )
 
     def _inject_same_user_confirmed_duplicate(self, source) -> None:
@@ -180,7 +181,7 @@ class CredentialServiceTests(unittest.TestCase):
     def test_create_success_persists_only_encrypted_token_and_safe_identity_fingerprint(self) -> None:
         service = self._require_service()
         token = _token(marker="never-store-plaintext")
-        dto = service.create("user-a", "My token", token, self._next_time())
+        dto = service.create("user-a", "My token", token, self._next_time(), "synthetic-payment-password")
 
         self.assertEqual(dto.account_binding_state, "confirmed")
         self.assertEqual(dto.last_confirmed_validation_state, "confirmed_valid")
@@ -194,14 +195,54 @@ class CredentialServiceTests(unittest.TestCase):
             revision = connection.execute(
                 "SELECT * FROM credential_token_revisions WHERE user_id='user-a'"
             ).fetchone()
+            payment_secret = connection.execute(
+                "SELECT * FROM credential_payment_secrets WHERE user_id='user-a'"
+            ).fetchone()
             self.assertEqual(credential["last_confirmed_validation_state"], "confirmed_valid")
             self.assertEqual(credential["current_token_revision_id"], revision["revision_id"])
             self.assertEqual(revision["secret_material_active"], 1)
             self.assertNotEqual(revision["ciphertext"], token.encode())
             self.assertNotEqual(credential["upstream_account_fingerprint"], b"synthetic-account-id")
+            self.assertEqual(payment_secret["secret_revision"], 1)
+            self.assertNotEqual(payment_secret["ciphertext"], b"synthetic-payment-password")
         database_bytes = self.database_path.read_bytes()
         self.assertNotIn(token.encode(), database_bytes)
         self.assertNotIn(b"synthetic-account-id", database_bytes)
+        self.assertNotIn(b"synthetic-payment-password", database_bytes)
+
+    def test_payment_password_has_distinct_ciphertext_and_versioned_owner_scoped_update(self) -> None:
+        service = self._require_service()
+        dto = self._create()
+        self.assertTrue(dto.has_payment_password)
+        self.assertEqual(dto.payment_password_revision, 1)
+        with closing(connect_database(self.database_path, BUSY_TIMEOUT_MS)) as connection:
+            original = connection.execute(
+                "SELECT ciphertext, nonce, tag, encryption_key_version FROM credential_payment_secrets WHERE user_id=? AND credential_id=?",
+                ("user-a", dto.credential_id),
+            ).fetchone()
+        self.assertNotEqual(original["ciphertext"], b"synthetic-payment-password")
+        outcome = service.set_payment_password(
+            "user-a", dto.credential_id, dto.credential_version, "replacement-payment-password", self._next_time()
+        )
+        self.assertEqual(outcome.code, "payment_password_saved")
+        self.assertEqual(outcome.credential.payment_password_revision, 2)
+        with closing(connect_database(self.database_path, BUSY_TIMEOUT_MS)) as connection:
+            updated = connection.execute(
+                "SELECT ciphertext, secret_revision FROM credential_payment_secrets WHERE user_id=? AND credential_id=?",
+                ("user-a", dto.credential_id),
+            ).fetchone()
+        self.assertEqual(updated["secret_revision"], 2)
+        self.assertNotEqual(updated["ciphertext"], original["ciphertext"])
+        with self.assertRaises(CredentialOperationError) as not_owner:
+            service.set_payment_password(
+                "user-b", dto.credential_id, outcome.credential.credential_version, "other", self._next_time()
+            )
+        self.assertEqual(not_owner.exception.code, "credential_not_found")
+        with self.assertRaises(CredentialOperationError) as stale:
+            service.set_payment_password(
+                "user-a", dto.credential_id, dto.credential_version, "stale", self._next_time()
+            )
+        self.assertEqual(stale.exception.code, "credential_version_conflict")
 
     def test_one_user_can_store_different_confirmed_upstream_accounts(self) -> None:
         service = self._require_service()
@@ -654,6 +695,10 @@ class CredentialServiceTests(unittest.TestCase):
                 "SELECT secret_material_active, ciphertext FROM credential_token_revisions WHERE credential_id=?",
                 (dto.credential_id,),
             ).fetchone()
+            payment_secret = connection.execute(
+                "SELECT count(*) FROM credential_payment_secrets WHERE credential_id=?",
+                (dto.credential_id,),
+            ).fetchone()[0]
             deleted_audit = connection.execute(
                 "SELECT old_account_binding_state FROM credential_lifecycle_audits "
                 "WHERE credential_id=? AND operation_code='soft_deleted'",
@@ -661,6 +706,7 @@ class CredentialServiceTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(tuple(credential), ("unresolved", None))
         self.assertEqual(tuple(revision), (0, None))
+        self.assertEqual(payment_secret, 0)
         self.assertEqual(deleted_audit["old_account_binding_state"], "confirmed")
 
     def test_all_credential_reads_are_scoped_to_user_id(self) -> None:

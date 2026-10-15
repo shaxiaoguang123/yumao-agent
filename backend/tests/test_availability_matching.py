@@ -210,7 +210,7 @@ class SimulationApiTests(unittest.TestCase):
         self.assertEqual(result,self.match().get_json())
         with closing(connect_database(self.path,5000)) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM booking_plan_revisions').fetchone()[0],1)
-            self.assertEqual(db.execute('SELECT max(version) FROM schema_migrations').fetchone()[0],6)
+            self.assertEqual(db.execute('SELECT max(version) FROM schema_migrations').fetchone()[0],7)
         self.network.assert_not_called()
 
     def test_manual_grid_preview_is_synthetic_ephemeral_and_never_saves_coordinates(self):

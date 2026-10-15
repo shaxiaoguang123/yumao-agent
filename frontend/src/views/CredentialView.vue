@@ -18,6 +18,13 @@ const creating = ref(false);
 const busyCredentialId = ref('');
 const search = ref('');
 const filter = ref('all');
+const label = ref('');
+const createToken = ref('');
+const createPaymentPassword = ref('');
+const rotationCredentialId = ref('');
+const rotationToken = ref('');
+const paymentPasswordCredentialId = ref('');
+const paymentPassword = ref('');
 const visibleCredentials = computed(() => credentials.value.filter(item => (
  item.label.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase())
  && (filter.value === 'all' || (filter.value === 'enabled' && item.enabled) || (filter.value === 'disabled' && !item.enabled) || (filter.value === 'attention' && needsAttention(item)))
@@ -28,16 +35,17 @@ watch([search, filter], () => {
     rotationToken.value = '';
     rotationCredentialId.value = '';
   }
+  if (paymentPasswordCredentialId.value && !visibleCredentials.value.some(item => item.credential_id === paymentPasswordCredentialId.value)) {
+    paymentPassword.value = '';
+    paymentPasswordCredentialId.value = '';
+  }
 }, { flush: 'sync' });
-const label = ref('');
-const createToken = ref('');
-const rotationCredentialId = ref('');
-const rotationToken = ref('');
 
 const safeErrors = {
   invalid_request: '输入内容无效，请检查后重试。',
   invalid_credential_label: '名称长度须为 1 到 128 个字符，且不能包含控制字符。',
   invalid_credential_token: 'Token 格式无效，请重新输入。',
+  invalid_payment_password: '支付密码格式无效，请检查后重试。',
   credential_token_expired: '此 Token 已过期，请替换 Token。',
   credential_token_invalid: '此 Token 已确认无效，请替换 Token。',
   credential_account_already_configured: '此上游账户已绑定到本用户的其他凭据，请重新启用或轮换已有凭据。',
@@ -79,25 +87,41 @@ async function loadCredentials() {
 
 function clearSensitiveInputs() {
   createToken.value = '';
+  createPaymentPassword.value = '';
   rotationToken.value = '';
   rotationCredentialId.value = '';
+  paymentPassword.value = '';
+  paymentPasswordCredentialId.value = '';
 }
 
 function cancelCreate() {
   label.value = '';
   createToken.value = '';
+  createPaymentPassword.value = '';
   errorMessage.value = '';
 }
 
 function beginRotation(credentialId) {
   errorMessage.value = '';
+  paymentPasswordCredentialId.value = '';
+  paymentPassword.value = '';
   rotationCredentialId.value = credentialId;
   rotationToken.value = '';
+}
+
+function beginPaymentPassword(credentialId) {
+  errorMessage.value = '';
+  rotationCredentialId.value = '';
+  rotationToken.value = '';
+  paymentPasswordCredentialId.value = credentialId;
+  paymentPassword.value = '';
 }
 
 function cancelRotation() {
   rotationToken.value = '';
   rotationCredentialId.value = '';
+  paymentPassword.value = '';
+  paymentPasswordCredentialId.value = '';
   errorMessage.value = '';
 }
 
@@ -108,8 +132,14 @@ async function createCredential() {
   successMessage.value = '';
   const submittedLabel = label.value;
   const submittedToken = createToken.value;
+  const submittedPaymentPassword = createPaymentPassword.value;
+  if (!submittedPaymentPassword) {
+    errorMessage.value = safeMessage({ code: 'invalid_payment_password' });
+    creating.value = false;
+    return;
+  }
   try {
-    await api.create({ label: submittedLabel, token: submittedToken });
+    await api.create({ label: submittedLabel, token: submittedToken, payment_password: submittedPaymentPassword });
     label.value = '';
     successMessage.value = '凭据已添加。';
     await loadCredentials();
@@ -117,7 +147,26 @@ async function createCredential() {
     errorMessage.value = safeMessage(error);
   } finally {
     createToken.value = '';
+    createPaymentPassword.value = '';
     creating.value = false;
+  }
+}
+
+async function savePaymentPassword(credential) {
+  if (busyCredentialId.value || !paymentPassword.value) return;
+  busyCredentialId.value = credential.credential_id;
+  errorMessage.value = '';
+  successMessage.value = '';
+  try {
+    await api.setPaymentPassword(credential.credential_id, paymentPassword.value, credential.credential_version);
+    successMessage.value = '支付密码已单独加密保存；此操作没有发起支付。';
+    paymentPasswordCredentialId.value = '';
+  } catch (error) {
+    errorMessage.value = safeMessage(error);
+  } finally {
+    paymentPassword.value = '';
+    busyCredentialId.value = '';
+    await loadCredentials();
   }
 }
 
@@ -162,7 +211,7 @@ function toggleEnabled(credential) {
 
 function deleteCredential(credential) {
   const confirmed = window.confirm(
-    `确认删除“${credential.label}”吗？已保存的 Token 会被清除，且此操作无法撤销。`,
+    `确认删除“${credential.label}”吗？已保存的 Token 和支付密码都会被清除，且此操作无法撤销。`,
   );
   if (!confirmed) return;
 
@@ -207,7 +256,7 @@ onUnmounted(() => {
 
 <template>
   <section class="credential-page" aria-labelledby="credential-title">
-    <PageHeader title-id="credential-title" eyebrow="账户安全 · 凭据管理" title="预约凭据" description="清晰管理 Token 有效期、验证结果与账户连续性。验证和保存不代表已经预约。" />
+    <PageHeader title-id="credential-title" eyebrow="账户安全 · 凭据管理" title="预约凭据" />
 
     <p v-if="errorMessage" class="credential-message error-message" role="alert">
       {{ errorMessage }}
@@ -222,45 +271,15 @@ onUnmounted(() => {
 
     <div class="credential-workspace">
     <section class="credential-add panel" aria-labelledby="credential-add-title">
-      <span class="section-icon"><AppIcon name="plus" /></span>
-      <h2 id="credential-add-title">添加预约凭据</h2>
-      <p class="muted">
-        Token 会在服务器端加密保存。验证完成后会清空输入框；Token 不会放入浏览器地址或本地存储。
-      </p>
-      <form class="form-stack" data-testid="credential-create" @submit.prevent="createCredential">
-        <label class="field">
-          凭据名称
-          <input
-            v-model="label"
-            data-testid="credential-label"
-            type="text"
-            maxlength="128"
-            autocomplete="off"
-            required
-          />
-        </label>
-        <label class="field">
-          上游 Token
-          <input
-            v-model="createToken"
-            data-testid="credential-token"
-            type="password"
-            autocomplete="off"
-            spellcheck="false"
-            required
-          />
-        </label>
-        <div class="credential-actions">
-          <button class="primary-button" type="submit" :disabled="creating">
-            {{ creating ? '验证并保存中…' : '验证并保存' }}
-          </button>
-          <button
-            class="secondary-button"
-            type="button"
-            data-testid="credential-create-cancel"
-            @click="cancelCreate"
-          >清空</button>
-        </div>
+      <header class="credential-add-heading">
+        <span class="section-icon"><AppIcon name="plus" /></span>
+        <div><h2 id="credential-add-title">添加预约凭据</h2><p class="muted">Token 验证后加密保存；支付密码单独加密保存，不参与 Token 验证。</p></div>
+      </header>
+      <form class="credential-create-grid" data-testid="credential-create" @submit.prevent="createCredential">
+        <label class="field">凭据名称<input v-model="label" data-testid="credential-label" type="text" maxlength="128" autocomplete="off" required /></label>
+        <label class="field">上游 Token<input v-model="createToken" data-testid="credential-token" type="password" autocomplete="off" spellcheck="false" required /></label>
+        <label class="field">支付密码<input v-model="createPaymentPassword" data-testid="credential-payment-password" type="password" autocomplete="new-password" required /><small>仅保存；当前不会发起支付。</small></label>
+        <div class="credential-actions"><button class="primary-button" type="submit" :disabled="creating">{{ creating ? '验证并保存中…' : '验证并保存凭据' }}</button><button class="secondary-button" type="button" data-testid="credential-create-cancel" @click="cancelCreate">清空</button></div>
       </form>
     </section>
 
@@ -281,8 +300,8 @@ onUnmounted(() => {
         暂无预约凭据。添加后可查看 Token 状态和账户连续性。
       </p>
 
-      <template v-if="listStatus === 'ready'">
-      <CredentialCard v-for="credential in visibleCredentials" :key="credential.credential_id" :credential="credential" :busy="Boolean(busyCredentialId)" @validate="validateCredential(credential)" @rotate="beginRotation(credential.credential_id)" @toggle="toggleEnabled(credential)" @remove="deleteCredential(credential)">
+      <div v-if="listStatus === 'ready' && visibleCredentials.length" class="credential-cards">
+      <CredentialCard v-for="credential in visibleCredentials" :key="credential.credential_id" :credential="credential" :busy="Boolean(busyCredentialId)" @validate="validateCredential(credential)" @rotate="beginRotation(credential.credential_id)" @payment-password="beginPaymentPassword(credential.credential_id)" @toggle="toggleEnabled(credential)" @remove="deleteCredential(credential)">
         <form
           v-if="rotationCredentialId === credential.credential_id"
           class="rotation-form"
@@ -319,8 +338,13 @@ onUnmounted(() => {
             </button>
           </div>
         </form>
+        <form v-if="paymentPasswordCredentialId === credential.credential_id" class="rotation-form payment-password-form" :data-testid="`payment-password-form-${credential.credential_id}`" @submit.prevent="savePaymentPassword(credential)">
+          <label class="field">{{ credential.has_payment_password ? '新支付密码' : '支付密码' }}<input v-model="paymentPassword" type="password" autocomplete="new-password" data-testid="payment-password-input" required /></label>
+          <p class="muted">保存后仅由服务器加密保管；直到未来单独实现支付前，不会读取或发送此密码。</p>
+          <div class="credential-actions"><button class="primary-button" type="submit" :disabled="busyCredentialId === credential.credential_id">加密保存</button><button class="secondary-button" type="button" data-testid="payment-password-cancel" @click="cancelRotation">取消</button></div>
+        </form>
       </CredentialCard>
-      </template>
+      </div>
     </section>
     </div>
   </section>
@@ -335,27 +359,12 @@ onUnmounted(() => {
 .credential-workspace {
   display:grid;
   grid-template-columns:minmax(0,1fr);
-  gap:26px;
+  gap:18px;
   align-items:start;
 
 }
 
-.credential-add h2 {
-  margin-top:17px;
-  font-size:18px;
-
-}
-
-.credential-add .muted {
-  font-size:12px;
-  margin:10px 0 0;
-
-}
-
-.credential-add .form-stack {
-  gap:17px;
-
-}
+.credential-add{padding:18px;min-width:0}.credential-add-heading{display:flex;align-items:flex-start;gap:12px;margin-bottom:18px}.credential-add-heading .section-icon{flex:0 0 40px;height:40px;display:grid;place-items:center;border:1px solid var(--line);border-radius:10px;background:var(--brand-soft);color:var(--brand)}.credential-add-heading h2{font-size:17px;margin:0}.credential-add-heading p{font-size:12px;line-height:1.6;margin:5px 0 0}.credential-create-grid{display:grid;gap:14px}.credential-create-grid .field{min-width:0}.credential-create-grid .field input{min-width:0;width:100%}.credential-create-grid .field small{font-size:11px;color:var(--muted);line-height:1.5}.credential-create-grid button{min-height:42px;font-size:12px}.credential-create-grid .credential-actions{margin-top:2px}
 
 .credential-actions {
   display:flex;
@@ -371,6 +380,7 @@ onUnmounted(() => {
   min-width:0;
 
 }
+.credential-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px;align-items:start;min-width:0}.credential-cards :deep(.credential-card){height:100%;padding:18px}.credential-cards :deep(.credential-facts){grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;margin:16px 0}.credential-cards :deep(.credential-actions){gap:6px}.credential-cards :deep(.credential-actions button){min-height:40px;padding:8px 10px;font-size:11px}
 
 .section-heading h2 {
   font-size:18px;
@@ -453,26 +463,6 @@ onUnmounted(() => {
   border:0;
 
 }
-@media(min-width:1200px) {
-  .credential-workspace {
-  grid-template-columns:280px minmax(0,1fr);
-
-}
-}
-@media(max-width:360px) {
-  .credential-toolbar {
-  flex-wrap:wrap;
-
-}
-
-.filter-field {
-  width:100%;
-
-}
-
-.filter-field select {
-  width:100%;
-
-}
-}
+@media(min-width:1050px){.credential-workspace{grid-template-columns:minmax(270px,310px) minmax(0,1fr)}}
+@media(max-width:640px){.credential-workspace{gap:12px}.credential-add{padding:15px}.credential-cards{grid-template-columns:minmax(0,1fr)}.credential-toolbar{flex-wrap:wrap}.search-field{flex-basis:100%}.filter-field{width:100%}.filter-field select{width:100%}}
 </style>
