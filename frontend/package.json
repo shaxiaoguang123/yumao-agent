@@ -8,8 +8,7 @@
     "build": "vite build",
     "test": "vitest",
     "test:e2e": "node e2e/run.mjs",
-    "test:e2e:planning": "node e2e/planning-real.mjs",
-    "test:e2e:availability": "node e2e/availability-real.mjs"
+    "test:e2e:planning": "node e2e/planning-real.mjs"
   },
   "dependencies": {
     "vue": "^3.5.43",

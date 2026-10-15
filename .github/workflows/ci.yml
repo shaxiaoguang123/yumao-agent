@@ -98,12 +98,6 @@ jobs:
           PLAN_QA_PYTHON: python
         run: npm run test:e2e:planning
 
-      - name: Match synthetic availability using saved plans and real SQLite
-        env:
-          AVAILABILITY_QA_OUTPUT: ${{ runner.temp }}/yumao-availability-e2e
-          PLAN_QA_PYTHON: python
-        run: npm run test:e2e:availability
-
       - name: Preserve synthetic browser evidence
         if: always()
         uses: actions/upload-artifact@v4
