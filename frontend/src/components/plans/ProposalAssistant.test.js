@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { intent, plan } from './testFixtures.js';
 
 enableAutoUnmount(afterEach);
-const proposal={intent:{...intent,venue_preference:'AI场馆意向'},context:{},kind:'unbound_draft',plan_id:null,base_version:null,before_intent:null,changes:[{field:'venue_preference',before:'',after:'AI场馆意向'}],booking_window:{can_book:false},provider:{name:'Test provider',model:'test-model'},can_book:false,can_pay:false,can_create_job:false,can_query_upstream:false};
+const proposal={intent:{...intent,venue_preference:'AI场馆意向'},context:{},kind:'unbound_draft',plan_id:null,base_version:null,before_intent:null,changes:[{field:'venue_preference',before:'',after:'AI场馆意向'}],booking_window:{business_date:'2026-10-10',can_book:false},provider:{name:'Test provider',model:'test-model'},can_book:false,can_pay:false,can_create_job:false,can_query_upstream:false};
 function fixture({plans=[],proposalResult={status:'ready',questions:[],proposal},planOverrides={},credentialId='credential-a'}={}){
  const saved=plan(2,{venue_preference:'AI场馆意向'});
  const planApi={get:vi.fn(async()=>({plan:plan(3,{venue_preference:'latest venue'})})),create:vi.fn(async()=>({plan:saved})),update:vi.fn(async()=>({plan:saved})),...planOverrides};
@@ -25,7 +25,7 @@ describe('proposal assistant',()=>{
 
  it('previews a ready result and waits for explicit confirmation before saving',async()=>{
   const {wrapper,planApi,proposalApi}=await mountAssistant();expect(wrapper.findAll('.proposal-mode-card')).toHaveLength(2);await wrapper.get('[data-testid="proposal-field-date"]').trigger('click');expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('预约日期：');await wrapper.get('[data-testid="proposal-message"]').setValue('新建周末意向');expect(wrapper.find('.chat-message-list .chat-row.is-user').exists()).toBe(false);expect(wrapper.get('.proposal-mode-picker').exists()).toBe(true);await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-  expect(proposalApi.generate).toHaveBeenCalledWith('新建周末意向',null,null,undefined,undefined,'credential-a');expect(wrapper.text()).toContain('建议预览');expect(wrapper.text()).toContain('AI场馆意向');expect(wrapper.text()).toContain('确认后仅保存预约意向，不会预约或付款。');expect(wrapper.get('.proposal-chat-messages').find('[aria-label="AI建议预览"]').exists()).toBe(true);expect(planApi.create).not.toHaveBeenCalled();
+  expect(proposalApi.generate).toHaveBeenCalledWith('新建周末意向',null,null,undefined,undefined,'credential-a');expect(wrapper.text()).toContain('建议预览');expect(wrapper.text()).toContain('AI场馆意向');expect(wrapper.text()).toContain('本步骤只保存意向，不会立即预约或付款。');expect(wrapper.get('.proposal-chat-messages').find('[aria-label="AI建议预览"]').exists()).toBe(true);expect(planApi.create).not.toHaveBeenCalled();
   await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.create).toHaveBeenCalledWith(proposal.intent,'credential-a');expect(wrapper.text()).toContain('预约意向已保存');
  });
  it('keeps the save notice when the parent list refreshes to the version just saved',async()=>{
@@ -121,7 +121,45 @@ describe('proposal assistant',()=>{
   const incomplete={...proposal,intent:{...proposal.intent,preferred_start_times:[],venue_preference:''}};
   const config=fixture({proposalResult:{status:'ready',questions:[],proposal:incomplete}});
   const {wrapper,planApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('未写清楚预约信息');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-  expect(wrapper.text()).toContain('缺少明确的日期、开始时间、时长、场馆或场地偏好');expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);expect(planApi.create).not.toHaveBeenCalled();
+  expect(wrapper.text()).toContain('请按优先顺序填写1～8个不同的开始时间。');expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);expect(planApi.create).not.toHaveBeenCalled();
+ });
+
+ it('shows only the first prioritized clarification in the chat',async()=>{
+  const config=fixture({proposalResult:{status:'needs_input',questions:['你说的10号是哪一天？例如10月20日。','你希望几点开始？','计划打多久？'],proposal:null}});
+  const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('预约10号');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
+  expect(wrapper.text()).toContain('我先确认一个关键问题');expect(wrapper.text()).toContain('你说的10号是哪一天？例如10月20日。');expect(wrapper.text()).not.toContain('你希望几点开始？');expect(wrapper.text()).not.toContain('计划打多久？');
+ });
+
+ it('rejects impossible dates and time ranges that cross midnight before save',async()=>{
+  const invalidIntents=[
+   [{...intent,target_date:'2026-02-30'},'真实存在的日期'],
+   [{...intent,target_date:'2026-10-09'},'日期已过'],
+   [{...intent,preferred_start_times:['08:59']},'09:00–22:00'],
+   [{...intent,preferred_start_times:['20:01']},'最晚20:00开始'],
+   [{...intent,preferred_start_times:['23:00'],duration_minutes:120},'09:00–22:00'],
+   [{...intent,court_preferences:['11号场']},'仅支持1～10号场'],
+   [{...intent,court_preferences:['0号场']},'仅支持1～10号场'],
+   [{...intent,court_preferences:['6号场优先']},'仅支持1～10号场'],
+  ];
+  for(const [invalidIntent,reason] of invalidIntents){
+   const config=fixture({proposalResult:{status:'ready',questions:[],proposal:{...proposal,intent:invalidIntent}}});
+   const {wrapper,planApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('看起来完整但实际无效的意向');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
+   expect(wrapper.text()).toContain(reason);expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);expect(planApi.create).not.toHaveBeenCalled();
+   wrapper.unmount();
+  }
+ });
+
+ it('accepts the exact opening and closing boundaries when the duration fits',async()=>{
+  const validIntents=[
+   {...intent,preferred_start_times:['09:00'],duration_minutes:120,court_preferences:['1号场']},
+   {...intent,preferred_start_times:['20:00'],duration_minutes:120,court_preferences:['10号场']},
+   {...intent,preferred_start_times:['21:00'],duration_minutes:60},
+  ];
+  for(const validIntent of validIntents){
+   const config=fixture({proposalResult:{status:'ready',questions:[],proposal:{...proposal,intent:validIntent}}});
+   const {wrapper,planApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('边界时间有效');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
+   expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(false);expect(planApi.create).not.toHaveBeenCalled();wrapper.unmount();
+  }
  });
 
 });
