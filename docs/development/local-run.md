@@ -33,7 +33,7 @@ export APP_UPSTREAM_FINGERPRINT_ACTIVE_KEY_ID=fp-v1
 
 首次生成后，应通过本机受保护的环境配置或密钥管理器保存这些值，后续重启时继续注入相同密钥。不要在每次启动时重新生成，不要把实际密钥写入 Git、日志、截图或共享文档。加密 keyring 与 fingerprint HMAC keyring 必须保持独立，不得复用 key material。
 
-`UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS` 的 `getUserInfo` 请求间隔目前没有 endpoint-specific 抓包证据，因此保持未设置。此时添加、验证或轮换 Credential 会返回 `503 validation_not_configured`，不会保存提交的候选 Token。不要用其他上游接口观察到的约 668 ms 间隔替代它。设置该值前，需要先取得针对 `getUserInfo` 的证据并重新评审。
+`UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS` 是所有用户和 Credential 共用的 `getUserInfo` 请求最小间隔，单位为毫秒。未配置时，添加、验证或轮换 Credential 会返回 `503 validation_not_configured`，不会保存提交的候选 Token。本地开发可显式设置该值，例如 `export UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS=500`；它只是可调整的客户端节流配置，不代表上游已确认的安全请求频率。抓包尚未确定该接口的安全间隔，不要用其他接口观察到的约 668 ms 替代。Flask CLI 仅在安装 `python-dotenv` 时自动加载 `.env`；使用其他入口或环境时，须将配置显式注入进程。数据库路径和加密/HMAC 密钥属于本地运行配置，不随 Git 分支合并而迁移或重建。
 
 JWT `exp` 只用于本地到期提醒；Token 当前是否有效仍由用户发起的只读 `getUserInfo` 验证确认。该操作会经过所有用户和 Credential 共用的 SQLite `UpstreamRequestGate`。
 
