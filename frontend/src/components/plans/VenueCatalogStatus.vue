@@ -39,5 +39,5 @@ const sourceStateLabel=computed(()=>props.catalog.source_state==='protocol_evide
 </template>
 
 <style scoped>
-.venue-catalog-status{display:grid;gap:10px;margin:0 0 22px}.venue-catalog-status h2,.venue-catalog-status p{margin:0}.venue-catalog-status .eyebrow{margin:0 0 6px}.venue-catalog-status details{line-height:1.7}.venue-catalog-status summary{cursor:pointer;font-weight:650}.venue-catalog-status ul{margin:8px 0 0;padding-left:22px}.catalog-version{color:var(--brand-dark);font-weight:600}
+.venue-catalog-status{display:grid;gap:8px;margin:0 0 24px}.venue-catalog-status h2,.venue-catalog-status p{margin:0}.venue-catalog-status .eyebrow{margin:0 0 8px}.venue-catalog-status details{line-height:1.7}.venue-catalog-status summary{cursor:pointer;font-weight:650}.venue-catalog-status ul{margin:8px 0 0;padding-left:24px}.catalog-version{color:var(--brand-dark);font-weight:600}
 </style>

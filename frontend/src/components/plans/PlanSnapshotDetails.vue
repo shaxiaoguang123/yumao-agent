@@ -14,5 +14,5 @@ defineProps({snapshot:{type:Object,required:true}});
  </dl>
 </template>
 <style scoped>
-.plan-facts{display:grid;grid-template-columns:minmax(120px,1fr) minmax(0,3fr);gap:10px 18px;margin:18px 0;line-height:1.7}.plan-facts dt{color:var(--muted)}.plan-facts dd{margin:0;overflow-wrap:anywhere}@media(max-width:600px){.plan-facts{grid-template-columns:1fr;gap:4px}.plan-facts dd{margin-bottom:8px}}
+.plan-facts{display:grid;grid-template-columns:minmax(120px,1fr) minmax(0,3fr);gap:8px 16px;margin:16px 0;line-height:1.7}.plan-facts dt{color:var(--muted)}.plan-facts dd{margin:0;overflow-wrap:anywhere}@media(max-width:600px){.plan-facts{grid-template-columns:1fr;gap:8px}.plan-facts dd{margin-bottom:8px}}
 </style>

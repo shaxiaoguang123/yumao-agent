@@ -91,19 +91,17 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="agent-credential-gate" :class="{ 'is-ready': isReady, 'is-blocked': !isReady }" aria-label="预约凭据准备状态" aria-live="polite" :data-state="state" data-testid="agent-credential-gate">
-    <div class="agent-gate-indicator" :class="{ 'is-ready': isReady }" aria-hidden="true">
-      <span>{{ isReady ? '✓' : '!' }}</span>
-    </div>
+  <section class="agent-credential-gate" :class="{ 'is-ready': isReady, 'is-blocked': !isReady && state !== 'loading' }" aria-label="预约凭据准备状态" aria-live="polite" :data-state="state" data-testid="agent-credential-gate">
+    <span class="agent-gate-dot" :class="{ 'is-ready': isReady, 'is-busy': state === 'loading' }" aria-hidden="true" />
     <div class="agent-gate-copy">
       <div class="agent-gate-heading">
-        <h3>预约准备检查</h3>
+        <h3>{{ isReady ? '凭据已就绪' : '凭据状态' }}</h3>
         <span class="agent-gate-status" :class="{ 'is-ready': isReady }">
-          {{ state === 'loading' ? '正在核对' : isReady ? '可以整理' : '需要处理' }}
+          {{ state === 'loading' ? '正在核对' : isReady ? '已就绪' : '需要处理' }}
         </span>
       </div>
-      <p v-if="state === 'loading'" role="status">正在读取所选凭据的验证和支付密码状态。</p>
-      <p v-else-if="isReady">{{ selected.label }} · Token 已验证 · 支付密码已设置</p>
+      <p v-if="state === 'loading'" class="status-loading" role="status">正在读取所选凭据的验证和支付密码状态。</p>
+      <p v-else-if="isReady">{{ selected.label }}。可以在右上角切换 Token。</p>
       <p v-else>{{ descriptions[state] }}</p>
       <div v-if="!isReady && state !== 'loading'" class="agent-gate-actions">
         <RouterLink to="/credentials">前往预约凭据设置</RouterLink>
@@ -114,12 +112,19 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.agent-credential-gate{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid transparent;border-radius:12px;background:#f5f8f6}
-.agent-credential-gate.is-ready{background:var(--brand-soft)}.agent-credential-gate.is-blocked{border-color:#eadcbe;background:var(--warning-soft)}
-.agent-gate-indicator{flex:none;width:30px;height:30px;display:grid;place-items:center;border-radius:50%;background:var(--warning-soft);color:var(--warning);font-weight:800}
-.agent-gate-indicator.is-ready{background:var(--brand-soft);color:var(--brand)}
-.agent-gate-copy{min-width:0;flex:1}.agent-gate-heading{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.agent-gate-heading h3{font-size:14px;margin:0}.agent-gate-copy p{margin:4px 0 0;color:var(--muted);font-size:13px;line-height:1.5;overflow-wrap:anywhere}
-.agent-gate-status{padding:3px 8px;border-radius:999px;background:var(--warning-soft);color:var(--warning);font-size:11px}.agent-gate-status.is-ready{background:var(--brand-soft);color:var(--brand-dark)}
-.agent-gate-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:7px;font-size:13px}.agent-gate-actions a{min-height:44px;display:inline-flex;align-items:center;font-weight:700}.agent-gate-actions button{min-height:44px}
-@media(max-width:600px){.agent-gate-copy p{font-size:16px}.agent-gate-actions{font-size:14px}}
+.agent-credential-gate { display: flex; gap:8px; align-items: flex-start; min-width: 0; padding:8px 0; }
+.agent-credential-gate.is-ready { align-items: center; padding:8px 0; }
+.agent-credential-gate.is-ready .agent-gate-copy p,
+.agent-credential-gate.is-ready .agent-gate-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.agent-gate-dot { flex: none; width: 8px; height: 8px; margin-top:8px; border-radius:50%; background: var(--warning); }
+.agent-gate-dot.is-ready { background: var(--success); }
+.agent-gate-dot.is-busy { background: var(--brand); }
+.agent-gate-copy { min-width: 0; flex: 1; }
+.agent-gate-heading { display: flex; align-items: center; flex-wrap: wrap; gap:8px; }
+.agent-gate-heading h3 { margin:0; font-size: 15px; font-weight: 600; line-height: 1.4; }
+.agent-gate-copy p { margin:8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.agent-gate-status { padding:8px 8px; border-radius:8px; background: var(--warning-soft); color: var(--warning); font-size: 12px; font-weight: 600; }
+.agent-gate-status.is-ready { background: var(--success-soft); color: var(--success); }
+.agent-gate-actions { display: flex; flex-wrap: wrap; align-items: center; gap:8px; margin-top:8px; }
+.agent-gate-actions a, .agent-gate-actions button { min-height:var(--control-height); display: inline-flex; align-items: center; font-size: 15px; font-weight: 600; }
 </style>

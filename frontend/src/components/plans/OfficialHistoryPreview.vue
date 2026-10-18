@@ -91,5 +91,5 @@ onBeforeUnmount(()=>{alive=false;epoch++;preview.value=null;});
 </template>
 
 <style scoped>
-.official-history-preview{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;margin:22px 0 0;min-width:0}.official-history-preview h2{margin:0}.history-preview-notice{margin:0;padding:12px 14px;border-radius:10px;background:var(--warning-soft);color:var(--warning);line-height:1.65}.history-file-field{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;padding:14px;border:1px dashed var(--line);border-radius:10px;line-height:1.5;min-width:0}.history-file-field input{width:100%;max-width:100%;min-width:0;font:inherit}.history-file-field small{color:var(--muted)}
+.official-history-preview{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;margin:24px 0 0;min-width:0}.official-history-preview h2{margin:0}.history-preview-notice{margin:0;padding:16px 16px;border-radius:8px;background:var(--warning-soft);color:var(--warning);line-height:1.65}.history-file-field{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;padding:16px;border:1px dashed var(--line);border-radius:8px;line-height:1.5;min-width:0}.history-file-field input{width:100%;max-width:100%;min-width:0;font:inherit}.history-file-field small{color:var(--muted)}
 </style>
