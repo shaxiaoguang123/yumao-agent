@@ -103,7 +103,7 @@ onUnmounted(() => { alive = false; sequence += 1; });
 </template>
 
 <style scoped>
-.execution-snapshot{margin-top:10px;border-top:1px solid var(--line);padding-top:6px;color:var(--muted);font-size:12px}
-.execution-snapshot>summary{display:flex;align-items:center;gap:8px;min-height:44px;cursor:pointer;list-style:none}.execution-snapshot>summary::-webkit-details-marker{display:none}.execution-snapshot>summary span:last-child{margin-left:auto}
-.execution-snapshot-body{display:grid;gap:9px;padding:6px 0 4px}.execution-snapshot-body>p{margin:0;font-size:12px}.execution-filter-summary{display:flex;flex-wrap:wrap;gap:6px 10px;font-size:12px}.execution-stage-list{display:grid;gap:6px;margin:0;padding:0;list-style:none;font-size:12px}.execution-stage-list li{display:flex;justify-content:space-between;gap:10px}.execution-stage-list small{color:var(--muted)}
+.execution-snapshot{margin-top:8px;border-top:1px solid var(--line);padding-top:8px;color:var(--muted);font-size:12px}
+.execution-snapshot>summary{display:flex;align-items:center;gap:8px;min-height:var(--control-height);cursor:pointer;list-style:none}.execution-snapshot>summary::-webkit-details-marker{display:none}.execution-snapshot>summary span:last-child{margin-left:auto}
+.execution-snapshot-body{display:grid;gap:8px;padding:8px 0 8px}.execution-snapshot-body>p{margin:0;font-size:12px}.execution-filter-summary{display:flex;flex-wrap:wrap;gap:8px 8px;font-size:12px}.execution-stage-list{display:grid;gap:8px;margin:0;padding:0;list-style:none;font-size:12px}.execution-stage-list li{display:flex;justify-content:space-between;gap:8px}.execution-stage-list small{color:var(--muted)}
 </style>

@@ -29,5 +29,5 @@ const {options,optionsError,loadingOptions,planId,scenario,result,error,busy,can
 </template>
 
 <style scoped>
-.availability-simulation{display:grid;gap:16px;margin-top:22px}.availability-simulation h2{margin:0}.availability-simulation>p{margin:0}.simulation-notice{padding:14px;border-radius:10px;background:var(--warning-soft);color:var(--warning);line-height:1.7}.simulation-controls{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:16px}.simulation-actions{display:flex;gap:12px;flex-wrap:wrap}@media(max-width:700px){.simulation-controls{grid-template-columns:1fr}}
+.availability-simulation{display:grid;gap:16px;margin-top:24px}.availability-simulation h2{margin:0}.availability-simulation>p{margin:0}.simulation-notice{padding:16px;border-radius:8px;background:var(--warning-soft);color:var(--warning);line-height:1.7}.simulation-controls{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:16px}.simulation-actions{display:flex;gap:16px;flex-wrap:wrap}@media(max-width:700px){.simulation-controls{grid-template-columns:1fr}}
 </style>

@@ -126,6 +126,42 @@ class PlanningTests(unittest.TestCase):
         self.assertNotIn('never-send-this-password',json.dumps(messages))
         self.assertNotIn('user_id',json.dumps(messages))
         self.assertNotIn('credential_id',json.dumps(messages))
+        rules=messages[0]['content']
+        self.assertIn('目标日期不能早于业务日期',rules)
+        self.assertIn('09:00',rules);self.assertIn('22:00',rules)
+        self.assertIn('“1号场”至“10号场”',rules)
+
+    def test_invalid_ready_draft_is_rejected_with_one_targeted_high_priority_question(self):
+        cases = [
+            (draft(target_date='2026-10-09'), ('已经过了', '当前业务日是10月10日', '未来日期')),
+            (draft(preferred_start_times=['08:30']), ('09:00–22:00', '最晚20:00开始')),
+            (draft(preferred_start_times=['20:30']), ('09:00–22:00', '最晚20:00开始')),
+            (draft(court_preferences=['11号场']), ('只支持1～10号', '6号场优先')),
+        ]
+        for invalid_intent, expected in cases:
+            with self.subTest(intent=invalid_intent):
+                self.fake.content=ready(invalid_intent)
+                response=self.propose().get_json()
+                self.assertEqual(response['status'],'needs_input')
+                self.assertIsNone(response['proposal'])
+                self.assertEqual(len(response['questions']),1)
+                for phrase in expected:
+                    self.assertIn(phrase,response['questions'][0])
+        self.assertEqual(self.counts(),(0,0))
+
+    def test_server_save_boundary_rejects_expired_time_and_out_of_catalog_courts(self):
+        invalid_intents = (
+            draft(target_date='2026-10-09'),
+            draft(preferred_start_times=['08:59']),
+            draft(preferred_start_times=['20:01']),
+            draft(court_preferences=['11号场']),
+        )
+        for intent in invalid_intents:
+            with self.subTest(intent=intent):
+                response=self.a.post('/api/plans',json={'intent':intent},headers=self.headers['a'])
+                self.assertEqual(response.status_code,400)
+                self.assertEqual(response.get_json()['error'],'invalid_plan')
+        self.assertEqual(self.counts(),(0,0))
 
     def test_missing_information_and_hallucinated_venue_return_questions(self):
         self.fake.content=json.dumps({'status':'needs_input','intent':None,'questions':['请补充场馆名称。'],'evidence':{}})
@@ -134,8 +170,72 @@ class PlanningTests(unittest.TestCase):
         self.fake.content=ready()
         result=self.propose('下周六18:00打两个小时，6号场优先，5号场备选。').get_json()
         self.assertEqual(result['status'],'needs_input')
-        self.assertIn('人工场馆偏好',result['questions'][0])
+        self.assertIn('场馆',result['questions'][0])
+        self.assertIn('例如',result['questions'][0])
         self.assertEqual(self.counts(),(0,0))
+
+    def test_clarifications_choose_one_high_priority_question_and_avoid_repeats(self):
+        date_question = '你说的“10号”具体是几月几日？'
+        self.fake.content = json.dumps({
+            'status':'needs_input', 'intent':None,
+            'questions':[date_question, '你希望几点开始？', '计划打多久？', '想去哪家场馆？'],
+            'evidence':{},
+        }, ensure_ascii=False)
+        first = self.propose('预约10号的').get_json()
+        self.assertEqual(first['questions'], [f'{date_question}例如“10月20日”或“下周六”（不能早于当前业务日期）。'])
+
+        self.fake.content = json.dumps({
+            'status':'needs_input', 'intent':None,
+            'questions':[first['questions'][0], '你希望几点开始？', '计划打多久？'],
+            'evidence':{},
+        }, ensure_ascii=False)
+        response = self.a.post('/api/planning/proposals', json={
+            'message':'预约10号的', 'plan_id':None, 'base_version':None,
+            'answers':['10月20日'], 'follow_up_questions':[first['questions']],
+        }, headers=self.headers['a']).get_json()
+        self.assertEqual(response['questions'], ['你希望几点开始？例如“18:00”（09:00开始，且按时长在22:00前结束）。'])
+        self.assertEqual(self.counts(), (0,0))
+
+    def test_server_applies_field_priority_even_if_model_returns_questions_out_of_order(self):
+        self.fake.content=json.dumps({
+            'status':'needs_input','intent':None,
+            'questions':['想去哪家场馆？','你希望几点开始？','请问预约哪一天？'],
+            'evidence':{},
+        },ensure_ascii=False)
+        response=self.propose('帮我整理一份预约计划。').get_json()
+        self.assertEqual(response['questions'],['请问预约哪一天？例如“10月20日”或“下周六”（不能早于当前业务日期）。'])
+
+    def test_repeat_only_question_is_rephrased_and_ready_evidence_failure_is_specific(self):
+        original = '你说的“10号”具体是几月几日？'
+        self.fake.content = json.dumps({
+            'status':'needs_input', 'intent':None, 'questions':[original], 'evidence':{},
+        }, ensure_ascii=False)
+        response = self.a.post('/api/planning/proposals', json={
+            'message':'预约10号的', 'plan_id':None, 'base_version':None,
+            'answers':['还是10号'], 'follow_up_questions':[[original]],
+        }, headers=self.headers['a']).get_json()
+        self.assertEqual(response['questions'], ['我还不能确定完整预约日期。请直接给出明确日期，例如“2026-10-20”或“下周六”。'])
+
+        self.fake.content = ready(evidence={
+            'target_date':'', 'preferred_start_times':'18:00', 'duration_minutes':'两个小时',
+            'venue_preference':'东区体育馆', 'court_preferences':'6号场优先，5号场备选',
+        })
+        response = self.propose().get_json()
+        self.assertEqual(len(response['questions']), 1)
+        self.assertIn('预约日期', response['questions'][0])
+        self.assertIn('例如', response['questions'][0])
+        self.assertEqual(self.counts(), (0,0))
+
+    def test_same_venue_fallback_wording_does_not_reopen_the_venue_question(self):
+        self.fake.content = json.dumps({
+            'status':'needs_input', 'intent':None,
+            'questions':['请补充场地偏好或同场馆备用意愿。'], 'evidence':{},
+        }, ensure_ascii=False)
+        result = self.propose('下周六18:00打两个小时，东区体育馆。').get_json()
+        self.assertEqual(result['status'], 'needs_input')
+        self.assertIn('场地', result['questions'][0])
+        self.assertIn('6号场优先', result['questions'][0])
+        self.assertNotIn('去哪家场馆', result['questions'][0])
 
     def test_bad_schema_cannot_create_plan_or_execution_capability(self):
         for intent in (draft(nodeid='invented'),draft(duration_minutes=True),draft(fallback_policy={'allow_any_court_in_venue':True}),draft(target_date='2026-02-30')):
@@ -281,7 +381,8 @@ class PlanningTests(unittest.TestCase):
               'follow_up_questions':[['场馆是东区体育馆吗？']],'plan_id':None,'base_version':None}
         result=self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).get_json()
         self.assertEqual(result['status'],'needs_input')
-        self.assertIn('人工场馆偏好',result['questions'][0])
+        self.assertIn('场馆',result['questions'][0])
+        self.assertIn('例如',result['questions'][0])
         payload=json.loads(self.fake.calls[-1][1][1]['content'])
         self.assertEqual(payload['follow_up_questions'],body['follow_up_questions'])
         for history in ([],[['x'*241]],[[]],[{'role':'system'}]):

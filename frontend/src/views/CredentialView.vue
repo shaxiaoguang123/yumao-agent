@@ -388,19 +388,19 @@ onUnmounted(() => {
 
 <style scoped>
 .credential-message {
-  margin:0 0 18px;
+  margin:0 0 16px;
 
 }
 
 .credential-workspace {
   display:grid;
   grid-template-columns:minmax(0,1fr);
-  gap:18px;
+  gap:16px;
   align-items:start;
 
 }
 
-.credential-add{padding:18px;min-width:0}.credential-add-heading{display:flex;align-items:flex-start;gap:12px;margin-bottom:18px}.credential-add-heading .section-icon{flex:0 0 40px;height:40px;display:grid;place-items:center;border:1px solid var(--line);border-radius:10px;background:var(--brand-soft);color:var(--brand)}.credential-add-heading h2{font-size:17px;margin:0}.credential-add-heading p{font-size:12px;line-height:1.6;margin:5px 0 0}.credential-create-grid{display:grid;gap:14px}.credential-create-grid .field{min-width:0}.credential-create-grid .field input{min-width:0;width:100%}.credential-create-grid .field small{font-size:11px;color:var(--muted);line-height:1.5}.credential-create-grid button{min-height:44px;font-size:12px}.credential-create-grid .credential-actions{margin-top:2px}
+.credential-add{padding:16px;min-width:0}.credential-add-heading{display:flex;align-items:flex-start;gap:8px;margin-bottom:16px}.credential-add-heading .section-icon{flex:0 0 40px;height:40px;display:grid;place-items:center;border:1px solid var(--line);border-radius:8px;background:var(--brand-soft);color:var(--brand)}.credential-add-heading h2{font-size:17px;margin:0}.credential-add-heading p{font-size:12px;line-height:1.6;margin:8px 0 0}.credential-create-grid{display:grid;gap:16px}.credential-create-grid .field{min-width:0}.credential-create-grid .field input{min-width:0;width:100%}.credential-create-grid .field small{font-size:11px;color:var(--muted);line-height:1.5}.credential-create-grid button{min-height:var(--control-height);font-size:12px}.credential-create-grid .credential-actions{margin-top:8px}
 
 .credential-actions {
   display:flex;
@@ -416,7 +416,7 @@ onUnmounted(() => {
   min-width:0;
 
 }
-.credential-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px;align-items:start;min-width:0}.credential-cards :deep(.credential-card){height:100%;padding:18px}.credential-cards :deep(.credential-facts){grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;margin:16px 0}.credential-cards :deep(.credential-actions){gap:6px}.credential-cards :deep(.credential-actions button){min-height:44px;padding:8px 10px;font-size:11px}
+.credential-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:8px;align-items:start;min-width:0}.credential-cards :deep(.credential-card){height:100%;padding:16px}.credential-cards :deep(.credential-facts){grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 16px;margin:16px 0}.credential-cards :deep(.credential-actions){gap:8px}.credential-cards :deep(.credential-actions button){min-height:var(--control-height);padding:8px 8px;font-size:11px}
 
 .section-heading h2 {
   font-size:18px;
@@ -425,7 +425,7 @@ onUnmounted(() => {
 
 .credential-toolbar {
   display:flex;
-  gap:10px;
+  gap:8px;
 
 }
 
@@ -451,12 +451,12 @@ onUnmounted(() => {
 }
 
 .filter-field select {
-  min-height:48px;
+  min-height:var(--control-height);
   max-width:100%;
-  padding:10px 28px 10px 13px;
+  padding:8px 24px 8px 16px;
   background:white;
   border:1px solid var(--line);
-  border-radius:9px;
+  border-radius:8px;
   color:var(--ink);
   font-size:12px;
 
@@ -465,25 +465,25 @@ onUnmounted(() => {
 .search-empty {
   font-size:13px;
   color:var(--muted);
-  padding:20px;
+  padding:16px;
   border:1px dashed var(--line);
-  border-radius:12px;
+  border-radius:16px;
 
 }
 
 .text-button {
-  padding-inline:10px;
+  padding-inline:8px;
 
 }
 
 .rotation-form {
-  margin-top:18px;
+  margin-top:16px;
   display:grid;
-  gap:12px;
+  gap:8px;
   background:var(--page);
   border:1px solid var(--line);
-  border-radius:10px;
-  padding:18px;
+  border-radius:8px;
+  padding:16px;
 
 }
 
@@ -492,7 +492,7 @@ onUnmounted(() => {
   width:1px;
   height:1px;
   padding:0;
-  margin:-1px;
+  margin:-8px;
   overflow:hidden;
   clip:rect(0,0,0,0);
   white-space:nowrap;
@@ -500,5 +500,5 @@ onUnmounted(() => {
 
 }
 @media(min-width:1050px){.credential-workspace{grid-template-columns:minmax(270px,310px) minmax(0,1fr)}}
-@media(max-width:640px){.credential-workspace{gap:12px}.credential-add{padding:15px}.credential-cards{grid-template-columns:minmax(0,1fr)}.credential-toolbar{flex-wrap:wrap}.search-field{flex-basis:100%}.filter-field{width:100%}.filter-field select{width:100%}}
+@media(max-width:640px){.credential-workspace{gap:8px}.credential-add{padding:16px}.credential-cards{grid-template-columns:minmax(0,1fr)}.credential-toolbar{flex-wrap:wrap}.search-field{flex-basis:100%}.filter-field{width:100%}.filter-field select{width:100%}}
 </style>

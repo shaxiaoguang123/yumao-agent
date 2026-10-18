@@ -86,23 +86,24 @@ onBeforeUnmount(() => { requestId += 1; });
   display:flex;
   justify-content:space-between;
   align-items:center;
-  min-height:205px;
-  padding:32px 36px;
-  border-radius:18px;
-  color:white;
-  background:var(--brand-dark);
-  overflow:clip;
+  gap:24px;
+  min-height:0;
+  padding:24px;
+  border:1px solid var(--line);
+  border-radius:16px;
+  color:var(--ink);
+  background:var(--surface);
 
 }
 
 .hero-label {
   display:inline-flex;
   align-items:center;
-  padding:6px 10px;
-  border:1px solid #476152;
-  border-radius:5px;
-  font-size:11px;
-  color:#d7e9d4;
+  padding:8px 8px;
+  border:1px solid var(--line);
+  border-radius:16px;
+  font-size:13px;
+  color:var(--muted);
 
 }
 
@@ -112,24 +113,23 @@ onBeforeUnmount(() => { requestId += 1; });
 }
 
 .dashboard-hero h2 {
-  margin-top:19px;
-  font-size:30px;
-  letter-spacing:-.04em;
+  margin-top:8px;
+  font-size:20px;
+  letter-spacing:-.02em;
 
 }
 
 .dashboard-hero p {
-  margin:12px 0 0;
-  color:#c2d1c6;
-  font-size:13px;
+  margin:8px 0 0;
+  color:var(--muted);
+  font-size:15px;
 
 }
 
 .hero-court {
-  margin-right:35px;
-  transform:rotate(-20deg);
-  color:var(--accent);
-  opacity:.65;
+  margin-right:8px;
+  color:var(--brand);
+  opacity:.28;
 
 }
 
@@ -144,14 +144,16 @@ onBeforeUnmount(() => { requestId += 1; });
   display:grid;
   grid-template-columns:repeat(3,minmax(0,1fr));
   margin:24px 0;
-  padding:26px 8px;
-  border-bottom:1px solid var(--line);
+  padding:8px 0;
+  border:1px solid var(--line);
+  border-radius:16px;
+  background:var(--surface);
 
 }
 
 .overview-metrics > div {
   display:grid;
-  gap:9px;
+  gap:8px;
   padding:0 24px;
   border-right:1px solid var(--line);
 
@@ -169,10 +171,10 @@ onBeforeUnmount(() => { requestId += 1; });
 }
 
 .overview-metrics strong {
-  font-size:36px;
+  font-size:28px;
   line-height:1;
-  letter-spacing:-.04em;
-  font-weight:650;
+  letter-spacing:-.03em;
+  font-weight:600;
 
 }
 
@@ -195,7 +197,7 @@ onBeforeUnmount(() => { requestId += 1; });
   flex-wrap:wrap;
   align-items:center;
   justify-content:space-between;
-  gap:10px;
+  gap:8px;
 
 }
 
@@ -221,7 +223,7 @@ onBeforeUnmount(() => { requestId += 1; });
   display:grid;
   gap:0;
   padding:0;
-  margin:20px 0 0;
+  margin:16px 0 0;
   list-style:none;
 
 }
@@ -229,7 +231,7 @@ onBeforeUnmount(() => { requestId += 1; });
 .risk-list li {
   position:relative;
   border-top:1px solid var(--line);
-  padding:14px 0 14px 18px;
+  padding:16px 0 16px 16px;
   font-size:13px;
   line-height:1.8;
 
@@ -258,48 +260,48 @@ onBeforeUnmount(() => { requestId += 1; });
 }
 
 .scope-panel {
-  padding:26px;
+  padding:24px;
   border-radius:16px;
-  background:#eaf0e8;
+  background:var(--page);
 
 }
 
 .scope-panel h2 {
-  margin-top:19px;
+  margin-top:16px;
   font-size:17px;
 
 }
 
 .scope-panel p {
-  color:#617663;
+  color:var(--muted);
   font-size:13px;
 
 }
 
 .scope-status {
   display:grid;
-  gap:10px;
-  border-top:1px solid #d0dbce;
-  padding-top:18px;
+  gap:8px;
+  border-top:1px solid var(--line);
+  padding-top:16px;
   margin-top:24px;
   font-size:11px;
 
 }
 
 .scope-status strong {
-  color:#617663;
+  color:var(--muted);
   font-weight:600;
 
 }
 
 .scope-footnote {
-  margin:17px 0 0;
+  margin:16px 0 0;
   font-size:11px!important;
 
 }
 
 .overview-error {
-  padding-top:10px;
+  padding-top:8px;
 
 }
 @media(max-width:640px) { .hero-court { display:none; } }
@@ -307,23 +309,23 @@ onBeforeUnmount(() => { requestId += 1; });
 @media(max-width:700px) {
   .dashboard-grid {
   grid-template-columns:1fr;
-  gap:20px;
+  gap:16px;
 
 }
 
 .dashboard-hero {
-  padding:25px;
-  min-height:190px;
+  padding:24px;
+  min-height:0;
 
 }
 
 .dashboard-hero h2 {
-  font-size:25px;
+  font-size:20px;
 
 }
 
 .hero-court {
-  margin:0 -16px 0 10px;
+  margin:0 -16px 0 8px;
   opacity:.4;
 
 }
@@ -335,18 +337,18 @@ onBeforeUnmount(() => { requestId += 1; });
 }
 
 .overview-metrics {
-  padding:22px 0;
-  margin:8px 0 22px;
+  padding:24px 0;
+  margin:8px 0 24px;
 
 }
 
 .overview-metrics > div {
-  padding:0 12px;
+  padding:0 8px;
 
 }
 
 .overview-metrics > div:first-child {
-  padding-left:4px;
+  padding-left:8px;
 
 }
 
@@ -366,7 +368,7 @@ onBeforeUnmount(() => { requestId += 1; });
 }
 
 .scope-panel {
-  padding:22px;
+  padding:24px;
 
 }
 }
@@ -377,17 +379,17 @@ onBeforeUnmount(() => { requestId += 1; });
 }
 
 .dashboard-hero {
-  padding:23px;
+  padding:24px;
 
 }
 
 .dashboard-hero h2 {
-  font-size:23px;
+  font-size:20px;
 
 }
 
 .overview-metrics > div {
-  padding:0 9px;
+  padding:0 8px;
 
 }
 }

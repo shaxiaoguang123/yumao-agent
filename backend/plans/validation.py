@@ -8,6 +8,10 @@ from backend.plans.models import PlanInterpretationContext, PlanSnapshot
 
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z", re.ASCII)
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z", re.ASCII)
+# The reservation grid exposes one fixed set of courts and operating hours.
+_COURT = re.compile(r"(?P<number>10|[1-9])号场(?:优先|备选)?\Z", re.ASCII)
+_OPEN_MINUTE = 9 * 60
+_CLOSE_MINUTE = 22 * 60
 _FIELDS = {"target_date", "preferred_start_times", "duration_minutes", "venue_preference", "court_preferences", "fallback_policy", "price_ceiling_minor"}
 
 
@@ -55,7 +59,7 @@ def parse_manual_intent(payload: object, *, today_business_date: date, context: 
         _invalid("intent", "请提交完整的人工意向字段；不接受上游标识或执行参数。")
     target = parse_target_date(payload["target_date"])
     if target < today_business_date:
-        _invalid("target_date", "目标日期不能早于当前业务日期。")
+        _invalid("target_date", "目标日期已早于当前业务日期，不能创建过期预约计划。")
     times = payload["preferred_start_times"]
     if type(times) is not list or not 1 <= len(times) <= 8:
         _invalid("preferred_start_times", "请按优先顺序设置 1～8 个开始时间。")
@@ -65,13 +69,21 @@ def parse_manual_intent(payload: object, *, today_business_date: date, context: 
     duration = payload["duration_minutes"]
     if type(duration) is not int or not 30 <= duration <= 240 or duration % 30:
         _invalid("duration_minutes", "时长须为 30～240 分钟，以 30 分钟递增。")
-    if any(_minutes(item) + duration > 1440 for item in times):
-        _invalid("preferred_start_times", "开始时间与时长不能跨越当天午夜。")
+    if any(_minutes(item) < _OPEN_MINUTE or _minutes(item) + duration > _CLOSE_MINUTE for item in times):
+        _invalid("preferred_start_times", "预约须在09:00开始或之后，并在22:00前结束。")
     venue = _text(payload["venue_preference"], "venue_preference", 200)
     courts = payload["court_preferences"]
     if type(courts) is not list or len(courts) > 16:
         _invalid("court_preferences", "场地偏好最多 16 项，按输入顺序排列。")
-    courts = [_text(item, "court_preferences", 100) for item in courts]
+    normalized_courts = []
+    for item in courts:
+        court = unicodedata.normalize("NFKC", _text(item, "court_preferences", 100))
+        match = _COURT.fullmatch(court)
+        if not match:
+            _invalid("court_preferences", "场地编号仅支持1～10号场，例如“6号场”。")
+        # Priority words are presentation hints, not part of the actual court name.
+        normalized_courts.append(f"{match.group('number')}号场")
+    courts = normalized_courts
     if len(set(courts)) != len(courts):
         _invalid("court_preferences", "场地偏好不能重复。")
     fallback = payload["fallback_policy"]
@@ -90,8 +102,9 @@ def parse_manual_intent(payload: object, *, today_business_date: date, context: 
         if type(time_range) is not dict or time_range.keys() != {"start", "end"}:
             _invalid("fallback_policy", "请设置完整的时间浮动范围。")
         start, end = (_time(time_range[key], "fallback_policy") for key in ("start", "end"))
-        if start > end or any(not start <= item <= end for item in times) or _minutes(end) + duration > 1440:
-            _invalid("fallback_policy", "浮动范围须包含全部首选时间，且加上时长不跨日。")
+        if (start > end or _minutes(start) < _OPEN_MINUTE or _minutes(end) + duration > _CLOSE_MINUTE
+                or any(not start <= item <= end for item in times)):
+            _invalid("fallback_policy", "浮动时间须包含全部首选时间，开始不早于09:00，且按时长在22:00前结束。")
         time_range = {"start": start, "end": end}
     ceiling = payload["price_ceiling_minor"]
     if ceiling is not None:

@@ -33,16 +33,15 @@ const choices = [
 </template>
 
 <style scoped>
-.proposal-mode-picker{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}
-.proposal-mode-card{display:flex;align-items:center;gap:9px;min-width:0;min-height:54px;padding:8px 10px;text-align:left;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);cursor:pointer;transition:background-color 120ms ease,border-color 120ms ease}
-.proposal-mode-card:hover:not(:disabled){border-color:var(--brand);background:var(--brand-soft)}
-.proposal-mode-card.is-selected{border-color:var(--brand);background:var(--brand-soft);box-shadow:inset 0 0 0 1px var(--brand)}
-.proposal-mode-card:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
-.proposal-mode-card:disabled{opacity:.6;cursor:not-allowed}
-.proposal-mode-card>.app-icon{flex:none;color:var(--brand-dark)}
-.proposal-mode-card strong,.proposal-mode-card small{display:block}
-.proposal-mode-card strong{font-size:12px;line-height:1.4}
-.proposal-mode-card small{margin-top:2px;color:var(--muted);font-size:11px;line-height:1.35}
-@media(max-width:560px){.proposal-mode-picker{grid-template-columns:minmax(0,1fr)}.proposal-mode-card strong{font-size:14px}.proposal-mode-card small{font-size:12px}}
-@media(prefers-reduced-motion:reduce){.proposal-mode-card{transition:none}}
+.proposal-mode-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; margin-top:16px; }
+.proposal-mode-card { display: flex; align-items: flex-start; gap:8px; min-width: 0; min-height:0; padding:8px; text-align: left; border: 1px solid var(--line); border-radius:var(--control-radius); background: var(--surface); color: var(--ink); cursor: pointer; }
+.proposal-mode-card:hover:not(:disabled) { border-color: var(--brand); }
+.proposal-mode-card.is-selected { border-color: var(--brand); background: var(--brand-soft); }
+.proposal-mode-card:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+.proposal-mode-card:disabled { opacity: .6; cursor: not-allowed; }
+.proposal-mode-card > .app-icon { flex: none; margin-top:8px; color: var(--brand); }
+.proposal-mode-card strong, .proposal-mode-card small { display: block; }
+.proposal-mode-card strong { font-size: 15px; font-weight: 600; line-height: 1.35; }
+.proposal-mode-card small { margin-top:8px; color: var(--muted); font-size: 13px; line-height: 1.4; }
+@media (max-width: 560px) { .proposal-mode-picker { grid-template-columns: minmax(0, 1fr); } }
 </style>

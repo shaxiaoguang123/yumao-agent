@@ -19,5 +19,5 @@ defineEmits(['update:answer', 'continue']);
 </template>
 
 <style scoped>
-.follow-up{display:grid;gap:12px;padding:18px;background:var(--brand-soft);border-radius:12px}.follow-up h3,.follow-up p{margin:0}.answer-history{padding-left:22px;margin:0;overflow-wrap:anywhere}.previous-question{display:block;color:var(--muted)}.answer-history li{margin:6px 0}.field textarea{width:100%;box-sizing:border-box;font:inherit;resize:vertical;padding:12px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--ink)}.primary-button{justify-self:start}
+.follow-up{display:grid;gap:16px;padding:16px;background:var(--brand-soft);border-radius:16px}.follow-up h3,.follow-up p{margin:0}.answer-history{padding-left:24px;margin:0;overflow-wrap:anywhere}.previous-question{display:block;color:var(--muted)}.answer-history li{margin:8px 0}.field textarea{width:100%;box-sizing:border-box;font:inherit;resize:vertical;padding:16px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink)}.primary-button{justify-self:start}
 </style>

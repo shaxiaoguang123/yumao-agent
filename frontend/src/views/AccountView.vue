@@ -115,8 +115,8 @@ async function logout() {
   display:flex;
   align-items:center;
   gap:16px;
-  margin:0 0 28px;
-  padding-bottom:26px;
+  margin:0 0 24px;
+  padding-bottom:24px;
   border-bottom:1px solid var(--line);
 
 }
@@ -128,7 +128,7 @@ async function logout() {
 }
 
 .account-identity p {
-  margin:5px 0 0;
+  margin:8px 0 0;
   font-size:17px;
   font-weight:650;
 
@@ -141,9 +141,10 @@ async function logout() {
 
 .account-grid {
   display:grid;
-  grid-template-columns:minmax(0,1.25fr) minmax(0,.85fr);
-  gap:24px;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:16px;
   align-items:start;
+  max-width:880px;
 
 }
 
@@ -159,17 +160,17 @@ async function logout() {
 }
 
 .account-password > button {
-  margin-top:6px;
+  margin-top:8px;
 
 }
 
 .account-session > button {
-  margin-top:10px;
+  margin-top:8px;
 
 } @media(max-width:700px) {
   .account-grid {
   grid-template-columns:1fr;
-  gap:20px;
+  gap:16px;
 
 }
 }

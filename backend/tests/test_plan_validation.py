@@ -57,6 +57,46 @@ class DraftValidationTests(unittest.TestCase):
         self.assertEqual(self.parse(draft(court_preferences=[],fallback_policy=valid)).value['intent']['court_preferences'],[])
         with self.assertRaises(self.validation.IntentValidationError): self.parse(draft(preferred_start_times=['23:00']))
 
+    def test_booking_hours_and_court_catalog_are_hard_boundaries(self):
+        for invalid in (
+            draft(preferred_start_times=['08:59']),
+            draft(preferred_start_times=['20:01']),
+            draft(preferred_start_times=['21:00']),
+            draft(preferred_start_times=['22:00'], duration_minutes=60),
+            draft(court_preferences=['0号场']),
+            draft(court_preferences=['11号场']),
+            draft(court_preferences=['任意场']),
+        ):
+            with self.subTest(intent=invalid):
+                with self.assertRaises(self.validation.IntentValidationError):
+                    self.parse(invalid)
+
+        for valid in (
+            draft(preferred_start_times=['09:00'], duration_minutes=120),
+            draft(preferred_start_times=['20:00'], duration_minutes=120),
+            draft(preferred_start_times=['21:00'], duration_minutes=60),
+            draft(court_preferences=['1号场', '10号场']),
+        ):
+            with self.subTest(intent=valid):
+                self.parse(valid)
+
+        normalized = self.parse(draft(court_preferences=['６号场优先', '10号场备选']))
+        self.assertEqual(normalized.value['intent']['court_preferences'], ['6号场', '10号场'])
+
+    def test_fallback_time_range_must_fit_daily_opening_hours(self):
+        with self.assertRaises(self.validation.IntentValidationError):
+            self.parse(draft(fallback_policy={
+                'allow_any_court_in_venue': False,
+                'allow_time_shift': True,
+                'allowed_start_time_range': {'start': '08:00', 'end': '19:00'},
+            }))
+        with self.assertRaises(self.validation.IntentValidationError):
+            self.parse(draft(fallback_policy={
+                'allow_any_court_in_venue': False,
+                'allow_time_shift': True,
+                'allowed_start_time_range': {'start': '17:00', 'end': '20:01'},
+            }))
+
     def test_price_requires_saved_currency_and_exact_safe_integer(self):
         models=importlib.import_module('backend.plans.models')
         with self.assertRaises(self.validation.IntentValidationError):

@@ -59,10 +59,20 @@ function attemptText(value) {
   return attemptLabels[value] || '验证结果未知';
 }
 
+function riskClass(credential) {
+  const critical = credential.expiry_state === 'expired' || credential.last_confirmed_validation_state === 'confirmed_invalid';
+  const warning = !critical && (credential.requires_revalidation || credential.account_binding_state !== 'confirmed');
+  return {
+    'credential-needs-attention': critical || warning,
+    'risk-critical': critical,
+    'risk-warning': warning,
+  };
+}
+
 </script><template>
       <article
         class="credential-card"
-        :class="{'credential-needs-attention': credential.expiry_state==='expired'||credential.last_confirmed_validation_state==='confirmed_invalid'||credential.requires_revalidation||credential.account_binding_state!=='confirmed'}"
+        :class="riskClass(credential)"
         :data-testid="`credential-card-${credential.credential_id}`"
       >
         <header class="credential-card-heading">
@@ -188,11 +198,11 @@ function attemptText(value) {
   min-width:0;
   padding:24px;
   border:1px solid var(--line);
-  border-radius:14px;
+  border-radius:16px;
   background:var(--surface);
 
 }
-.credential-card.credential-needs-attention{border-color:var(--warning)}.credential-card:not(.credential-needs-attention){border-top:3px solid var(--brand)}
+.credential-card{border-left:3px solid transparent}.credential-card.risk-critical{border-left-color:var(--danger)}.credential-card.risk-warning{border-left-color:var(--warning)}
 
 .credential-card-heading {
   display:flex;
@@ -216,7 +226,7 @@ function attemptText(value) {
 }
 
 .credential-card-heading p {
-  margin:5px 0 0;
+  margin:8px 0 0;
   font-size:10px;
   color:var(--muted);
 
@@ -225,8 +235,8 @@ function attemptText(value) {
 .credential-facts {
   display:grid;
   grid-template-columns:repeat(3,minmax(0,1fr));
-  gap:17px 22px;
-  margin:22px 0;
+  gap:16px 24px;
+  margin:24px 0;
 
 }
 
@@ -240,7 +250,7 @@ function attemptText(value) {
 }
 
 .credential-facts dd {
-  margin:6px 0 0;
+  margin:8px 0 0;
   font-size:12px;
   line-height:1.75;
   overflow-wrap:anywhere;
@@ -254,10 +264,10 @@ function attemptText(value) {
 }
 
 .risk-note {
-  margin:10px 0;
-  padding:11px 14px;
+  margin:8px 0;
+  padding:8px 16px;
   border-left:2px solid #d0a557;
-  border-radius:5px;
+  border-radius:8px;
   background:var(--warning-soft);
   color:var(--warning);
   font-size:12px;
@@ -282,12 +292,12 @@ function attemptText(value) {
 
 .credential-actions button {
   font-size:12px;
-  padding:10px 12px;
+  padding:8px 8px;
 
 }
 @media(max-width:640px) {
   .credential-card {
-  padding:20px;
+  padding:16px;
 
 }
 
@@ -324,7 +334,7 @@ function attemptText(value) {
 
 .validation-record {
   border-top:1px solid var(--line);
-  margin-bottom:10px;
+  margin-bottom:8px;
 
 }
 
@@ -332,8 +342,8 @@ function attemptText(value) {
   display:flex;
   justify-content:space-between;
   align-items:center;
-  gap:12px;
-  min-height:44px;
+  gap:8px;
+  min-height:var(--control-height);
   cursor:pointer;
   color:var(--muted);
   font-size:11px;
@@ -356,7 +366,7 @@ function attemptText(value) {
 .validation-record summary > span:first-child {
   display:flex;
   align-items:center;
-  gap:7px;
+  gap:8px;
 
 }
 
@@ -373,8 +383,8 @@ function attemptText(value) {
 }
 
 .validation-record dl {
-  padding:12px 14px;
-  margin:0 0 10px;
+  padding:8px 16px;
+  margin:0 0 8px;
   background:var(--page);
   border-radius:8px;
   font-size:11px;
@@ -384,7 +394,7 @@ function attemptText(value) {
 
 .validation-record dt {
   color:var(--muted);
-  margin-bottom:6px;
+  margin-bottom:8px;
 
 }
 

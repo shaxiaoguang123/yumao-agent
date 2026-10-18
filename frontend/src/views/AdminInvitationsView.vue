@@ -219,9 +219,10 @@ onBeforeUnmount(() => {
 <style scoped>
 .admin-grid {
   display:grid;
-  grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);
-  gap:30px;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:16px;
   align-items:start;
+  max-width:880px;
 
 }
 
@@ -231,12 +232,12 @@ onBeforeUnmount(() => {
 }
 
 .invitation-create-heading {
-  margin-top:18px;
+  margin-top:16px;
 
 }
 
 .invitation-guide {
-  padding:22px 8px;
+  padding:24px 8px;
 
 }
 
@@ -247,17 +248,17 @@ onBeforeUnmount(() => {
 
 .invitation-guide ol {
   padding:0;
-  margin:26px 0 30px;
+  margin:24px 0 32px;
   list-style:none;
   counter-reset:steps;
   display:grid;
-  gap:25px;
+  gap:24px;
 
 }
 
 .invitation-guide li {
   position:relative;
-  padding-left:44px;
+  padding-left:40px;
   counter-increment:steps;
 
 }
@@ -272,7 +273,7 @@ onBeforeUnmount(() => {
   display:grid;
   place-items:center;
   border:1px solid var(--line);
-  border-radius:7px;
+  border-radius:8px;
   color:var(--brand);
   background:white;
   font-size:10px;
@@ -296,12 +297,12 @@ onBeforeUnmount(() => {
 
 .invitation-result {
   display:grid;
-  gap:13px;
-  padding:20px;
+  gap:16px;
+  padding:16px;
   margin-top:24px;
   background:var(--brand-soft);
   border:1px solid #cbded0;
-  border-radius:12px;
+  border-radius:16px;
 
 }
 
@@ -353,10 +354,10 @@ onBeforeUnmount(() => {
 }
 
 .uncertain-create-warning {
-  padding:12px 15px;
+  padding:8px 16px;
   color:var(--warning);
   background:var(--warning-soft);
-  border-radius:9px;
+  border-radius:8px;
   margin:0;
   line-height:1.8;
   font-size:12px;
@@ -364,17 +365,17 @@ onBeforeUnmount(() => {
 }
 
 .back-link {
-  margin-top:18px;
+  margin-top:16px;
 
 } @media(max-width:700px) {
   .admin-grid {
   grid-template-columns:1fr;
-  gap:12px;
+  gap:8px;
 
 }
 
 .invitation-guide {
-  padding:20px 8px;
+  padding:16px 8px;
 
 }
 }

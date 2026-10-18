@@ -128,11 +128,13 @@ class AvailabilityMatcherTests(unittest.TestCase):
         with self.assertRaises(AvailabilityError):
             snapshot([Slot('6号场','18:00','18:30','available')],time_bands=(('18:00','19:00'),('18:30','19:30')))
 
-    def test_midnight_endpoint_and_different_atom_lengths(self):
-        slots=[Slot('6号场','22:00','23:00','available',100),Slot('6号场','23:00','23:30','available',50),Slot('6号场','23:30','24:00','available',50)]
-        result=self.matcher.match(plan(preferred_start_times=['22:00']),snapshot(slots))
-        self.assertEqual(result['candidates'][0]['end_time'],'24:00')
+    def test_closing_endpoint_and_different_atom_lengths(self):
+        slots=[Slot('6号场','20:00','21:00','available',100),Slot('6号场','21:00','21:30','available',50),Slot('6号场','21:30','22:00','available',50)]
+        result=self.matcher.match(plan(preferred_start_times=['20:00']),snapshot(slots))
+        self.assertEqual(result['candidates'][0]['end_time'],'22:00')
         self.assertEqual(result['candidates'][0]['price']['total_minor'],200)
+        with self.assertRaises(AvailabilityError):
+            self.matcher.match(plan(preferred_start_times=['22:00']),snapshot(slots))
 
     def test_normalized_non_simulated_snapshot_reuses_matcher_but_never_grants_execution(self):
         result=self.matcher.match(plan(),snapshot(hourly(),simulation=False,source='normalized-adapter-example'))

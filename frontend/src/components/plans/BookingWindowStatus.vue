@@ -5,7 +5,7 @@ function formatInstant(ms,zone){return ms===null?'无可用日期边界':new Int
 <template>
  <aside class="plan-window" aria-label="日期窗口状态" aria-live="polite">
   <h3>日期窗口 · 服务器计算</h3>
-  <p v-if="error" class="form-error">{{ error }}</p><p v-else-if="!state" class="muted">正在读取日期窗口…</p>
+  <p v-if="error" class="form-error">{{ error }}</p><p v-else-if="!state" class="muted status-loading" role="status">正在读取日期窗口…</p>
   <template v-else>
    <p class="plan-window-status">{{ state.can_query ? '当前处于日历可查询窗口' : '当前不可查询' }}</p>
    <p v-if="state.reason_code==='timezone_context_mismatch'">保存时区与当前业务时区不一致。请创建新计划以使用当前设置；历史日期和时间不会被重新解释。</p>
@@ -16,5 +16,5 @@ function formatInstant(ms,zone){return ms===null?'无可用日期边界':new Int
  </aside>
 </template>
 <style scoped>
-.plan-window{padding:20px;border:1px solid var(--line);border-radius:var(--radius);background:var(--brand-soft);margin:20px 0}.plan-window p{margin:10px 0 0}.plan-window-status{font-weight:700;color:var(--brand-dark)}
+.plan-window{padding:16px;border:1px solid var(--line);border-radius:var(--radius);background:var(--brand-soft);margin:16px 0}.plan-window p{margin:8px 0 0}.plan-window-status{font-weight:700;color:var(--brand-dark)}
 </style>

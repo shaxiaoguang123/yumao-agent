@@ -18,6 +18,8 @@ booking_plan.json
 *.db
 *.sqlite
 *.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 *.db-wal
 *.db-shm
 *.sqlite-wal

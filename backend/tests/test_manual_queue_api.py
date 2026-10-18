@@ -6,7 +6,7 @@ import unittest
 import test_plans_api as plan_tests
 
 
-def entry(court='人工场1', start='18:00', duration=120, end=None):
+def entry(court='1号场', start='18:00', duration=120, end=None):
     return dict(court_preference=court, start_time=start, duration_minutes=duration,
                 end_time=end or f'{int(start[:2])+duration//60:02d}:00', scope_label='羽毛球')
 
@@ -19,21 +19,21 @@ class ManualQueueTests(unittest.TestCase):
                     json={'base_version':base,'entries':entries},headers=self.headers[user])
 
     def test_queue_priority_and_semantic_revision_history(self):
-        q=self.save_queue([entry('一小时',duration=60),entry('首选'),entry('备选')]).get_json()['queue']
+        q=self.save_queue([entry('3号场',duration=60),entry('1号场'),entry('2号场')]).get_json()['queue']
         self.assertEqual([i['duration_minutes'] for i in q['candidates']],[120,120,60])
-        self.assertEqual([i['court_preferences'][0] for i in q['candidates']],['首选','备选','一小时'])
+        self.assertEqual([i['court_preferences'][0] for i in q['candidates']],['1号场','2号场','3号场'])
         self.assertEqual([i['query_scope_label'] for i in q['candidates']],['羽毛球','羽毛球','羽毛球'])
         self.assertEqual(q['queue_contract_version'],2)
         self.assertEqual(q['duration_priority'],[120,60])
         for i in q['candidates']:
             self.assertFalse(i['fallback_policy']['allow_any_court_in_venue'])
             self.assertFalse(i['fallback_policy']['allow_time_shift'])
-        response=self.save_queue([entry('备选'),entry('首选')],base=1)
+        response=self.save_queue([entry('2号场'),entry('1号场')],base=1)
         self.assertEqual(response.get_json()['queue']['version'],2)
-        self.assertEqual(self.save_queue([entry('备选'),entry('首选')],base=2).get_json()['queue']['version'],2)
+        self.assertEqual(self.save_queue([entry('2号场'),entry('1号场')],base=2).get_json()['queue']['version'],2)
         history=self.a.get('/api/plans/manual-queues/2026-10-20/revisions').get_json()['revisions']
         self.assertEqual([r['revision_number'] for r in history],[2,1])
-        self.assertEqual(history[-1]['candidates'][0]['court_preferences'],['首选'])
+        self.assertEqual(history[-1]['candidates'][0]['court_preferences'],['1号场'])
         self.assertEqual(self.a.get('/api/plans').get_json()['plans'],[])
         self.assertEqual(self.a.get('/api/plans/'+q['plan_id']).status_code,404)
         with closing(connect_database(self.path,5000)) as db:
@@ -47,7 +47,7 @@ class ManualQueueTests(unittest.TestCase):
         q=self.save_queue([entry()]).get_json()['queue']
         self.assertIsNone(self.b.get('/api/plans/manual-queues/2026-10-20').get_json()['queue'])
         self.assertEqual(self.b.get('/api/plans/manual-queues/2026-10-20/revisions').status_code,404)
-        other=self.save_queue([entry('B')],client=self.b,user='b').get_json()['queue']
+        other=self.save_queue([entry('2号场')],client=self.b,user='b').get_json()['queue']
         self.assertNotEqual(other['plan_id'],q['plan_id'])
         self.assertEqual(self.save_queue([entry()],base=0).status_code,409)
         self.assertEqual(self.save_queue([],base=1).get_json()['queue']['version'],2)
@@ -59,7 +59,7 @@ class ManualQueueTests(unittest.TestCase):
             with self.subTest(value=value):self.assertEqual(self.save_queue([value]).status_code,400)
         self.assertEqual(self.save_queue([entry(),entry()]).status_code,400)
         self.assertEqual(self.save_queue([entry()],base=True).status_code,400)
-        self.assertEqual(self.save_queue([entry(start='22:00',end='24:00')]).status_code,200)
+        self.assertEqual(self.save_queue([entry(start='20:00',end='22:00')]).status_code,200)
         self.assertEqual(self.a.get('/api/plans/manual-queues/bad').status_code,400)
         self.assertEqual(self.a.put('/api/plans/manual-queues/2026-10-20',json={'base_version':1,'entries':[]}).status_code,403)
         self.assertEqual(self.app.test_client().get('/api/plans/manual-queues').status_code,401)
@@ -78,7 +78,7 @@ class ManualQueueTests(unittest.TestCase):
         self.assertEqual([r['revision_number'] for r in history],[2,1])
         self.assertEqual(len(history[1]['candidates']),1)
         self.assertEqual(self.a.delete(url,json={'base_version':1},headers=self.headers['a']).status_code,409)
-        revived=self.save_queue([entry('重新选择')],base=2).get_json()['queue']
+        revived=self.save_queue([entry('2号场')],base=2).get_json()['queue']
         self.assertEqual(revived['plan_id'],q['plan_id'])
         self.assertEqual(revived['version'],3)
         self.assertNotIn('deleted',revived)
@@ -92,7 +92,7 @@ class ManualQueueTests(unittest.TestCase):
         self.assertEqual(q['plan_status'],'expired')
         self.assertFalse(q['can_open_selection'])
         self.assertEqual(q['execution_state'],'not_started')
-        updated=self.save_queue([entry('历史语义修改')],base=1,date='2026-10-12')
+        updated=self.save_queue([entry('2号场')],base=1,date='2026-10-12')
         self.assertEqual(updated.status_code,200)
         self.assertEqual(updated.get_json()['queue']['version'],2)
         self.assertEqual(self.save_queue([entry()],date='2026-10-11').status_code,400)
