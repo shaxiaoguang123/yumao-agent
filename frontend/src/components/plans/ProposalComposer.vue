@@ -12,10 +12,12 @@ const props = defineProps({
   followUp: Boolean,
   busy: Boolean,
   blocked: Boolean,
+  sendBlocked: Boolean,
+  suppressed: Boolean,
   locked: Boolean,
   selectionDisabled: Boolean,
 });
-const emit = defineEmits(['update:message', 'update:answer', 'update:targetId', 'send']);
+const emit = defineEmits(['update:message', 'update:answer', 'update:targetId', 'send', 'edit-request']);
 
 const fields = [
   { key: 'date', label: '预约日期', text: '预约日期：' },
@@ -24,7 +26,7 @@ const fields = [
   { key: 'venue', label: '场馆', text: '场馆：' },
   { key: 'courts', label: '场地顺序', text: '场地偏好顺序：' },
 ];
-const canSend = computed(() => !props.busy && !props.blocked && !props.locked
+const canSend = computed(() => !props.busy && !props.blocked && !props.locked && !props.sendBlocked
   && (props.mode !== 'edit' || Boolean(props.targetId))
   && Boolean((props.followUp ? props.answer : props.message).trim()));
 
@@ -41,7 +43,7 @@ function submit() {
 </script>
 
 <template>
-  <section class="proposal-composer" aria-label="预约需求输入">
+  <section class="proposal-composer" :class="{ 'is-suppressed': suppressed }" aria-label="预约需求输入">
     <label v-if="mode === 'edit'" class="proposal-target-field" for="proposal-target">
       <span class="sr-only">要修改的计划</span>
       <select
@@ -84,7 +86,7 @@ function submit() {
           rows="2"
           maxlength="4000"
           :disabled="busy || locked || blocked"
-          placeholder="例如：10月24日18:00开始，打120分钟，东区体育馆，优先6号场，其次5号场。"
+          placeholder="例如：10月24日 18:00 开始，打 2 小时，东区体育馆，6 号场优先"
           @input="emit('update:message', $event.target.value)"
           @keydown.enter.exact.prevent="submit"
           @keydown.ctrl.enter.prevent="submit"
@@ -101,6 +103,7 @@ function submit() {
           <span>{{ busy ? '处理中…' : '发送' }}</span>
         </button>
       </div>
+      <button v-if="followUp" class="text-button" type="button" @click="emit('edit-request')">修改原描述</button>
       <div class="proposal-compose-meta">
         <details class="proposal-field-shortcuts">
           <summary><AppIcon name="plus" />补充字段</summary>
@@ -117,12 +120,35 @@ function submit() {
 </template>
 
 <style scoped>
-.proposal-composer{min-width:0;padding:12px 18px 14px;border-top:1px solid var(--line);background:var(--surface)}
-.proposal-target-field{display:grid;gap:4px;margin:0 0 8px;font-size:12px;font-weight:650}.proposal-target-field select{width:100%;min-height:42px;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--ink);font:inherit;font-size:13px}.proposal-target-field small{color:var(--muted);font-weight:400}
-.proposal-compose-form{display:grid;gap:6px}.proposal-input-box{display:flex;align-items:flex-end;gap:10px;padding:9px 10px 9px 14px;border:1px solid var(--line);border-radius:14px;background:#f7f9f7;transition:border-color 120ms ease,box-shadow 120ms ease}.proposal-input-box:focus-within{border-color:var(--brand);outline:3px solid var(--brand);outline-offset:2px;box-shadow:0 0 0 2px var(--brand-soft)}
-.proposal-input-box textarea{flex:1;width:100%;min-width:0;min-height:58px;max-height:160px;resize:vertical;border:0;padding:7px 0;background:transparent;color:var(--ink);font:inherit;font-size:14px;line-height:1.55}.proposal-input-box textarea:focus-visible{outline:none}.proposal-input-box textarea:disabled{color:var(--muted);cursor:not-allowed}.proposal-input-box textarea::placeholder{color:#74847c;opacity:1}
-.proposal-send-button{flex:none;min-width:64px;min-height:44px;padding:8px 14px}.proposal-compose-meta{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:28px}.composer-hint{margin:0;color:var(--muted);font-size:11px;line-height:1.4;text-align:right}.composer-hint.is-blocked{color:var(--warning);font-weight:600}
-.proposal-field-shortcuts{position:relative;flex:none}.proposal-field-shortcuts>summary{min-height:44px;display:flex;align-items:center;gap:5px;padding:0 8px;border-radius:7px;color:var(--muted);cursor:pointer;font-size:12px;list-style:none}.proposal-field-shortcuts>summary::-webkit-details-marker{display:none}.proposal-field-shortcuts>summary :deep(.app-icon){width:16px;height:16px;color:var(--brand-dark)}.proposal-field-shortcuts[open]>summary{background:var(--brand-soft);color:var(--brand-dark)}.proposal-field-options{position:absolute;bottom:calc(100% + 4px);left:0;z-index:3;display:flex;flex-wrap:wrap;gap:6px;width:min(360px,calc(100vw - 60px));padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:0 8px 22px rgb(20 40 30 / 12%)}.proposal-field-options button{min-height:44px;padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--brand-dark);font-size:12px;cursor:pointer}.proposal-field-options button:hover:not(:disabled){background:var(--brand-soft);border-color:var(--brand)}.proposal-field-options button:disabled{opacity:.55;cursor:not-allowed}
-.proposal-composer :deep(button:focus-visible),.proposal-composer :deep(select:focus-visible),.proposal-composer :deep(summary:focus-visible){outline:3px solid var(--brand);outline-offset:2px}
-@media(max-width:600px){.proposal-composer{padding:10px 12px 12px}.proposal-target-field select{font-size:16px}.proposal-input-box{gap:6px;padding:8px}.proposal-input-box textarea{font-size:16px}.proposal-send-button{min-width:54px;padding:7px 10px}.proposal-compose-meta{align-items:flex-start}.composer-hint{max-width:72%;font-size:10px}.proposal-field-shortcuts>summary{padding:0 4px}}
+.proposal-composer { min-width: 0; padding:8px 16px 16px; border-top: 1px solid var(--line); background: var(--surface); }
+.proposal-composer.is-suppressed { display: none; }
+.proposal-target-field { display: grid; gap:8px; margin:0 0 8px; font-size: 13px; font-weight: 600; }
+.proposal-target-field select { width: 100%; min-height:var(--control-height); padding:8px 8px; border: 1px solid var(--line); border-radius:16px; background: var(--surface); color: var(--ink); font: inherit; font-size: 15px; font-weight: 400; }
+.proposal-target-field small { color: var(--muted); font-weight: 400; }
+.proposal-compose-form { display: grid; gap:8px; }
+.proposal-input-box { display: flex; align-items: flex-end; gap:8px; padding:8px 8px 8px 16px; border: 1px solid var(--line); border-radius:16px; background: var(--page); }
+.proposal-input-box:focus-within { border-color: var(--brand); box-shadow: var(--focus); }
+.proposal-input-box textarea { flex: 1; width: 100%; min-width: 0; min-height:var(--control-height); max-height: 120px; resize: vertical; border: 0; padding:8px 0; background: transparent; color: var(--ink); font: inherit; font-size: 15px; line-height: 1.55; }
+.proposal-input-box textarea:focus-visible { outline: none; }
+.proposal-input-box textarea:disabled { color: var(--muted); cursor: not-allowed; }
+.proposal-input-box textarea::placeholder { color: var(--muted); opacity: 1; }
+.proposal-send-button { flex: none; min-width: 72px; min-height:var(--control-height); padding:8px 16px; }
+.proposal-compose-meta { display: flex; align-items: center; justify-content: space-between; gap:8px; }
+.composer-hint { margin:0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.composer-hint.is-blocked { color: var(--warning); font-weight: 600; }
+.proposal-field-shortcuts { position: relative; flex: none; }
+.proposal-field-shortcuts > summary { min-height:var(--control-height); display: flex; align-items: center; gap:8px; padding:0 8px; border-radius:8px; color: var(--brand); cursor: pointer; font-size: 13px; font-weight: 600; list-style: none; }
+.proposal-field-shortcuts > summary::-webkit-details-marker { display: none; }
+.proposal-field-shortcuts > summary :deep(.app-icon) { width: 16px; height: 16px; }
+.proposal-field-shortcuts[open] > summary { background: var(--brand-soft); }
+.proposal-field-options { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 3; display: flex; flex-wrap: wrap; gap:8px; width: min(360px, calc(100vw - 48px)); padding:8px; border: 1px solid var(--line); border-radius:16px; background: var(--surface); box-shadow: var(--shadow); }
+.proposal-field-options button { min-height:var(--control-height); padding:8px 8px; border: 1px solid var(--line); border-radius:16px; background: var(--surface); color: var(--ink); font-size: 13px; cursor: pointer; }
+.proposal-field-options button:hover:not(:disabled) { border-color: var(--brand); background: var(--brand-soft); }
+.proposal-field-options button:disabled { opacity: .55; cursor: not-allowed; }
+.proposal-composer :deep(button:focus-visible), .proposal-composer :deep(select:focus-visible), .proposal-composer :deep(summary:focus-visible) { outline: 3px solid var(--brand); outline-offset: 2px; }
+@media (max-width: 600px) {
+  .proposal-composer { padding:8px; }
+  .proposal-compose-meta { align-items: flex-start; flex-direction: column; }
+  .proposal-input-box textarea, .proposal-target-field select { font-size: 16px; }
+}
 </style>

@@ -18,6 +18,7 @@ const generatedFor=shallowRef(null),busySaving=shallowRef(false),needsRegenerati
 const uncertainSave=shallowRef(false),verificationLoading=shallowRef(false),verificationComplete=shallowRef(false),verificationResult=shallowRef(null);
 const ownSavedVersion=shallowRef(null);
 const answers=ref([]),answer=shallowRef(''),conversationBase=shallowRef(null),questionHistory=ref([]),trace=ref([]),pendingTurn=shallowRef(''),credentialReady=shallowRef(false);
+const pendingMessage=shallowRef(''),resetNotice=shallowRef(false),editingOriginal=shallowRef(false);
 const labels={target_date:'目标日期',preferred_start_times:'开始时间偏好',duration_minutes:'预约时长',venue_preference:'场馆偏好',court_preferences:'场地偏好',fallback_policy:'备用策略',price_ceiling_minor:'价格上限'};
 const currentTarget=computed(()=>targetId.value||null);
 const selectedPlan=computed(()=>props.plans.find(plan=>plan.plan_id===targetId.value)||null);
@@ -61,12 +62,51 @@ const intentValidationError=computed(()=>{
 });
 const intentComplete=computed(()=>!intentValidationError.value);
 const canStart= computed(()=>!props.credentialApi||credentialReady.value);
+const ambiguousMatch=computed(()=>{
+ if(verificationResult.value?.type!=='list'||!proposal.value?.intent)return '';
+ const intent=proposal.value.intent;
+ const hit=verificationResult.value.plans.find(plan=>plan.intent?.target_date===intent.target_date&&plan.intent?.venue_preference===intent.venue_preference);
+ return hit?`其中有一条可能是刚才的保存：版本 ${hit.version}。`:'没有找到与当前草案日期和场馆都相同的计划。';
+});
+function slotState(id,value,current,draft){
+ if(value)return {state:'done',display:value};
+ if(current)return {state:'current',display:draft||''};
+ if(draft)return {state:'draft',display:draft};
+ return {state:'empty',display:''};
+}
+const slotProgress=computed(()=>{
+ const intent=proposal.value?.intent;
+ const current=questionList.value[0]||'';
+ const blob=[message.value,...answers.value].filter(Boolean).join('\n');
+ const date=intent?.target_date||blob.match(/\d{4}-\d{2}-\d{2}|\d{1,2}月\d{1,2}日/)?.[0]||'';
+ const time=intent?.preferred_start_times?.[0]||blob.match(/\d{1,2}:\d{2}/)?.[0]||'';
+ const duration=Number.isInteger(intent?.duration_minutes)?`${intent.duration_minutes} 分钟`:(blob.match(/\d+\s*小时|\d+\s*分钟/)?.[0]||'');
+ const venue=intent?.venue_preference||'';
+ const courtNumber=Number(blob.match(/(\d+)号场/)?.[1]);
+ const court=intent?.court_preferences?.[0]||(courtNumber>=1&&courtNumber<=10?`${courtNumber}号场`:'');
+ return [
+  {id:'date',label:'日期',...slotState('date',intent?.target_date?formatValue('target_date',intent.target_date):'',/日期|几月|哪一天|哪天|几号/.test(current),date)},
+  {id:'time',label:'时间',...slotState('time',time&&intent?.preferred_start_times?time:'',/几点|时间|开始/.test(current),time)},
+  {id:'duration',label:'时长',...slotState('duration',duration&&intent?.duration_minutes?duration:'',/多久|时长|小时|分钟/.test(current),duration)},
+  {id:'venue',label:'场馆',...slotState('venue',venue,/场馆|哪家|哪里/.test(current),venue)},
+  {id:'court',label:'场地',...slotState('court',court,/场地|号场/.test(current),court)},
+ ];
+});
+function onMessageInput(next){
+ if(answers.value.length&&next!==message.value){pendingMessage.value=next;resetNotice.value=true;return;}
+ editingOriginal.value=false;
+ message.value=next;
+}
+function applyMessageReset(){
+ const next=pendingMessage.value;resetNotice.value=false;pendingMessage.value='';editingOriginal.value=false;message.value=next;
+}
+function cancelMessageReset(){resetNotice.value=false;pendingMessage.value='';editingOriginal.value=false;}
 const followUpActive=computed(()=>questionList.value.length>0&&!proposal.value&&status.value!=='unsupported');
 let alive=true,epoch=0,requestId=0;
 const authorized=()=>props.session.status==='authenticated'&&Boolean(props.session.user?.user_id);
 function valid(generation,userId,csrfToken){return alive&&generation===epoch&&authorized()&&props.session.user?.user_id===userId&&props.session.csrfToken===csrfToken;}
 function resetForSession(values,previous){
- epoch++;requestId++;proposal.value=null;generatedFor.value=null;status.value='idle';questions.value=[];latest.value=null;latestError.value='';error.value='';savedNotice.value='';needsRegeneration.value=false;uncertainSave.value=false;verificationLoading.value=false;verificationComplete.value=false;verificationResult.value=null;ownSavedVersion.value=null;busySaving.value=false;answers.value=[];questionHistory.value=[];answer.value='';conversationBase.value=null;trace.value=[];pendingTurn.value='';credentialReady.value=!props.credentialApi;
+ epoch++;requestId++;proposal.value=null;generatedFor.value=null;status.value='idle';questions.value=[];latest.value=null;latestError.value='';error.value='';savedNotice.value='';needsRegeneration.value=false;uncertainSave.value=false;verificationLoading.value=false;verificationComplete.value=false;verificationResult.value=null;ownSavedVersion.value=null;busySaving.value=false;answers.value=[];questionHistory.value=[];answer.value='';conversationBase.value=null;trace.value=[];pendingTurn.value='';pendingMessage.value='';resetNotice.value=false;editingOriginal.value=false;credentialReady.value=!props.credentialApi;
  if(previous&&(previous[1]!==values[1]||previous[3]!==values[3]||values[0]!=='authenticated')){message.value='';targetId.value='';mode.value='new';}
 }
 watch(()=>[props.session.status,props.session.user?.user_id,props.session.csrfToken,props.credentialId],resetForSession,{flush:'sync'});
@@ -114,7 +154,7 @@ function formatValue(field,value,context){
  if(typeof value==='object')return '有更新';
  return String(value);
 }
-function restartConversation(){if(busySaving.value||uncertainSave.value)return;requestId++;clearProposal();answers.value=[];questionHistory.value=[];answer.value='';conversationBase.value=null;message.value='';trace.value=[];pendingTurn.value='';}
+function restartConversation(){if(busySaving.value||uncertainSave.value)return;requestId++;clearProposal();answers.value=[];questionHistory.value=[];answer.value='';conversationBase.value=null;message.value='';trace.value=[];pendingTurn.value='';pendingMessage.value='';resetNotice.value=false;editingOriginal.value=false;}
 function selectMode(next){if(next!=='new'&&next!=='edit')return;mode.value=next;if(next==='new')targetId.value='';}
 async function generate({forceLatest=false,latestPlan=null,supplement=false}={}){
  if(!authorized()||!canStart.value||status.value==='generating'||busySaving.value||uncertainSave.value||!message.value.trim()||(mode.value==='edit'&&!targetId.value)||(needsRegeneration.value&&!forceLatest))return;
@@ -194,7 +234,7 @@ onBeforeUnmount(()=>{alive=false;epoch++;requestId++;});
 
 <template>
  <section class="proposal-assistant" aria-label="AI预约助手">
-  <ProposalConversationHistory :message="message" :answers="answers" :question-history="questionHistory" :questions="questionList" :pending-turn="pendingTurn" :status="status" :error="error" :saved-notice="savedNotice" :trace="trace" :show-credential-status="Boolean(credentialApi)" @restart="restartConversation">
+  <ProposalConversationHistory :message="message" :answers="answers" :question-history="questionHistory" :questions="questionList" :pending-turn="pendingTurn" :status="status" :error="error" :saved-notice="savedNotice" :trace="trace" :slots="slotProgress" :show-credential-status="Boolean(credentialApi)" @restart="restartConversation">
    <template #header-actions><slot name="header-actions" /></template>
    <template #system-message><AgentCredentialGate v-if="credentialApi" :api="credentialApi" :session="session" :credential-id="credentialId" :refresh-key="credentialRefreshKey" @ready-change="credentialReady=$event" /></template>
    <template #welcome-actions><ProposalModePicker :mode="mode" :disabled="status==='generating'||busySaving||uncertainSave" @update:mode="selectMode" /></template>
@@ -204,7 +244,7 @@ onBeforeUnmount(()=>{alive=false;epoch++;requestId++;});
      <section class="verification-panel" aria-label="保存结果核对">
       <h3>保存结果待核对</h3><p>为避免重复创建，请先读取列表或该计划最新版本。核对结果后，明确确认才会重新允许保存。</p>
       <button class="secondary-button" data-testid="verify-ambiguous-save" type="button" :disabled="verificationLoading" @click="verifyAmbiguousSave">{{ verificationLoading?'正在读取…':generatedFor?.planId?'读取最新版本':'读取计划列表' }}</button>
-      <p v-if="verificationResult?.type==='list'" role="status">已读取计划列表，共 {{ verificationResult.plans.length }} 个预约计划。</p>
+      <p v-if="verificationResult?.type==='list'" role="status">已读取计划列表，共 {{ verificationResult.plans.length }} 个预约计划。{{ ambiguousMatch }}</p>
       <ul v-if="verificationResult?.type==='list'&&verificationResult.plans.length"><li v-for="plan in verificationResult.plans.slice(0,5)" :key="plan.plan_id">{{ plan.intent.venue_preference }} · {{ plan.intent.target_date }} · 版本 {{ plan.version }}</li></ul>
       <button class="primary-button" data-testid="acknowledge-save-check" type="button" :disabled="!verificationComplete" @click="acknowledgeAmbiguousSave">已核对结果，允许再次保存</button>
      </section>
@@ -231,12 +271,44 @@ onBeforeUnmount(()=>{alive=false;epoch++;requestId++;});
     </div></li>
    </template>
    <template #composer>
-    <ProposalComposer :message="message" :answer="answer" :mode="mode" :target-id="targetId" :plans="plans" :status="status" :follow-up="followUpActive" :busy="status==='generating'||busySaving" :blocked="!canStart||needsRegeneration" :locked="uncertainSave" :selection-disabled="busySaving||uncertainSave" @update:message="message=$event" @update:answer="answer=$event" @update:target-id="targetId=$event" @send="supplement=>generate({supplement})" />
+    <p v-if="editingOriginal && !resetNotice" class="composer-hint">正在修改原描述。改动后需要确认，才会清除已回答的问题。<button class="text-button" type="button" @click="editingOriginal=false">返回补充</button></p>
+    <p v-if="resetNotice" class="proposal-feedback error" role="status">描述已变化。继续会清除已经回答的问题。
+     <button class="secondary-button" type="button" @click="applyMessageReset">清除回答并使用新描述</button>
+     <button class="text-button" type="button" @click="cancelMessageReset">保留原描述</button>
+    </p>
+    <ProposalComposer :message="resetNotice ? pendingMessage : message" :answer="answer" :mode="mode" :target-id="targetId" :plans="plans" :status="status" :follow-up="followUpActive&&!editingOriginal" :busy="status==='generating'||busySaving" :blocked="!canStart||needsRegeneration" :send-blocked="resetNotice||editingOriginal" :suppressed="Boolean(credentialApi)&&!canStart" :locked="uncertainSave" :selection-disabled="busySaving||uncertainSave" @update:message="onMessageInput" @update:answer="answer=$event" @update:target-id="targetId=$event" @edit-request="editingOriginal=true" @send="supplement=>generate({supplement})" />
    </template>
   </ProposalConversationHistory>
  </section>
 </template>
 
 <style scoped>
-.proposal-assistant{min-width:0;margin-bottom:22px}.proposal-result,.verification-panel{display:grid;gap:12px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.proposal-result h3,.verification-panel h3{margin:0}.proposal-result p,.verification-panel p{margin:0}.verification-panel{border-color:var(--warning);background:var(--warning-soft)}.proposal-result-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}.proposal-result-heading h3{margin-top:2px;font-size:16px}.proposal-provider{color:var(--brand-dark);background:var(--brand-soft);padding:5px 10px;border-radius:999px;font-size:11px}.proposal-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding-top:4px}.proposal-actions button,.verification-panel button{min-height:44px}.proposal-diff{display:grid;grid-template-columns:minmax(100px,1fr) minmax(0,3fr);gap:8px 14px;margin:0}.proposal-diff dt{color:var(--muted);font-size:12px}.proposal-diff dd{margin:0;overflow-wrap:anywhere;font-size:13px}.diff-before{color:var(--muted)}.proposal-safety{padding:9px 11px;border-radius:9px;background:var(--brand-soft);color:var(--brand-dark);font-size:12px}.proposal-feedback{padding:10px 12px;margin:0;border-radius:9px}.proposal-feedback.error{background:var(--danger-soft);color:var(--danger)}.proposal-feedback.success{background:var(--brand-soft);color:var(--brand-dark)}.latest-proposal{display:grid;gap:10px;margin:0;padding:12px;border:1px solid var(--warning);border-radius:10px;background:var(--warning-soft)}.latest-proposal h3{font-size:14px}.latest-proposal p{margin:0;color:var(--muted);font-size:12px}.proposal-conflict-action{margin:0!important}.proposal-assistant :deep(button:focus-visible){outline:3px solid var(--brand);outline-offset:2px}@media(max-width:600px){.proposal-diff{grid-template-columns:1fr;gap:3px}.proposal-diff dd{margin-bottom:6px}.proposal-result,.verification-panel{padding:12px}.proposal-actions{display:grid;grid-template-columns:1fr}.proposal-actions button{width:100%}}
+.proposal-assistant { min-width: 0; margin-bottom:24px; }
+.proposal-result, .verification-panel { display: grid; gap:16px; padding:16px; border: 1px solid var(--line); border-radius:16px; background: var(--surface); }
+.proposal-result h3, .verification-panel h3, .proposal-result p, .verification-panel p { margin:0; }
+.verification-panel { border-color: var(--warning); background: var(--warning-soft); }
+.proposal-result-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap:8px; }
+.proposal-result-heading h3 { margin-top:8px; font-size: 17px; }
+.proposal-provider { color: var(--muted); background: var(--page); padding:8px 8px; border-radius:8px; font-size: 12px; }
+.proposal-actions { display: flex; align-items: center; flex-wrap: wrap; gap:8px; padding-top:8px; }
+.proposal-actions button, .verification-panel button { min-height:var(--control-height); }
+.proposal-diff { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 3fr); gap:8px 16px; margin:0; }
+.proposal-diff dt { color: var(--muted); font-size: 13px; }
+.proposal-diff dd { margin:0; overflow-wrap: anywhere; font-size: 15px; }
+.diff-before { color: var(--muted); }
+.proposal-safety { padding:8px 16px; border-radius:8px; background: var(--page); color: var(--muted); font-size: 13px; }
+.proposal-feedback { padding:8px 16px; margin:0; border-radius:8px; }
+.proposal-feedback.error { background: var(--danger-soft); color: var(--danger); }
+.proposal-feedback.success { background: var(--success-soft); color: var(--success); }
+.latest-proposal { display: grid; gap:8px; margin:0; padding:16px; border: 1px solid var(--warning); border-radius:16px; background: var(--warning-soft); }
+.latest-proposal h3 { font-size: 15px; }
+.latest-proposal p { margin:0; color: var(--muted); font-size: 13px; }
+.proposal-conflict-action { margin:0 !important; }
+.proposal-assistant :deep(button:focus-visible) { outline: 3px solid var(--brand); outline-offset: 2px; }
+@media (max-width: 600px) {
+  .proposal-diff { grid-template-columns: 1fr; gap:8px; }
+  .proposal-diff dd { margin-bottom:8px; }
+  .proposal-actions { display: grid; grid-template-columns: 1fr; }
+  .proposal-actions button { width: 100%; }
+}
 </style>

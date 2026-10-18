@@ -127,7 +127,7 @@ describe('proposal assistant',()=>{
  it('shows only the first prioritized clarification in the chat',async()=>{
   const config=fixture({proposalResult:{status:'needs_input',questions:['你说的10号是哪一天？例如10月20日。','你希望几点开始？','计划打多久？'],proposal:null}});
   const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('预约10号');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-  expect(wrapper.text()).toContain('我先确认一个关键问题');expect(wrapper.text()).toContain('你说的10号是哪一天？例如10月20日。');expect(wrapper.text()).not.toContain('你希望几点开始？');expect(wrapper.text()).not.toContain('计划打多久？');
+  expect(wrapper.text()).toContain('日期');expect(wrapper.text()).toContain('你说的10号是哪一天？例如10月20日。');expect(wrapper.text()).not.toContain('你希望几点开始？');expect(wrapper.text()).not.toContain('计划打多久？');
  });
 
  it('rejects impossible dates and time ranges that cross midnight before save',async()=>{
@@ -160,6 +160,57 @@ describe('proposal assistant',()=>{
    const {wrapper,planApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('边界时间有效');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
    expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(false);expect(planApi.create).not.toHaveBeenCalled();wrapper.unmount();
   }
+ });
+
+ it('lets users edit the original request after the first clarification',async()=>{
+  const config=fixture({proposalResult:{status:'needs_input',questions:['你想预约哪一天？'],proposal:null}});
+  const {wrapper,proposalApi,planApi}=await mountAssistant(config);
+  await wrapper.get('[data-testid="proposal-message"]').setValue('想预约羽毛球');
+  await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
+  await wrapper.findAll('button').find(button=>button.text()==='修改原描述').trigger('click');
+  expect(wrapper.get('[data-testid="proposal-message"]').element.disabled).toBe(false);
+  expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(true);
+  await wrapper.get('[data-testid="proposal-message"]').setValue('改为下周六18:00打2小时，6号场');
+  expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(false);
+  expect(proposalApi.generate).toHaveBeenCalledTimes(1);expect(planApi.create).not.toHaveBeenCalled();
+ });
+
+ it('keeps answered turns until an edited original request is confirmed',async()=>{
+  const config=fixture({proposalResult:{status:'needs_input',questions:['你想预约哪一天？'],proposal:null}});
+  config.proposalApi.generate.mockResolvedValueOnce({status:'needs_input',questions:['你想预约哪一天？'],proposal:null})
+   .mockResolvedValueOnce({status:'needs_input',questions:['你希望几点开始？'],proposal:null});
+  const {wrapper,proposalApi,planApi}=await mountAssistant(config);
+  const click=async text=>{await wrapper.findAll('button').find(button=>button.text()===text).trigger('click');await flushPromises();};
+  await wrapper.get('[data-testid="proposal-message"]').setValue('想预约羽毛球');
+  await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
+  await wrapper.get('[data-testid="proposal-answer"]').setValue('2026年10月24日');
+  await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
+  await click('修改原描述');
+  await wrapper.get('[data-testid="proposal-message"]').setValue('改成下周日');
+  await wrapper.get('[data-testid="proposal-message"]').setValue('改成下周日18:00打2小时');
+  expect(wrapper.get('[data-testid="proposal-message"]').element.disabled).toBe(false);
+  expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(true);
+  expect(wrapper.get('.chat-message-list').text()).toContain('2026年10月24日');
+  await click('保留原描述');
+  expect(wrapper.find('[data-testid="proposal-answer"]').exists()).toBe(true);
+  expect(wrapper.get('.chat-message-list').text()).toContain('想预约羽毛球');
+  await click('修改原描述');
+  await wrapper.get('[data-testid="proposal-message"]').setValue('改成下周日18:00打2小时');
+  await click('清除回答并使用新描述');
+  expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('改成下周日18:00打2小时');
+  expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(false);
+  expect(wrapper.get('.chat-message-list').text()).not.toContain('2026年10月24日');
+  expect(proposalApi.generate).toHaveBeenCalledTimes(2);expect(planApi.create).not.toHaveBeenCalled();
+ });
+
+ it('shows only valid complete court numbers in the draft progress',async()=>{
+  const {wrapper,proposalApi}=await mountAssistant();
+  for(const [number,expected] of [[11,'未填写'],[111,'未填写'],[0,'未填写'],[10,'10号场'],[1,'1号场']]){
+   await wrapper.get('[data-testid="proposal-message"]').setValue(`10月24日18:00开始，打2小时，${number}号场。`);
+   const court=wrapper.findAll('.slot-strip li').find(item=>item.get('span').text()==='场地');
+   expect(court.get('strong').text()).toBe(expected);
+  }
+  expect(proposalApi.generate).not.toHaveBeenCalled();
  });
 
 });
