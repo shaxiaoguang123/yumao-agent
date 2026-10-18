@@ -19,7 +19,7 @@ describe('shipped layout contract', () => {
     expect(css).toContain('gap:var(--card-gap)');
 
     const controlHeights = [...css.matchAll(/--control-height:\s*([^;]+);/g)].map((match) => match[1].trim());
-    expect(controlHeights).toEqual(['40px']);
+    expect(controlHeights).toEqual(['44px']);
     expect(css).toContain('min-height:var(--control-height)');
 
     expect(css).toMatch(/@media\s*\(\s*max-width:\s*800px\s*\)[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
