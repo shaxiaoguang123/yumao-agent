@@ -10,8 +10,8 @@ _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z", re.ASCII)
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z", re.ASCII)
 # The reservation grid exposes one fixed set of courts and operating hours.
 _COURT = re.compile(r"(?P<number>10|[1-9])号场(?:优先|备选)?\Z", re.ASCII)
-_OPEN_MINUTE = 9 * 60
-_CLOSE_MINUTE = 22 * 60
+OPEN_MINUTE = 9 * 60
+CLOSE_MINUTE = 22 * 60
 _FIELDS = {"target_date", "preferred_start_times", "duration_minutes", "venue_preference", "court_preferences", "fallback_policy", "price_ceiling_minor"}
 
 
@@ -54,12 +54,39 @@ def _minutes(value: str) -> int:
     return int(hours) * 60 + int(minutes)
 
 
+MAX_COURT = 10
+
+
+def date_problem(target: date, today_business_date: date) -> str | None:
+    if target < today_business_date:
+        return "目标日期已早于当前业务日期，不能创建过期预约计划。"
+    return None
+
+
+def duration_problem(duration: object) -> str | None:
+    if type(duration) is not int or not 30 <= duration <= 240 or duration % 30:
+        return "时长须为 30～240 分钟，以 30 分钟递增。"
+    return None
+
+
+def start_problem(times: list[str], duration: int) -> str | None:
+    if any(_minutes(item) < OPEN_MINUTE or _minutes(item) + duration > CLOSE_MINUTE for item in times):
+        return "预约须在09:00开始或之后，并在22:00前结束。"
+    return None
+
+
+def court_problem(number: int) -> str | None:
+    if not 1 <= number <= MAX_COURT:
+        return "场地编号仅支持1～10号场，例如“6号场”。"
+    return None
+
+
 def parse_manual_intent(payload: object, *, today_business_date: date, context: PlanInterpretationContext) -> PlanSnapshot:
     if type(payload) is not dict or payload.keys() != _FIELDS:
         _invalid("intent", "请提交完整的人工意向字段；不接受上游标识或执行参数。")
     target = parse_target_date(payload["target_date"])
-    if target < today_business_date:
-        _invalid("target_date", "目标日期已早于当前业务日期，不能创建过期预约计划。")
+    if problem := date_problem(target, today_business_date):
+        _invalid("target_date", problem)
     times = payload["preferred_start_times"]
     if type(times) is not list or not 1 <= len(times) <= 8:
         _invalid("preferred_start_times", "请按优先顺序设置 1～8 个开始时间。")
@@ -67,10 +94,10 @@ def parse_manual_intent(payload: object, *, today_business_date: date, context: 
     if len(set(times)) != len(times):
         _invalid("preferred_start_times", "开始时间不能重复。")
     duration = payload["duration_minutes"]
-    if type(duration) is not int or not 30 <= duration <= 240 or duration % 30:
-        _invalid("duration_minutes", "时长须为 30～240 分钟，以 30 分钟递增。")
-    if any(_minutes(item) < _OPEN_MINUTE or _minutes(item) + duration > _CLOSE_MINUTE for item in times):
-        _invalid("preferred_start_times", "预约须在09:00开始或之后，并在22:00前结束。")
+    if problem := duration_problem(duration):
+        _invalid("duration_minutes", problem)
+    if problem := start_problem(times, duration):
+        _invalid("preferred_start_times", problem)
     venue = _text(payload["venue_preference"], "venue_preference", 200)
     courts = payload["court_preferences"]
     if type(courts) is not list or len(courts) > 16:
@@ -102,7 +129,7 @@ def parse_manual_intent(payload: object, *, today_business_date: date, context: 
         if type(time_range) is not dict or time_range.keys() != {"start", "end"}:
             _invalid("fallback_policy", "请设置完整的时间浮动范围。")
         start, end = (_time(time_range[key], "fallback_policy") for key in ("start", "end"))
-        if (start > end or _minutes(start) < _OPEN_MINUTE or _minutes(end) + duration > _CLOSE_MINUTE
+        if (start > end or _minutes(start) < OPEN_MINUTE or _minutes(end) + duration > CLOSE_MINUTE
                 or any(not start <= item <= end for item in times)):
             _invalid("fallback_policy", "浮动时间须包含全部首选时间，开始不早于09:00，且按时长在22:00前结束。")
         time_range = {"start": start, "end": end}

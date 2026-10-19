@@ -5,6 +5,7 @@ import { createCredentialApi } from './api/credentials.js';
 import { createPlanApi } from './api/plans.js';
 import { createAIModelsApi } from './api/aiModels.js';
 import { createPlanningProposalApi } from './api/planningProposals.js';
+import { createIntentPlanningProposalApi } from './api/intentPlanningProposals.js';
 import { createAvailabilitySimulationApi } from './api/availabilitySimulation.js';
 import { createLiveAvailabilityApi } from './api/liveAvailability.js';
 import { httpClient } from './api/http.js';
@@ -23,6 +24,7 @@ createApp(App)
   .provide('planApi', createPlanApi(sessionStore))
   .provide('aiModelsApi', createAIModelsApi(sessionStore))
   .provide('planningProposalApi', createPlanningProposalApi(sessionStore))
+  .provide('intentPlanningProposalApi', createIntentPlanningProposalApi(sessionStore))
   .provide('availabilitySimulationApi', createAvailabilitySimulationApi(sessionStore))
   .provide('liveAvailabilityApi', createLiveAvailabilityApi(sessionStore))
   .provide('httpClient', httpClient)

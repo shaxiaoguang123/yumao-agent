@@ -1,216 +1,286 @@
 import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils';
 import { reactive } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { intent, plan } from './testFixtures.js';
 
 enableAutoUnmount(afterEach);
-const proposal={intent:{...intent,venue_preference:'AI场馆意向'},context:{},kind:'unbound_draft',plan_id:null,base_version:null,before_intent:null,changes:[{field:'venue_preference',before:'',after:'AI场馆意向'}],booking_window:{business_date:'2026-10-10',can_book:false},provider:{name:'Test provider',model:'test-model'},can_book:false,can_pay:false,can_create_job:false,can_query_upstream:false};
-function fixture({plans=[],proposalResult={status:'ready',questions:[],proposal},planOverrides={},credentialId='credential-a'}={}){
- const saved=plan(2,{venue_preference:'AI场馆意向'});
- const planApi={get:vi.fn(async()=>({plan:plan(3,{venue_preference:'latest venue'})})),create:vi.fn(async()=>({plan:saved})),update:vi.fn(async()=>({plan:saved})),...planOverrides};
- const proposalApi={generate:vi.fn(async()=>structuredClone(proposalResult))};
+
+const entry=(court,start,end,minutes=120)=>({court_preference:court,start_time:start,end_time:end,duration_minutes:minutes,scope_label:'羽毛球'});
+const ENTRIES=[entry('1号场','14:00','16:00'),entry('4号场','14:00','16:00'),entry('1号场','18:00','20:00'),entry('4号场','18:00','20:00')];
+const proposal=(over={})=>({kind:'manual_queue_draft',target_date:'2026-10-20',target_label:'10月20日 周二',entries:ENTRIES,entry_count:4,base_version:0,existing_count:0,replaces_existing:false,
+ schedule:{state:'scheduled',text:'10月18日 周日 07:30 开票时自动执行。'},execution_note:'执行时从上往下依次尝试，抢到第一个就停，所以顺序就是优先级。',warnings:[],review:{state:'reviewed',attempts:1},
+ provider:{name:'Test provider',model:'test-model'},can_book:false,can_pay:false,can_create_job:false,can_query_upstream:false,...over});
+const strip=(over={})=>[{id:'date',label:'日期',state:'done',display:'10月20日 周二'},{id:'windows',label:'2小时时段',state:'current',display:''},{id:'courts',label:'场地',state:'empty',display:''},{id:'one',label:'1小时备选',state:'empty',display:''}];
+const conversation=(over={})=>({phase:'collecting',asking:'windows_2h',heading:'2小时时段',reason:'missing',turns_used:0,turns_max:20,attempts:{},slots:[],strip:strip(),escalation:null,notices:[],...over});
+const ready=(over={},prop={})=>({status:'ready',questions:[],proposal:proposal(prop),conversation:conversation({phase:'ready',asking:null,heading:null,...over})});
+const ask=(text,over={})=>({status:'needs_input',questions:[text],proposal:null,conversation:conversation(over)});
+
+function fixture({result=ready(),credentialId='credential-a',scopeLabel='羽毛球',saveQueue,queue}={}){
+ const planApi={saveQueue:saveQueue||vi.fn(async()=>({queue:{plan_id:'q',version:1,candidates:[]}})),queue:queue||vi.fn(async()=>({queue:null}))};
+ const proposalApi={generate:vi.fn(async()=>structuredClone(result)),restore:vi.fn(async()=>({conversation:null})),close:vi.fn(async()=>({}))};
  const session=reactive({status:'authenticated',user:{user_id:'owner'},csrfToken:'csrf-a'});
- return {planApi,proposalApi,session,plans,credentialId,credentialApi:null,credentialRefreshKey:0};
+ return {planApi,proposalApi,session,credentialId,scopeLabel,credentialApi:null,credentialRefreshKey:0};
 }
-async function mountAssistant(config=fixture()) {const {default:component}=await import('./ProposalAssistant.vue');const wrapper=mount(component,{props:{plans:config.plans,planApi:config.planApi,proposalApi:config.proposalApi,credentialApi:config.credentialApi,credentialRefreshKey:config.credentialRefreshKey,session:config.session,credentialId:config.credentialId},global:{stubs:{RouterLink:{template:'<a><slot /></a>'}}}});await flushPromises();return {wrapper,...config};}
-async function selectExistingPlan(wrapper,planId='synthetic-plan'){await wrapper.get('[data-testid="proposal-mode-edit"]').trigger('click');await wrapper.get('[data-testid="proposal-target"]').setValue(planId);}
+async function mountAssistant(config=fixture()){
+ const {default:component}=await import('./ProposalAssistant.vue');
+ const wrapper=mount(component,{props:{planApi:config.planApi,proposalApi:config.proposalApi,credentialApi:config.credentialApi,credentialRefreshKey:config.credentialRefreshKey,session:config.session,credentialId:config.credentialId,scopeLabel:config.scopeLabel},global:{stubs:{RouterLink:{template:'<a><slot /></a>'}}}});
+ await flushPromises();return {wrapper,...config};
+}
+const send=async(wrapper,text)=>{await wrapper.get('[data-testid="proposal-message"]').setValue(text);await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();};
+const reply=async(wrapper,text)=>{await wrapper.get('[data-testid="proposal-answer"]').setValue(text);await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();};
+const stripOf=wrapper=>Object.fromEntries(wrapper.findAll('.slot-strip li').map(li=>[li.get('span').text(),li.get('strong').text()]));
 
-describe('proposal assistant',()=>{
- it('keeps credential readiness, type choices, conversation and input inside one chat workspace',async()=>{
-  const config=fixture();config.credentialApi={list:vi.fn(async()=>({credentials:[{credential_id:'credential-a',label:'Token A',enabled:true,last_confirmed_validation_state:'confirmed_valid',account_binding_state:'confirmed',requires_revalidation:false,expiry_state:'valid',has_payment_password:false}]}))};
-  const {wrapper}=await mountAssistant(config);const chat=wrapper.get('.proposal-chat');
-  expect(wrapper.findAll('.proposal-chat')).toHaveLength(1);expect(chat.find('[data-testid="agent-credential-gate"]').exists()).toBe(true);expect(chat.find('.proposal-mode-picker').exists()).toBe(true);expect(chat.find('.proposal-composer').exists()).toBe(true);
-  expect(wrapper.find('.proposal-assistant > .agent-credential-gate').exists()).toBe(false);expect(chat.get('[data-testid="generate-proposal"]').element.disabled).toBe(true);
+describe('queue assistant: asking',()=>{
+ it('opens with an example and no mode choice',async()=>{
+  const {wrapper}=await mountAssistant();
+  expect(wrapper.text()).toContain('后天 14-16 和 18-20，1号和4号场');
+  expect(wrapper.find('.proposal-mode-picker').exists()).toBe(false);
+  expect(wrapper.text()).not.toContain('新建');expect(wrapper.text()).not.toContain('场馆');
  });
 
- it('previews a ready result and waits for explicit confirmation before saving',async()=>{
-  const {wrapper,planApi,proposalApi}=await mountAssistant();expect(wrapper.findAll('.proposal-mode-card')).toHaveLength(2);await wrapper.get('[data-testid="proposal-field-date"]').trigger('click');expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('预约日期：');await wrapper.get('[data-testid="proposal-message"]').setValue('新建周末意向');expect(wrapper.find('.chat-message-list .chat-row.is-user').exists()).toBe(false);expect(wrapper.get('.proposal-mode-picker').exists()).toBe(true);await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-  expect(proposalApi.generate).toHaveBeenCalledWith('新建周末意向',null,null,undefined,undefined,'credential-a');expect(wrapper.text()).toContain('建议预览');expect(wrapper.text()).toContain('AI场馆意向');expect(wrapper.text()).toContain('本步骤只保存意向，不会立即预约或付款。');expect(wrapper.get('.proposal-chat-messages').find('[aria-label="AI建议预览"]').exists()).toBe(true);expect(planApi.create).not.toHaveBeenCalled();
-  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.create).toHaveBeenCalledWith(proposal.intent,'credential-a');expect(wrapper.text()).toContain('预约意向已保存');
+ it('sends the first message with the credential and the query category',async()=>{
+  const {wrapper,proposalApi}=await mountAssistant(fixture({result:ask('想订哪一天？'),scopeLabel:'羽毛球'}));
+  await send(wrapper,'我想订场');
+  expect(proposalApi.generate).toHaveBeenCalledWith({message:'我想订场',credentialId:'credential-a',answers:[],askedFields:[],scopeLabel:'羽毛球'});
+  expect(wrapper.text()).toContain('想订哪一天？');
  });
- it('keeps the save notice when the parent list refreshes to the version just saved',async()=>{
-  const config=fixture({plans:[plan(1)]});const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('更新现有意向');await selectExistingPlan(wrapper);await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('预约意向已保存 · 版本 2');
-  await wrapper.setProps({plans:[plan(2)]});await flushPromises();expect(wrapper.text()).toContain('预约意向已保存 · 版本 2');
-  await wrapper.setProps({plans:[plan(3)]});await flushPromises();expect(wrapper.text()).not.toContain('预约意向已保存 · 版本 2');
+
+ it('shows the server heading and the server-driven progress strip',async()=>{
+  const {wrapper}=await mountAssistant(fixture({result:ask('2小时要哪个时间段？')}));
+  await send(wrapper,'后天');
+  expect(wrapper.get('.chat-bubble strong').text()).toBe('2小时时段');
+  expect(stripOf(wrapper)).toEqual({日期:'10月20日 周二','2小时时段':'正在确认',场地:'未填写','1小时备选':'未填写'});
+  expect(wrapper.findAll('.slot-strip li')).toHaveLength(4);
+  expect(wrapper.findAll('.slot-strip li')[1].classes()).toContain('is-current');
  });
- it('loads the latest owned plan before proposing an edit and saves with its base version',async()=>{
-  const config=fixture({plans:[plan(2)]});const {wrapper,planApi,proposalApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('改一下场馆');await selectExistingPlan(wrapper);await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();expect(planApi.get).toHaveBeenCalledWith('synthetic-plan');expect(proposalApi.generate).toHaveBeenCalledWith('改一下场馆','synthetic-plan',3);
-  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.update).toHaveBeenCalledWith('synthetic-plan',3,proposal.intent);
+
+ it('echoes the field each earlier question was about so the server can count repeats',async()=>{
+  const config=fixture();config.proposalApi.generate=vi.fn()
+   .mockResolvedValueOnce(ask('想订哪一天？',{asking:'target_date',heading:'日期'}))
+   .mockResolvedValueOnce(ask('2小时要哪个时间段？',{asking:'windows_2h'}))
+   .mockResolvedValueOnce(ready());
+  const {wrapper,proposalApi}=await mountAssistant(config);
+  await send(wrapper,'我想订场');await reply(wrapper,'后天');await reply(wrapper,'14-16');
+  expect(proposalApi.generate).toHaveBeenNthCalledWith(2,{message:'我想订场',credentialId:'credential-a',answers:['后天'],askedFields:['target_date'],scopeLabel:'羽毛球'});
+  expect(proposalApi.generate).toHaveBeenNthCalledWith(3,{message:'我想订场',credentialId:'credential-a',answers:['后天','14-16'],askedFields:['target_date','windows_2h'],scopeLabel:'羽毛球'});
+  expect(wrapper.text()).toContain('日期');expect(wrapper.text()).toContain('后天');
  });
- it('renders follow-up questions and keeps the original message when cancelled',async()=>{
-  const {wrapper,proposalApi}=await mountAssistant(fixture({proposalResult:{status:'needs_input',questions:['哪一天？'],proposal:null}}));await wrapper.get('[data-testid="proposal-message"]').setValue('周末晚上');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('哪一天？');await wrapper.get('[data-testid="cancel-proposal"]').trigger('click');expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('周末晚上');expect(proposalApi.generate).toHaveBeenCalledOnce();
- });
- it('shows an unsupported explanation returned by the assistant',async()=>{
-  const {wrapper}=await mountAssistant(fixture({proposalResult:{status:'unsupported',questions:['无法执行预约或付款。'],proposal:null}}));await wrapper.get('[data-testid="proposal-message"]').setValue('帮我直接预订');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('无法执行预约或付款。');expect(wrapper.find('[data-testid="confirm-save-proposal"]').exists()).toBe(false);
- });
- it('formats field diffs for people instead of showing internal objects and minor units',async()=>{
-  const detailed={...proposal,context:{currency_code:'CNY',currency_minor_unit_exponent:2},changes:[
-   {field:'target_date',before:'2026-10-20',after:'2026-10-24'},
-   {field:'preferred_start_times',before:['18:00','19:00'],after:['20:00']},
-   {field:'fallback_policy',before:{allow_any_court_in_venue:false,allow_time_shift:false,allowed_start_time_range:null},after:{allow_any_court_in_venue:true,allow_time_shift:true,allowed_start_time_range:{start:'18:00',end:'21:00'}}},
-   {field:'price_ceiling_minor',before:1234,after:5678},
+
+ it('restores the latest server conversation after remount and continues with its id',async()=>{
+  const saved={conversation_id:'conversation-identifier-123',business_date:'2026-10-18',message:'想订场',answers:['后天'],asked_fields:['target_date'],scope_label:'羽毛球',response_history:[
+   {...ask('想订哪一天？',{asking:'target_date',heading:'日期'}),trace_event:{submitted_title:'提交预约需求',result_title:'还缺一项信息',result_detail:'服务端保存的轨迹。',at_utc_ms:Date.UTC(2026,9,18,3,0)}},
+   ask('2小时要哪个时间段？',{asking:'windows_2h',heading:'2小时时段'}),
   ]};
-  const {wrapper}=await mountAssistant(fixture({proposalResult:{status:'ready',questions:[],proposal:detailed}}));await wrapper.get('[data-testid="proposal-message"]').setValue('改意向');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('2026年10月20日');expect(wrapper.text()).toContain('2026年10月24日');expect(wrapper.text()).toContain('18:00 → 19:00（按优先顺序）');expect(wrapper.text()).toContain('允许开始时间在 18:00 至 21:00 浮动');expect(wrapper.text()).toContain('12.34 CNY');expect(wrapper.text()).not.toContain('[object Object]');expect(wrapper.text()).not.toContain('1234');
- });
- it('keeps description on model failure and disables a stale preview after input changes',async()=>{
-  const failed=fixture();failed.proposalApi.generate=vi.fn(async()=>{throw {code:'provider_unavailable'};});
-  const first=await mountAssistant(failed);await first.wrapper.get('[data-testid="proposal-message"]').setValue('原始描述保留');await first.wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();expect(first.wrapper.text()).toContain('生成建议失败');expect(first.wrapper.get('[data-testid="proposal-message"]').element.value).toBe('原始描述保留');
-  const second=await mountAssistant();await second.wrapper.get('[data-testid="proposal-message"]').setValue('初始建议');await second.wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();await second.wrapper.get('[data-testid="proposal-message"]').setValue('已修改描述');expect(second.wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);expect(second.planApi.create).not.toHaveBeenCalled();
- });
- it('preserves message and proposal on 409, then explicitly reads latest and regenerates',async()=>{
-  const planApi={get:vi.fn(async()=>({plan:plan(4,{venue_preference:'最新人工偏好'})})),create:vi.fn(),update:vi.fn(async()=>{throw {status:409,code:'plan_version_conflict'};})};
-  const proposalApi={generate:vi.fn(async()=>structuredClone({...{status:'ready',questions:[]},proposal:{...proposal,base_version:3,plan_id:'synthetic-plan'}}))};
-  const config=fixture({plans:[plan(2)],planOverrides:planApi});config.proposalApi=proposalApi;
-  const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('保留我的描述');await selectExistingPlan(wrapper);await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
-  expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('保留我的描述');expect(wrapper.text()).toContain('建议预览');expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);await wrapper.get('[data-testid="read-latest-regenerate"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('最新人工偏好');expect(proposalApi.generate).toHaveBeenLastCalledWith('保留我的描述','synthetic-plan',4);
- });
- it('treats a missing provider key 409 as a model-settings error, not a plan conflict',async()=>{
-  const config=fixture();config.proposalApi.generate=vi.fn(async()=>{throw {status:409,code:'provider_api_key_required'};});const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('生成意向');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('当前模型缺少 API Key');expect(wrapper.text()).toContain('前往设置AI模型');expect(wrapper.text()).not.toContain('计划版本已变化');expect(wrapper.find('[data-testid="read-latest-regenerate"]').exists()).toBe(false);
- });
- it('blocks ambiguous retries until a list check and explicit acknowledgment',async()=>{
-  const planApi={...fixture().planApi,list:vi.fn(async()=>({plans:[plan(1)]})),create:vi.fn().mockRejectedValueOnce({kind:'network',status:0}).mockResolvedValueOnce({plan:plan(2)})};
-  const config=fixture({planOverrides:planApi});const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('新建意向');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
-  expect(wrapper.text()).toContain('保存结果暂时无法确认');expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);expect(planApi.create).toHaveBeenCalledOnce();
-  await wrapper.get('[data-testid="verify-ambiguous-save"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('已读取计划列表，共 1 个预约计划');expect(wrapper.get('[data-testid="acknowledge-save-check"]').element.disabled).toBe(false);
-  await wrapper.get('[data-testid="acknowledge-save-check"]').trigger('click');expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(false);expect(planApi.create).toHaveBeenCalledOnce();
-  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.create).toHaveBeenCalledTimes(2);expect(wrapper.text()).toContain('预约意向已保存');
- });
- it('ignores proposal results returned after the Session or CSRF token changes',async()=>{
-  let resolve;const config=fixture();config.proposalApi.generate=vi.fn(()=>new Promise(r=>{resolve=r;}));const {wrapper,session}=await mountAssistant(config);
-  await wrapper.get('[data-testid="proposal-message"]').setValue('我的文本');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');session.csrfToken='csrf-b';await flushPromises();resolve({status:'ready',questions:[],proposal});await flushPromises();expect(wrapper.find('[aria-label="AI建议预览"]').exists()).toBe(false);expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('我的文本');
- });
- it('clears the natural-language prompt and plan target when the account changes',async()=>{
-  const {wrapper,session}=await mountAssistant(fixture({plans:[plan()]}));await wrapper.get('[data-testid="proposal-message"]').setValue('用户A的私有预约安排');await selectExistingPlan(wrapper);session.user={user_id:'user-b'};await flushPromises();expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('');expect(wrapper.get('[data-testid="proposal-mode-new"]').attributes('aria-pressed')).toBe('true');
- });
- it('shows provider setup guidance when a missing provider is returned as a 409',async()=>{
-  const config=fixture();config.proposalApi.generate=vi.fn(async()=>{throw {status:409,code:'provider_not_configured'};});const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('新建预约意向');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('尚未配置 AI 模型');expect(wrapper.text()).not.toContain('计划版本已变化');
- });
- it('continues two clarification rounds using just each answer and saves only on confirmation',async()=>{
-  const config=fixture();config.proposalApi.generate=vi.fn().mockResolvedValueOnce({status:'needs_input',questions:['场馆？'],proposal:null}).mockResolvedValueOnce({status:'needs_input',questions:['场地？'],proposal:null}).mockResolvedValueOnce({status:'ready',questions:[],proposal});
-  const {wrapper,proposalApi,planApi}=await mountAssistant(config);
-  await wrapper.get('[data-testid="proposal-message"]').setValue('下周六18:00打两个小时');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-  await wrapper.get('[data-testid="proposal-answer"]').setValue('东区体育馆');await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
-  expect(wrapper.text()).toContain('东区体育馆');expect(wrapper.text()).toContain('场地？');
-  await wrapper.get('[data-testid="proposal-answer"]').setValue('6号场优先');await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
-  expect(proposalApi.generate).toHaveBeenLastCalledWith('下周六18:00打两个小时',null,null,['东区体育馆','6号场优先'],[['场馆？'],['场地？']],'credential-a');expect(planApi.create).not.toHaveBeenCalled();
-  expect(wrapper.text()).toContain('本次操作轨迹');expect(wrapper.text()).toContain('必需信息尚未齐全');expect(wrapper.text()).toContain('预约意向草案已生成');
-  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();expect(planApi.create).toHaveBeenCalledWith(proposal.intent,'credential-a');
- });
- it('retains the conversation version on followup and requires explicit latest read after 409',async()=>{
-  const config=fixture({plans:[plan(1)]});config.proposalApi.generate=vi.fn().mockResolvedValueOnce({status:'needs_input',questions:['几点？'],proposal:null}).mockRejectedValueOnce({code:'plan_version_conflict',status:409}).mockResolvedValueOnce({status:'needs_input',questions:['请确认？'],proposal:null});
-  const {wrapper,proposalApi,planApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('修改开始时间');await selectExistingPlan(wrapper);await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-  await wrapper.get('[data-testid="proposal-answer"]').setValue('19:00');await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
-  expect(planApi.get).toHaveBeenCalledOnce();expect(proposalApi.generate).toHaveBeenLastCalledWith('修改开始时间','synthetic-plan',3,['19:00'],[['几点？']]);expect(wrapper.get('[data-testid="proposal-answer"]').element.value).toBe('19:00');expect(wrapper.get('[data-testid="continue-proposal"]').element.disabled).toBe(true);expect(wrapper.find('[data-testid="generate-proposal"]').exists()).toBe(false);
-  await wrapper.get('[data-testid="read-latest-regenerate"]').trigger('click');await flushPromises();expect(planApi.get).toHaveBeenCalledTimes(2);expect(wrapper.text()).toContain('latest venue');
- });
- it('preserves failed supplement input and clears all conversation data on restart or account change',async()=>{
-  const config=fixture();config.proposalApi.generate=vi.fn().mockResolvedValueOnce({status:'needs_input',questions:['场馆？'],proposal:null}).mockRejectedValueOnce({code:'provider_access_denied'});
-  const {wrapper,session}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('初始描述');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();await wrapper.get('[data-testid="proposal-answer"]').setValue('用户A的场馆');await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
-  expect(wrapper.text()).toContain('没有访问权限');expect(wrapper.get('[data-testid="proposal-answer"]').element.value).toBe('用户A的场馆');
-  session.status='anonymous';await flushPromises();expect(wrapper.find('[data-testid="proposal-answer"]').exists()).toBe(false);
-  await wrapper.get('[data-testid="restart-conversation"]').trigger('click');expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('');
+  const config=fixture();config.proposalApi.restore=vi.fn(async()=>({conversation:saved}));
+  const {wrapper,proposalApi}=await mountAssistant(config);
+  expect(wrapper.text()).toContain('想订场');expect(wrapper.text()).toContain('后天');expect(wrapper.text()).toContain('2小时要哪个时间段？');expect(wrapper.text()).toContain('服务端保存的轨迹。');
+  await reply(wrapper,'14-16');
+  expect(proposalApi.generate).toHaveBeenCalledWith(expect.objectContaining({conversationId:'conversation-identifier-123',answers:['后天','14-16'],askedFields:['target_date','windows_2h']}));
  });
 
- it('blocks proposal requests until the selected token has a payment password',async()=>{
-  const config=fixture();config.credentialApi={list:vi.fn(async()=>({credentials:[{credential_id:'credential-a',label:'Token A',enabled:true,last_confirmed_validation_state:'confirmed_valid',account_binding_state:'confirmed',requires_revalidation:false,expiry_state:'valid',has_payment_password:false}]}))};
-  const {wrapper,proposalApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('预约需求');
-  expect(wrapper.text()).toContain('尚未设置支付密码');expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(true);
-  await wrapper.get('[data-testid="generate-proposal"]').trigger('click');expect(proposalApi.generate).not.toHaveBeenCalled();
- });
- it('does not allow an incomplete ready response to be saved',async()=>{
-  const incomplete={...proposal,intent:{...proposal.intent,preferred_start_times:[],venue_preference:''}};
-  const config=fixture({proposalResult:{status:'ready',questions:[],proposal:incomplete}});
-  const {wrapper,planApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('未写清楚预约信息');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-  expect(wrapper.text()).toContain('请按优先顺序填写1～8个不同的开始时间。');expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);expect(planApi.create).not.toHaveBeenCalled();
- });
-
- it('shows only the first prioritized clarification in the chat',async()=>{
-  const config=fixture({proposalResult:{status:'needs_input',questions:['你说的10号是哪一天？例如10月20日。','你希望几点开始？','计划打多久？'],proposal:null}});
-  const {wrapper}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('预约10号');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-  expect(wrapper.text()).toContain('日期');expect(wrapper.text()).toContain('你说的10号是哪一天？例如10月20日。');expect(wrapper.text()).not.toContain('你希望几点开始？');expect(wrapper.text()).not.toContain('计划打多久？');
+ it('closes a pending restored conversation when the user restarts',async()=>{
+  const saved={conversation_id:'conversation-identifier-123',business_date:'2026-10-18',message:'旧的预约意向',answers:[],asked_fields:[],scope_label:'羽毛球',response_history:[ask('想订哪一天？')]};
+  let resolveRestore;
+  const config=fixture();config.proposalApi.restore=vi.fn(()=>new Promise(resolve=>{resolveRestore=resolve;}));
+  const {wrapper,proposalApi}=await mountAssistant(config);
+  await wrapper.get('[data-testid="restart-conversation"]').trigger('click');
+  resolveRestore({conversation:saved});
+  await flushPromises();
+  expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('');
+  expect(wrapper.text()).not.toContain('旧的预约意向');
+  expect(proposalApi.close).toHaveBeenCalledWith(saved.conversation_id,'credential-a');
  });
 
- it('rejects impossible dates and time ranges that cross midnight before save',async()=>{
-  const invalidIntents=[
-   [{...intent,target_date:'2026-02-30'},'真实存在的日期'],
-   [{...intent,target_date:'2026-10-09'},'日期已过'],
-   [{...intent,preferred_start_times:['08:59']},'09:00–22:00'],
-   [{...intent,preferred_start_times:['20:01']},'最晚20:00开始'],
-   [{...intent,preferred_start_times:['23:00'],duration_minutes:120},'09:00–22:00'],
-   [{...intent,court_preferences:['11号场']},'仅支持1～10号场'],
-   [{...intent,court_preferences:['0号场']},'仅支持1～10号场'],
-   [{...intent,court_preferences:['6号场优先']},'仅支持1～10号场'],
-  ];
-  for(const [invalidIntent,reason] of invalidIntents){
-   const config=fixture({proposalResult:{status:'ready',questions:[],proposal:{...proposal,intent:invalidIntent}}});
-   const {wrapper,planApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('看起来完整但实际无效的意向');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-   expect(wrapper.text()).toContain(reason);expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);expect(planApi.create).not.toHaveBeenCalled();
-   wrapper.unmount();
+ it('needs a credential before it can ask anything',async()=>{
+  const {wrapper,proposalApi}=await mountAssistant(fixture({credentialId:''}));
+  await send(wrapper,'后天 14-16');
+  expect(proposalApi.generate).not.toHaveBeenCalled();expect(wrapper.text()).toContain('先在右上角选择预约凭据');
+ });
+
+ it('keeps the message and says so when the request fails',async()=>{
+  const config=fixture();config.proposalApi.generate=vi.fn(async()=>{throw {code:'provider_timeout'};});
+  const {wrapper}=await mountAssistant(config);await send(wrapper,'后天 14-16');
+  expect(wrapper.text()).toContain('整理失败');expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('后天 14-16');
+ });
+
+ it('explains a refused command and offers no save',async()=>{
+  const config=fixture({result:{status:'unsupported',questions:['当前只能整理并保存预约队列。'],proposal:null,conversation:conversation({phase:'unsupported',asking:null})}});
+  const {wrapper}=await mountAssistant(config);await send(wrapper,'帮我直接付款');
+  expect(wrapper.text()).toContain('当前只能整理并保存预约队列。');expect(wrapper.find('[data-testid="confirm-save-proposal"]').exists()).toBe(false);
+ });
+
+ it('tells the user when the answer budget is spent instead of silently ignoring the send',async()=>{
+  const {wrapper,proposalApi}=await mountAssistant(fixture({result:ask('再说一次？')}));
+  await send(wrapper,'想订场');
+  for(let i=0;i<20;i++)await reply(wrapper,`答${i}`);
+  expect(proposalApi.generate).toHaveBeenCalledTimes(21);
+  await reply(wrapper,'第二十一次');
+  expect(proposalApi.generate).toHaveBeenCalledTimes(21);expect(wrapper.text()).toContain('补充的次数已用完');
+ });
+});
+
+describe('queue assistant: preview and save',()=>{
+ it('previews the ordered queue with the priority rule and the schedule',async()=>{
+  const {wrapper,planApi}=await mountAssistant();await send(wrapper,'后天 14-16 和 18-20，1号4号场');
+  const rows=wrapper.findAll('[data-testid="queue-entries"] li');
+  expect(rows.map(li=>li.get('.queue-index').text())).toEqual(['1','2','3','4']);
+  expect(rows.map(li=>li.text().slice(1))).toEqual(['2小时 14:00-16:00 1号场','2小时 14:00-16:00 4号场','2小时 18:00-20:00 1号场','2小时 18:00-20:00 4号场']);
+  expect(wrapper.get('[data-testid="queue-order-note"]').text()).toContain('抢到第一个就停');
+  expect(wrapper.get('[data-testid="queue-schedule"]').text()).toContain('07:30');
+  expect(wrapper.text()).not.toContain('分钟');
+  expect(planApi.saveQueue).not.toHaveBeenCalled();
+ });
+
+ it('saves through the manual-queue endpoint with the version it was built on',async()=>{
+  const config=fixture({result:ready({},{base_version:3,existing_count:2,replaces_existing:true})});
+  const {wrapper,planApi}=await mountAssistant(config);await send(wrapper,'后天 14-16 和 18-20，1号4号场');
+  expect(wrapper.get('[data-testid="replace-warning"]').text()).toContain('已经有 2 项候选');
+  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
+  expect(planApi.saveQueue).toHaveBeenCalledWith('2026-10-20',3,ENTRIES,'credential-a');
+  expect(wrapper.text()).toContain('队列已保存 · 10月20日 周二 · 共 4 项候选');
+  expect(wrapper.emitted('saved')[0][0].target_date).toBe('2026-10-20');expect(wrapper.emitted('refresh-request')).toHaveLength(1);
+  expect(wrapper.find('[data-testid="queue-preview"]').exists()).toBe(false);
+ });
+
+ it('shows the model review as advice and a skipped review as a note',async()=>{
+  const {wrapper}=await mountAssistant(fixture({result:ready({},{warnings:['你提到的 3 号场没有出现在队列里'],review:{state:'reviewed',attempts:1}})}));
+  await send(wrapper,'后天 14-16，1号3号场');
+  expect(wrapper.get('[data-testid="review-warnings"]').text()).toContain('仅供参考');
+  expect(wrapper.get('[data-testid="review-warnings"]').text()).toContain('3 号场');
+  expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(false);
+  const skipped=await mountAssistant(fixture({result:ready({},{review:{state:'skipped',note:'队列没有经过模型复核（尚未配置模型）。'}})}));
+  await send(skipped.wrapper,'后天 14-16');expect(skipped.wrapper.text()).toContain('尚未配置模型');
+ });
+
+ it('warns when the date will not be handled automatically',async()=>{
+  const {wrapper}=await mountAssistant(fixture({result:ready({},{schedule:{state:'not_automatic',text:'这一天已经不会再自动执行。'}})}));
+  await send(wrapper,'明天 14-16');
+  expect(wrapper.get('[data-testid="queue-schedule"]').classes()).toContain('is-warn');
+ });
+
+ it('disables saving when the description changes after the draft was built',async()=>{
+  const {wrapper,planApi}=await mountAssistant();await send(wrapper,'后天 14-16');
+  await wrapper.get('[data-testid="proposal-message"]').setValue('改成大后天');
+  expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);expect(planApi.saveQueue).not.toHaveBeenCalled();
+ });
+
+ it('does not start a second save while one is in flight',async()=>{
+  let release;const config=fixture({saveQueue:vi.fn(()=>new Promise(r=>{release=r;}))});
+  const {wrapper,planApi}=await mountAssistant(config);await send(wrapper,'后天 14-16');
+  const save=wrapper.get('[data-testid="confirm-save-proposal"]');await save.trigger('click');await save.trigger('click');await flushPromises();
+  expect(planApi.saveQueue).toHaveBeenCalledTimes(1);expect(save.element.disabled).toBe(true);
+  release({queue:{}});await flushPromises();expect(wrapper.text()).toContain('队列已保存');
+ });
+
+ it('treats a version conflict as stale and regenerates from the latest queue',async()=>{
+  const config=fixture({saveQueue:vi.fn().mockRejectedValueOnce({status:409,code:'plan_version_conflict'})});
+  const {wrapper,planApi,proposalApi}=await mountAssistant(config);await send(wrapper,'后天 14-16');
+  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
+  expect(wrapper.text()).toContain('刚被改过');expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);
+  await wrapper.get('[data-testid="regenerate"]').trigger('click');await flushPromises();
+  expect(proposalApi.generate).toHaveBeenCalledTimes(2);expect(planApi.saveQueue).toHaveBeenCalledTimes(1);
+  expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(false);
+ });
+
+ it('keeps the draft when the server rejects the queue',async()=>{
+  const config=fixture({saveQueue:vi.fn().mockRejectedValueOnce({status:400,code:'invalid_plan'})});
+  const {wrapper}=await mountAssistant(config);await send(wrapper,'后天 14-16');
+  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
+  expect(wrapper.text()).toContain('队列未保存');expect(wrapper.find('[data-testid="queue-preview"]').exists()).toBe(true);
+ });
+
+ it('checks the stored queue after a lost response instead of guessing',async()=>{
+  const landed={queue:{target_date:'2026-10-20',credential_id:'credential-a',version:1,candidates:ENTRIES.map(e=>({duration_minutes:e.duration_minutes,preferred_start_times:[e.start_time],court_preferences:[e.court_preference],query_scope_label:e.scope_label}))}};
+  const config=fixture({saveQueue:vi.fn().mockRejectedValue({kind:'network',status:0}),queue:vi.fn(async()=>landed)});
+  const {wrapper,planApi}=await mountAssistant(config);await send(wrapper,'后天 14-16');
+  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
+  expect(planApi.queue).toHaveBeenCalledWith('2026-10-20','credential-a');expect(wrapper.text()).toContain('队列已保存');
+  const lost=fixture({saveQueue:vi.fn().mockRejectedValue({kind:'timeout',status:0}),queue:vi.fn(async()=>({queue:{candidates:[]}}))});
+  const second=await mountAssistant(lost);await send(second.wrapper,'后天 14-16');
+  await second.wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
+  expect(second.wrapper.text()).toContain('保存结果暂时无法确认');expect(second.wrapper.find('[data-testid="queue-preview"]').exists()).toBe(true);
+  expect(second.wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(false);
+ });
+});
+
+describe('queue assistant: hand-off, notices and sessions',()=>{
+ it('hands over to manual selection when the server gives up, and locks the answer box',async()=>{
+  const escalation={kind:'stalled',field:'courts_2h',message:'这一项我连续几次都没能确认。',prefill:{target_date:'2026-10-24'}};
+  const config=fixture({result:ask(escalation.message,{phase:'escalated',escalation})});
+  const {wrapper}=await mountAssistant(config);await send(wrapper,'想订场');
+  expect(wrapper.get('[data-testid="escalation-card"]').text()).toContain('2026年10月24日');
+  expect(wrapper.find('[data-testid="proposal-answer"]').exists()).toBe(false);expect(wrapper.find('[data-testid="confirm-save-proposal"]').exists()).toBe(false);
+  await wrapper.get('[data-testid="open-manual"]').trigger('click');
+  expect(wrapper.emitted('manual-request')).toEqual([[{target_date:'2026-10-24'}]]);
+  await wrapper.get('[data-testid="escalation-restart"]').trigger('click');
+  expect(wrapper.find('[data-testid="escalation-card"]').exists()).toBe(false);expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('');
+ });
+
+ it('shows server notices as assistant messages and drops them on restart',async()=>{
+  const note='我只记录你想在开放时自动预约的意向。';
+  const {wrapper}=await mountAssistant(fixture({result:ready({notices:[note]})}));await send(wrapper,'到点自动预约');
+  expect(wrapper.get('[data-testid="conversation-notice"]').text()).toBe(note);
+  await wrapper.get('[data-testid="cancel-proposal"]').trigger('click');await wrapper.get('[data-testid="restart-conversation"]').trigger('click');
+  expect(wrapper.find('[data-testid="conversation-notice"]').exists()).toBe(false);
+ });
+
+ it('ignores results returned after the session or CSRF token changes',async()=>{
+  let resolve;const config=fixture();config.proposalApi.generate=vi.fn(()=>new Promise(r=>{resolve=r;}));
+  const {wrapper,session}=await mountAssistant(config);
+  await wrapper.get('[data-testid="proposal-message"]').setValue('我的文本');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');
+  session.csrfToken='csrf-b';await flushPromises();resolve(ready());await flushPromises();
+  expect(wrapper.find('[data-testid="queue-preview"]').exists()).toBe(false);expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('我的文本');
+ });
+
+ it('clears the conversation when the account or credential changes',async()=>{
+  const {wrapper,session}=await mountAssistant(fixture({result:ask('想订哪一天？')}));
+  await send(wrapper,'用户A的私有安排');session.user={user_id:'user-b'};await flushPromises();
+  expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('');expect(wrapper.text()).not.toContain('想订哪一天？');
+  await wrapper.setProps({credentialId:'credential-b'});expect(wrapper.find('[data-testid="queue-preview"]').exists()).toBe(false);
+ });
+
+ it('lets users edit the original request, and only clears answers after confirmation',async()=>{
+  const config=fixture();config.proposalApi.generate=vi.fn().mockResolvedValue(structuredClone(ask('想订哪一天？')));
+  const {wrapper,proposalApi}=await mountAssistant(config);
+  await send(wrapper,'想订场');await reply(wrapper,'后天');
+  await wrapper.findAll('button').find(b=>b.text()==='修改原描述').trigger('click');
+  await wrapper.get('[data-testid="proposal-message"]').setValue('改成下周六');
+  expect(wrapper.text()).toContain('描述已变化');expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(true);
+  await wrapper.findAll('button').find(b=>b.text()==='保留原描述').trigger('click');
+  expect(wrapper.get('.chat-message-list').text()).toContain('后天');
+  await wrapper.findAll('button').find(b=>b.text()==='修改原描述').trigger('click');
+  await wrapper.get('[data-testid="proposal-message"]').setValue('改成下周六');
+  await wrapper.findAll('button').find(b=>b.text()==='清除回答并使用新描述').trigger('click');
+  expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('改成下周六');expect(wrapper.get('.chat-message-list').text()).not.toContain('后天');
+  expect(proposalApi.generate).toHaveBeenCalledTimes(2);
+ });
+});
+
+describe('queue assistant: save safety regressions',()=>{
+ it('cannot save an old draft while replacement text awaits confirmation',async()=>{
+  const config=fixture();config.proposalApi.generate=vi.fn().mockResolvedValueOnce(ask('几号场？',{asking:'courts_2h'})).mockResolvedValueOnce(ready());
+  const {wrapper,planApi}=await mountAssistant(config);await send(wrapper,'后天14-16');await reply(wrapper,'1号场');
+  await wrapper.get('[data-testid="proposal-message"]').setValue('改成下周六18-20');
+  expect(wrapper.text()).toContain('描述已变化');expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);
+  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');expect(planApi.saveQueue).not.toHaveBeenCalled();
+  await wrapper.findAll('button').find(b=>b.text()==='保留原描述').trigger('click');
+  expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(false);
+ });
+
+ it('requires a loaded and unchanged query category before saving',async()=>{
+  const config=fixture({scopeLabel:''});const {wrapper,planApi}=await mountAssistant(config);await send(wrapper,'后天14-16');
+  expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);
+  await wrapper.setProps({scopeLabel:'羽毛球'});expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);
+  await wrapper.get('[data-testid="regenerate"]').trigger('click');await flushPromises();
+  expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(false);expect(planApi.saveQueue).not.toHaveBeenCalled();
+ });
+
+ it('does not claim a lost save succeeded when scope, date, credential or version differs',async()=>{
+  const candidates=ENTRIES.map(e=>({duration_minutes:e.duration_minutes,preferred_start_times:[e.start_time],court_preferences:[e.court_preference],query_scope_label:'羽毛球'}));
+  const base={target_date:'2026-10-20',credential_id:'credential-a',version:1,candidates};
+  for(const changed of [{candidates:candidates.map(c=>({...c,query_scope_label:null}))},{target_date:'2026-10-21'},{credential_id:'credential-b'},{version:9}]){
+   const config=fixture({saveQueue:vi.fn().mockRejectedValue({kind:'network',status:0}),queue:vi.fn(async()=>({queue:{...base,...changed}}))});
+   const {wrapper}=await mountAssistant(config);await send(wrapper,'后天14-16');await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
+   expect(wrapper.emitted('saved')).toBeUndefined();expect(wrapper.text()).toContain('保存结果暂时无法确认');expect(wrapper.find('[data-testid="queue-preview"]').exists()).toBe(true);
   }
  });
-
- it('accepts the exact opening and closing boundaries when the duration fits',async()=>{
-  const validIntents=[
-   {...intent,preferred_start_times:['09:00'],duration_minutes:120,court_preferences:['1号场']},
-   {...intent,preferred_start_times:['20:00'],duration_minutes:120,court_preferences:['10号场']},
-   {...intent,preferred_start_times:['21:00'],duration_minutes:60},
-  ];
-  for(const validIntent of validIntents){
-   const config=fixture({proposalResult:{status:'ready',questions:[],proposal:{...proposal,intent:validIntent}}});
-   const {wrapper,planApi}=await mountAssistant(config);await wrapper.get('[data-testid="proposal-message"]').setValue('边界时间有效');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-   expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(false);expect(planApi.create).not.toHaveBeenCalled();wrapper.unmount();
-  }
- });
-
- it('lets users edit the original request after the first clarification',async()=>{
-  const config=fixture({proposalResult:{status:'needs_input',questions:['你想预约哪一天？'],proposal:null}});
-  const {wrapper,proposalApi,planApi}=await mountAssistant(config);
-  await wrapper.get('[data-testid="proposal-message"]').setValue('想预约羽毛球');
-  await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-  await wrapper.findAll('button').find(button=>button.text()==='修改原描述').trigger('click');
-  expect(wrapper.get('[data-testid="proposal-message"]').element.disabled).toBe(false);
-  expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(true);
-  await wrapper.get('[data-testid="proposal-message"]').setValue('改为下周六18:00打2小时，6号场');
-  expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(false);
-  expect(proposalApi.generate).toHaveBeenCalledTimes(1);expect(planApi.create).not.toHaveBeenCalled();
- });
-
- it('keeps answered turns until an edited original request is confirmed',async()=>{
-  const config=fixture({proposalResult:{status:'needs_input',questions:['你想预约哪一天？'],proposal:null}});
-  config.proposalApi.generate.mockResolvedValueOnce({status:'needs_input',questions:['你想预约哪一天？'],proposal:null})
-   .mockResolvedValueOnce({status:'needs_input',questions:['你希望几点开始？'],proposal:null});
-  const {wrapper,proposalApi,planApi}=await mountAssistant(config);
-  const click=async text=>{await wrapper.findAll('button').find(button=>button.text()===text).trigger('click');await flushPromises();};
-  await wrapper.get('[data-testid="proposal-message"]').setValue('想预约羽毛球');
-  await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
-  await wrapper.get('[data-testid="proposal-answer"]').setValue('2026年10月24日');
-  await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
-  await click('修改原描述');
-  await wrapper.get('[data-testid="proposal-message"]').setValue('改成下周日');
-  await wrapper.get('[data-testid="proposal-message"]').setValue('改成下周日18:00打2小时');
-  expect(wrapper.get('[data-testid="proposal-message"]').element.disabled).toBe(false);
-  expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(true);
-  expect(wrapper.get('.chat-message-list').text()).toContain('2026年10月24日');
-  await click('保留原描述');
-  expect(wrapper.find('[data-testid="proposal-answer"]').exists()).toBe(true);
-  expect(wrapper.get('.chat-message-list').text()).toContain('想预约羽毛球');
-  await click('修改原描述');
-  await wrapper.get('[data-testid="proposal-message"]').setValue('改成下周日18:00打2小时');
-  await click('清除回答并使用新描述');
-  expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('改成下周日18:00打2小时');
-  expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(false);
-  expect(wrapper.get('.chat-message-list').text()).not.toContain('2026年10月24日');
-  expect(proposalApi.generate).toHaveBeenCalledTimes(2);expect(planApi.create).not.toHaveBeenCalled();
- });
-
- it('shows only valid complete court numbers in the draft progress',async()=>{
-  const {wrapper,proposalApi}=await mountAssistant();
-  for(const [number,expected] of [[11,'未填写'],[111,'未填写'],[0,'未填写'],[10,'10号场'],[1,'1号场']]){
-   await wrapper.get('[data-testid="proposal-message"]').setValue(`10月24日18:00开始，打2小时，${number}号场。`);
-   const court=wrapper.findAll('.slot-strip li').find(item=>item.get('span').text()==='场地');
-   expect(court.get('strong').text()).toBe(expected);
-  }
-  expect(proposalApi.generate).not.toHaveBeenCalled();
- });
-
 });

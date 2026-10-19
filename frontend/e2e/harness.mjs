@@ -35,11 +35,14 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
     requestRecords.set(request, record);
     const scopedPlanRead = url.pathname === '/api/plans'
       || /^\/api\/plans\/manual-queues(?:\/\d{4}-\d{2}-\d{2})?$/.test(url.pathname);
-    const queryAllowed = scopedPlanRead
+    const scopedPlanningConversationRead = url.pathname === '/api/planning/queue-conversations';
+    const queryAllowed = (scopedPlanRead || scopedPlanningConversationRead)
       && request.method() === 'GET'
       && [...url.searchParams.keys()].every((key) => key === 'credential_id')
-      && url.searchParams.getAll('credential_id').length <= 1;
-    if ((url.search && !queryAllowed) || url.hash) { report.unexpectedApiRequests.push({ scenario: name, reason: 'unexpected API query', path: url.pathname }); await route.abort('blockedbyclient'); return; }
+      && (scopedPlanningConversationRead
+        ? url.searchParams.getAll('credential_id').length === 1 && state.credentials.some((item) => item.credential_id === url.searchParams.get('credential_id'))
+        : url.searchParams.getAll('credential_id').length <= 1);
+    if ((url.search && !queryAllowed) || url.hash || (scopedPlanningConversationRead && !queryAllowed)) { report.unexpectedApiRequests.push({ scenario: name, reason: 'unexpected API query', path: url.pathname }); await route.abort('blockedbyclient'); return; }
     if (!['GET', 'HEAD', 'OPTIONS'].includes(record.method) && !['/api/auth/login', '/api/auth/register'].includes(record.path)) record.csrfValid = request.headers()['x-csrf-token'] === SYNTHETIC_CSRF;
     state.requests.push(record);
     const reply = async (status, payload = {}, raw = null) => {
@@ -80,6 +83,7 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
       await delay(state.listDelay); if (state.listNetworkError) { record.status = 'MOCK_NETWORK_ABORT'; await route.abort('failed'); return; } await reply(state.listError ? 503 : 200, state.listError ? { error: 'upstream_unavailable' } : { credentials: state.credentials }); return;
     }
     if (url.pathname === '/api/plans' && record.method === 'GET') { await reply(200, { plans: [] }); return; }
+    if (scopedPlanningConversationRead && record.method === 'GET') { await reply(200, { conversation: null }); return; }
     if (url.pathname === '/api/plans/options' && record.method === 'GET') {
       await reply(200, { venues: [], catalog_version: null, context: { timezone_name: 'Asia/Shanghai', currency_code: 'CNY', currency_minor_unit_exponent: 2, preference_verification: 'unverified_manual', catalog_version: null, venue_binding: null } }); return;
     }

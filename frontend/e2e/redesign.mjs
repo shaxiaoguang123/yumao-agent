@@ -21,7 +21,11 @@ export async function runRedesign(qa) {
   await card.locator('.validation-record > summary').click();
   check(ctx.name,'verification details remain accessible on explicit expansion',await card.getByText('最近发起的验证',{exact:true}).isVisible());
   check(ctx.name,'automatic execution schedule is no longer on credential management',await ctx.page.getByText('自动执行时间',{exact:true}).count()===0&&count(ctx,'/api/booking-execution/credentials/visual-confirmed/settings','GET')===0);
-  await ctx.page.goto(BASE+'/plans');await ctx.page.getByTestId('plan-tab-current').click();
+  const restoreResponse=ctx.page.waitForResponse(response=>{const url=new URL(response.url());return url.pathname==='/api/planning/queue-conversations'&&response.request().method()==='GET';});
+  await ctx.page.goto(BASE+'/plans');
+  const restoredConversation=await restoreResponse;
+  check(ctx.name,'Agent restores an empty conversation for the active credential',restoredConversation.ok()&&(await restoredConversation.json()).conversation===null);
+  await ctx.page.getByTestId('plan-tab-current').click();
   const settings=ctx.page.locator('#plan-panel-current [aria-labelledby="execution-settings-title"]');
   await settings.locator('.execution-settings-form').waitFor();
   await settings.getByLabel('队列复核时间').fill('01:15');

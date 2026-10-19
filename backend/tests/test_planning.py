@@ -2,396 +2,510 @@ import json
 import tempfile
 import unittest
 from contextlib import closing
+from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
-from backend.app import create_app
+from backend.ai import conversation as conv
 from backend.ai.planning import PlanningService
 from backend.ai.service import AIModelError
+from backend.app import create_app
 from backend.db import connect_database
 from backend.migrate import migrate_database
 from support import credential_test_settings
-from plan_test_support import NOW, draft
+from plan_test_support import NOW
 
 ORIGIN = 'http://localhost:5173'
-MESSAGE = '下周六18:00打两个小时，东区体育馆，6号场优先，5号场备选。'
+ONE_SHOT = '10月20日 14-16 和 18-20，1号4号场，不要一小时，不用候选'
+OK = json.dumps({'warnings': []})
 
 
-def ready(intent=None, evidence=None):
-    return json.dumps({'status': 'ready', 'intent': intent or draft(
-        target_date='2026-10-17', preferred_start_times=['18:00'],
-        venue_preference='东区体育馆', court_preferences=['6号场', '5号场']),
-        'questions': [], 'evidence': evidence if evidence is not None else {
-            'target_date': '下周六', 'preferred_start_times': '18:00', 'duration_minutes': '两个小时',
-            'venue_preference': '东区体育馆', 'court_preferences': '6号场优先，5号场备选'}}, ensure_ascii=False)
+class ScriptedProvider:
+    """Replies in order; the last one repeats. A reply that is an Exception is raised."""
 
-
-class FakeProvider:
     def __init__(self):
-        self.content = ready()
-        self.calls = []
-        self.failure = None
+        self.queue, self.calls = [OK], []
 
-    def chat(self, user_id, messages):
-        self.calls.append((user_id, messages))
-        if self.failure:
-            raise self.failure
-        return self.content, {'name': '合成模型', 'model': 'synthetic-model'}
+    def chat(self, user_id, messages, **_kw):
+        self.calls.append(messages)
+        reply = self.queue.pop(0) if len(self.queue) > 1 else self.queue[0]
+        if reply == OK and '追问排序器' in messages[0]['content']:
+            payload = json.loads(messages[-1]['content'])
+            reply = json.dumps({'field': payload['blocking_fields'][0]['field']})
+        if isinstance(reply, Exception):
+            raise reply
+        return reply, {'name': '合成模型', 'model': 'synthetic-model'}
+
+    def payload(self, index=-1):
+        return json.loads(self.calls[index][1]['content'])
 
 
-class PlanningTests(unittest.TestCase):
+def add_account(path, user_id, credential_id):
+    with closing(connect_database(path, 5000)) as db:
+        db.execute("BEGIN")
+        db.execute("INSERT OR IGNORE INTO users(user_id,username,normalized_username,password_hash,role,status,created_at_utc_ms,updated_at_utc_ms) VALUES(?,?,?,'x','user','active',1,1)", (user_id, user_id, user_id))
+        db.execute("INSERT INTO credentials(credential_id,user_id,label,credential_version,enabled,current_token_revision_id,account_binding_state,last_confirmed_validation_state,requires_revalidation,created_at_utc_ms,updated_at_utc_ms) VALUES(?,?,'t',1,1,?,'unresolved','never_confirmed',0,1,1)", (credential_id, user_id, 'rev-' + credential_id))
+        db.execute("INSERT INTO credential_token_revisions(revision_id,user_id,credential_id,revision_number,token_fingerprint,token_fingerprint_key_version,initial_validation_result,initial_validation_at_utc_ms,created_by_user_id,secret_material_active,ciphertext,nonce,tag,encryption_key_version) VALUES(?,?,?,1,?,'fp-v1','success',1,?,1,?,?,?,'enc-v1')", ('rev-' + credential_id, user_id, credential_id, 'a' * 64, user_id, b'c', b'n' * 12, b't' * 16))
+        db.commit()
+
+
+class Base(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix='planning-fake-')
-        self.addCleanup(self.tmp.cleanup)
-        self.path = Path(self.tmp.name)/'synthetic.sqlite3'
+        tmp = tempfile.TemporaryDirectory(prefix='planning-queue-')
+        self.addCleanup(tmp.cleanup)
+        self.path = Path(tmp.name) / 'synthetic.sqlite3'
         migrate_database(self.path, 5000)
-        self.app = create_app({**credential_test_settings(self.path), 'TESTING': True,
-            'APP_ALLOWED_ORIGINS': ORIGIN, 'BOOKING_CURRENCY_CODE': 'CNY', 'BOOKING_CURRENCY_MINOR_UNIT_EXPONENT': '2'})
-        with closing(connect_database(self.path, 5000)) as db:
-            for user in ('a', 'b'):
-                db.execute("INSERT INTO users(user_id,username,normalized_username,password_hash,role,status,created_at_utc_ms,updated_at_utc_ms) VALUES(?,?,?,'never-send-this-password','user','active',1,1)", (user,user,user))
-        self.a, self.b = self.app.test_client(), self.app.test_client()
-        self.headers = {}
-        for user, client in (('a', self.a), ('b', self.b)):
+        self.app = create_app({**credential_test_settings(self.path), 'TESTING': True, 'APP_ALLOWED_ORIGINS': ORIGIN})
+        for user, credential in (('a', 'cred-a'), ('b', 'cred-b')):
+            add_account(self.path, user, credential)
+        self.clients, self.headers = {}, {}
+        for user in ('a', 'b'):
+            client = self.app.test_client()
             cookie, csrf = self.app.extensions['session_service'].create(user, NOW)
             client.set_cookie('yumao_session', cookie)
-            self.headers[user] = {'Origin': ORIGIN, 'X-CSRF-Token': csrf}
-        self.fake = FakeProvider()
-        self.app.extensions['planning_service'] = PlanningService(self.app.extensions['plan_service'], self.fake)
-        self.enterContext(patch('backend.api.planning.time.time_ns', return_value=NOW*1_000_000))
+            self.clients[user], self.headers[user] = client, {'Origin': ORIGIN, 'X-CSRF-Token': csrf}
+        self.provider = ScriptedProvider()
+        self.app.extensions['planning_service'] = PlanningService(self.app.extensions['plan_service'], self.provider)
+        self.enterContext(patch('backend.api.planning.time.time_ns', return_value=NOW * 1_000_000))
         self.network = self.enterContext(patch('requests.sessions.Session.request', side_effect=AssertionError('upstream forbidden')))
 
-    def propose(self, message=MESSAGE, plan=None, client=None, user='a'):
-        return (client or self.a).post('/api/planning/proposals', json={'message': message,
-            'plan_id': plan['plan_id'] if plan else None, 'base_version': plan['version'] if plan else None}, headers=self.headers[user])
+    def post(self, message=ONE_SHOT, user='a', credential='cred-a', scope_label='羽毛球', **extra):
+        body = {'message': message, **({'credential_id': credential} if credential else {}),
+                **({'scope_label': scope_label} if scope_label is not None else {}),
+                **{k: v for k, v in extra.items() if v is not None}}
+        return self.clients[user].post('/api/planning/queue-proposals', json=body, headers=self.headers[user])
+
+    def result(self, *args, **kwargs):
+        return self.post(*args, **kwargs).get_json()
 
     def counts(self):
-        with closing(connect_database(self.path,5000)) as db:
+        with closing(connect_database(self.path, 5000)) as db:
             return tuple(db.execute('SELECT (SELECT count(*) FROM booking_plans),(SELECT count(*) FROM booking_plan_revisions)').fetchone())
 
-    def test_proposal_does_not_write_and_confirmation_uses_plan_service(self):
-        response = self.propose()
-        self.assertEqual(response.status_code, 200)
-        result = response.get_json()
-        self.assertEqual(result['status'], 'ready')
+class ReadyTests(Base):
+    def test_one_message_builds_the_ordered_queue_and_the_model_only_reviews(self):
+        result = self.result()
         proposal = result['proposal']
-        self.assertEqual(proposal['intent']['target_date'], '2026-10-17')
-        self.assertFalse(proposal['booking_window']['can_query'])
-        self.assertEqual(self.counts(), (0,0))
-        saved = self.a.post('/api/plans', json={'intent':proposal['intent']}, headers=self.headers['a'])
-        self.assertEqual(saved.status_code,201)
-        self.assertEqual(self.counts(),(1,1))
-        self.assertEqual(saved.get_json()['plan']['kind'],'unbound_draft')
-        self.assertEqual(saved.get_json()['plan']['context']['preference_verification'],'unverified_manual')
-        for field in ('can_book','can_pay','can_query_upstream','can_create_job'):
-            self.assertFalse(proposal[field])
+        self.assertEqual((result['status'], result['conversation']['phase']), ('ready', 'ready'))
+        self.assertEqual([(e['court_preference'], e['start_time'], e['end_time'], e['duration_minutes']) for e in proposal['entries']],
+                         [('1号场', '14:00', '16:00', 120), ('4号场', '14:00', '16:00', 120),
+                          ('1号场', '18:00', '20:00', 120), ('4号场', '18:00', '20:00', 120)])
+        self.assertEqual((proposal['target_date'], proposal['target_label']), ('2026-10-20', '10月20日 周二'))
+        self.assertEqual((proposal['base_version'], proposal['existing_count'], proposal['replaces_existing']), (0, 0, False))
+        self.assertEqual(proposal['review']['state'], 'reviewed')
+        self.assertEqual(len(self.provider.calls), 1)
+        for flag in ('can_book', 'can_pay', 'can_create_job', 'can_query_upstream'):
+            self.assertFalse(proposal[flag])
+        self.assertEqual(self.counts(), (0, 0))
         self.network.assert_not_called()
 
-    def test_edit_diff_history_and_cas_preserves_current_data(self):
-        old = self.app.extensions['plan_service'].create_plan('a',draft(),NOW)
-        intent = {**old['intent'], 'preferred_start_times':['19:00'], 'court_preferences':['5号场备选','6号场优先']}
-        self.fake.content = ready(intent,{'preferred_start_times':'19:00','court_preferences':'5号场改为第一优先级'})
-        response = self.propose('把开始时间改成19:00，5号场改为第一优先级。',old)
-        self.assertEqual(response.status_code,200)
-        proposal=response.get_json()['proposal']
-        self.assertEqual({x['field'] for x in proposal['changes']},{'preferred_start_times','court_preferences'})
-        self.assertEqual(proposal['before_intent'],old['intent'])
-        payload={'base_version':proposal['base_version'],'intent':proposal['intent']}
-        saved=self.a.patch('/api/plans/'+old['plan_id'],json=payload,headers=self.headers['a'])
-        self.assertEqual(saved.get_json()['plan']['version'],2)
-        self.assertEqual(self.a.patch('/api/plans/'+old['plan_id'],json=payload,headers=self.headers['a']).status_code,409)
-        revisions=self.a.get('/api/plans/'+old['plan_id']+'/revisions').get_json()['revisions']
-        self.assertEqual([r['revision_number'] for r in revisions],[2,1])
-        self.assertEqual(revisions[1]['intent'],old['intent'])
-        self.assertEqual(self.counts(),(1,2))
+    def test_the_review_prompt_explains_the_phrases_that_caused_false_alarms(self):
+        self.result()
+        rules = self.provider.calls[0][0]['content']
+        self.assertIn('不是要删掉已经说出的时间段', rules)   # "不用候选" means: no extra candidates
+        self.assertIn('不要一小时', rules)
+        self.assertIn('不用提醒', rules)                  # the 2h-before-1h order is by design
 
-    def test_b_cannot_access_a_context_and_stale_generation_does_not_call_model(self):
-        plan=self.app.extensions['plan_service'].create_plan('a',draft(),NOW)
-        self.assertEqual(self.propose(plan=plan,client=self.b,user='b').status_code,404)
-        self.assertEqual(self.fake.calls,[])
-        self.app.extensions['plan_service'].update_plan('a',plan['plan_id'],1,draft(venue_preference='新意向'),NOW)
-        self.assertEqual(self.propose(plan=plan).status_code,409)
-        self.assertEqual(self.fake.calls,[])
-        self.assertEqual(self.counts(),(1,2))
+    def test_the_model_sees_the_users_words_and_the_built_queue_but_nothing_private(self):
+        self.result()
+        payload = self.provider.payload()
+        self.assertEqual(set(payload), {'business_date', 'user_turns', 'queue'})
+        self.assertEqual(payload['user_turns'], [ONE_SHOT])
+        self.assertEqual(payload['queue']['candidates'][0], '2小时 14:00-16:00 1号场')
+        text = json.dumps(self.provider.calls[0], ensure_ascii=False)
+        for secret in ('cred-a', 'user_id', 'token'):
+            self.assertNotIn(secret, text)
 
-    def test_model_context_is_minimal_and_relative_date_server_owned(self):
-        self.propose()
-        user,messages=self.fake.calls[0]
-        context=json.loads(messages[1]['content'])
-        self.assertEqual(user,'a')
-        self.assertEqual(set(context),{'user_request','business_date','relative_dates','context','current_intent'})
-        self.assertEqual(context['business_date'],'2026-10-10')
-        self.assertEqual(context['relative_dates']['下周六'],'2026-10-17')
-        self.assertEqual(context['context']['timezone_name'],'Asia/Shanghai')
-        self.assertNotIn('never-send-this-password',json.dumps(messages))
-        self.assertNotIn('user_id',json.dumps(messages))
-        self.assertNotIn('credential_id',json.dumps(messages))
-        rules=messages[0]['content']
-        self.assertIn('目标日期不能早于业务日期',rules)
-        self.assertIn('09:00',rules);self.assertIn('22:00',rules)
-        self.assertIn('“1号场”至“10号场”',rules)
+    def test_model_ranks_open_fields_but_the_date_gate_stays_server_owned(self):
+        self.result('我想订场')
+        self.assertEqual(self.provider.calls, [])
+        self.provider.queue = [json.dumps({'field': 'courts_2h'})]
+        result = self.result('后天 14-16')
+        self.assertEqual(result['conversation']['asking'], 'courts_2h')
+        self.assertIn('号场', result['questions'][0])
+        self.assertEqual(self.provider.payload()['blocking_fields'][0]['field'], 'more_2h')
 
-    def test_invalid_ready_draft_is_rejected_with_one_targeted_high_priority_question(self):
-        cases = [
-            (draft(target_date='2026-10-09'), ('已经过了', '当前业务日是10月10日', '未来日期')),
-            (draft(preferred_start_times=['08:30']), ('09:00–22:00', '最晚20:00开始')),
-            (draft(preferred_start_times=['20:30']), ('09:00–22:00', '最晚20:00开始')),
-            (draft(court_preferences=['11号场']), ('只支持1～10号', '6号场优先')),
-        ]
-        for invalid_intent, expected in cases:
-            with self.subTest(intent=invalid_intent):
-                self.fake.content=ready(invalid_intent)
-                response=self.propose().get_json()
-                self.assertEqual(response['status'],'needs_input')
-                self.assertIsNone(response['proposal'])
-                self.assertEqual(len(response['questions']),1)
-                for phrase in expected:
-                    self.assertIn(phrase,response['questions'][0])
-        self.assertEqual(self.counts(),(0,0))
+    def test_model_cannot_choose_a_field_that_is_not_blocking(self):
+        self.provider.queue = [json.dumps({'field': 'target_date'})]
+        result = self.result('后天 14-16')
+        self.assertEqual(result['conversation']['asking'], 'more_2h')
+        self.assertIn('默认顺序', result['conversation']['notices'][-1])
 
-    def test_server_save_boundary_rejects_expired_time_and_out_of_catalog_courts(self):
-        invalid_intents = (
-            draft(target_date='2026-10-09'),
-            draft(preferred_start_times=['08:59']),
-            draft(preferred_start_times=['20:01']),
-            draft(court_preferences=['11号场']),
+    def test_warnings_are_cleaned_and_never_change_the_queue(self):
+        self.provider.queue = [json.dumps({'warnings': ['你提到的 3 号场没有出现在队列里', 'x' * 200, 'sk-' + 'a' * 30, '  多  余  空格  ', '第四条'] })]
+        result = self.result()
+        # only the first three are read; the too-long and key-like ones are dropped, spaces are collapsed
+        self.assertEqual(result['proposal']['warnings'], ['你提到的 3 号场没有出现在队列里'])
+        for warning in result['proposal']['warnings']:
+            self.assertNotIn('sk-', warning)
+            self.assertLessEqual(len(warning), 80)
+        self.assertEqual(len(result['proposal']['entries']), 4)
+
+    def test_a_missing_model_does_not_stop_the_queue(self):
+        self.provider.queue = [AIModelError('provider_not_configured', 409)]
+        result = self.result()
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual(result['proposal']['review']['state'], 'skipped')
+        self.assertIn('尚未配置模型', result['conversation']['notices'][-1])
+        self.provider.queue = [AIModelError('provider_timeout', 504)]
+        self.assertIn('暂时不可用', self.result()['conversation']['notices'][-1])
+
+    def test_a_broken_review_reply_is_retried_once_then_skipped(self):
+        self.provider.queue = ['not json', OK]
+        self.assertEqual(self.result()['proposal']['review'], {'state': 'reviewed', 'attempts': 2})
+        self.assertIn('format_error', self.provider.payload())
+        self.provider.queue = ['not json']
+        result = self.result()
+        self.assertEqual((result['status'], result['proposal']['review']['state']), ('ready', 'skipped'))
+        self.assertEqual(len(self.provider.calls), 4)
+
+    def test_a_model_cannot_add_fields_or_entries(self):
+        for reply in (json.dumps({'warnings': [], 'entries': [{'court_preference': '9号场'}]}), json.dumps({'warnings': 'oops'}),
+                      json.dumps({'warnings': [1]})):
+            self.provider.queue = [reply]
+            result = self.result()
+            self.assertEqual(result['proposal']['review']['state'], 'skipped')
+            self.assertEqual(len(result['proposal']['entries']), 4)
+
+class ConversationTests(Base):
+    def test_questions_come_in_the_described_order_and_carry_asked_fields(self):
+        first = self.result('我想订场')
+        self.assertEqual(first['conversation']['asking'], 'target_date')
+        second = self.result('我想订场', answers=['10月20日'], asked_fields=['target_date'])
+        self.assertEqual(second['conversation']['asking'], 'windows_2h')
+        self.assertIn('已记录：10月20日 周二', second['questions'][0])
+        third = self.result('我想订场', answers=['10月20日', '14-16'], asked_fields=['target_date', 'windows_2h'])
+        self.assertEqual(third['conversation']['asking'], 'more_2h')
+
+    def test_the_view_describes_progress_for_the_ui(self):
+        view = self.result('10月20日 14-16')['conversation']
+        self.assertEqual([i['id'] for i in view['strip']], ['date', 'windows', 'courts', 'one'])
+        self.assertEqual(view['heading'], '候选时间')
+        self.assertEqual({i['id']: i['state'] for i in view['strip']}, {'date': 'done', 'windows': 'current', 'courts': 'empty', 'one': 'empty'})
+        self.assertEqual([s['field'] for s in view['slots']], list(conv.PRIORITY))
+        self.assertEqual((view['turns_used'], view['turns_max']), (0, conv.MAX_ANSWERS))
+
+    def test_the_one_hour_queue_is_a_second_stage(self):
+        message = '10月20日 14-16 不用候选 1号场'
+        result = self.result(message)
+        self.assertEqual(result['conversation']['asking'], 'want_1h')
+        result = self.result(message, answers=['要', '15-16', '不用', '1号场'],
+                             asked_fields=['want_1h', 'windows_1h', 'more_1h', 'courts_1h'])
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual([(e['duration_minutes'], e['start_time']) for e in result['proposal']['entries']], [(120, '14:00'), (60, '15:00')])
+
+    def test_declining_both_durations_never_reactivates_a_queue(self):
+        message = '后天14-16 1号场 不要一小时 不要两个小时 不用候选'
+        result = self.result(message)
+        self.assertEqual((result['status'], result['conversation']['asking']), ('needs_input', 'want_1h'))
+        self.assertEqual(result['conversation']['phase'], 'repairing')
+        self.assertEqual(result['conversation']['heading'], '选择预约时长')
+        self.assertIn('目前没有可保存的候选', result['questions'][0])
+        self.assertIsNone(result['proposal'])
+        strip = {item['id']: item for item in result['conversation']['strip']}
+        self.assertEqual(strip['windows']['display'], '')
+        self.assertEqual((strip['one']['state'], strip['one']['display']), ('current', '正在确认'))
+        self.assertEqual(self.provider.calls, [])
+
+    def test_reenabling_a_duration_keeps_its_original_courts(self):
+        message = '后天14-16 1号场 不要一小时 不要两个小时 不用候选'
+        result = self.result(message, answers=['只要2小时'], asked_fields=['want_1h'])
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual([(entry['duration_minutes'], entry['court_preference'])
+                          for entry in result['proposal']['entries']], [(120, '1号场')])
+
+    def test_overlap_is_explained_and_resolved_by_the_user(self):
+        message = '10月20日 14-16 15-17 不用候选'
+        result = self.result(message)
+        self.assertEqual(result['conversation']['asking'], 'overlap_2h')
+        self.assertIn('14-16 与 15-17', result['questions'][0])
+        result = self.result(message, answers=['去掉15-17', '1号场', '不用'], asked_fields=['overlap_2h', 'courts_2h', 'want_1h'])
+        self.assertEqual([e['start_time'] for e in result['proposal']['entries']], ['14:00'])
+
+    def test_the_questions_never_mention_a_venue_or_minutes(self):
+        for message, answers, asked in (('我想订场', [], []), ('我想订场', ['10月20日'], ['target_date']), ('10月20日 14-16', [], [])):
+            question = self.result(message, answers=answers or None, asked_fields=asked or None)['questions'][0]
+            self.assertNotIn('场馆', question)
+            self.assertNotIn('分钟', question)
+
+    def test_asked_fields_must_match_the_answers_and_be_known_fields(self):
+        for asked in ([], ['target_date', 'target_date'], ['nodeid'], 'target_date', [5]):
+            self.assertEqual(self.post(ONE_SHOT, answers=['好'], asked_fields=asked).status_code, 400, asked)
+        self.assertEqual(self.post(ONE_SHOT, answers=['好'], asked_fields=[None]).status_code, 200)
+
+    def test_a_field_asked_three_times_hands_over_with_the_confirmed_date(self):
+        message = '10月20日 14-16 不用候选'
+        asked = ['courts_2h'] * 3
+        result = self.result(message, answers=['不知道', '随便', '再说'], asked_fields=asked)
+        view = result['conversation']
+        self.assertEqual((result['status'], view['phase'], view['escalation']['kind']), ('needs_input', 'escalated', 'stalled'))
+        self.assertEqual(view['escalation']['prefill'], {'target_date': '2026-10-20'})
+        self.assertEqual(self.provider.calls, [])
+
+    def test_the_turn_budget_is_twenty_answers(self):
+        answers = ['嗯'] * conv.MAX_ANSWERS
+        result = self.result('想订场', answers=answers, asked_fields=[None] * conv.MAX_ANSWERS)
+        self.assertEqual(result['conversation']['escalation']['kind'], 'turn_limit')
+        self.assertEqual(self.post('想订场', answers=['嗯'] * (conv.MAX_ANSWERS + 1)).status_code, 400)
+
+    def test_the_last_turn_can_still_finish(self):
+        answers = ['嗯'] * (conv.MAX_ANSWERS - 1) + ['好的']
+        self.assertEqual(self.result(ONE_SHOT, answers=answers)['status'], 'ready')
+
+
+class SafetyTests(Base):
+    def test_commands_are_refused_and_wishes_are_noted(self):
+        for text in ('帮我直接预约并付款', ONE_SHOT + ' 然后立即下单'):
+            result = self.result(text)
+            self.assertEqual((result['status'], result['conversation']['phase']), ('unsupported', 'unsupported'))
+        self.assertEqual(self.provider.calls, [])
+        ok = self.result(ONE_SHOT + '，到点自动预约')
+        self.assertEqual(ok['status'], 'ready')
+        self.assertEqual(len(ok['conversation']['notices']), 1)
+        authorized = self.result('不要自动付款，' + ONE_SHOT)
+        self.assertEqual(authorized['status'], 'ready')
+        self.assertFalse(authorized['proposal']['can_pay'])
+
+    def test_secrets_are_rejected_without_being_echoed(self):
+        response = self.post('Bearer ' + 'x' * 32)
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn('x' * 32, response.get_data(as_text=True))
+        self.assertEqual(self.provider.calls, [])
+
+    def test_a_credential_is_required_and_must_belong_to_the_user(self):
+        self.assertEqual(self.post(credential=None).status_code, 400)
+        self.assertEqual(self.post(credential='cred-b').status_code, 404)
+        self.assertEqual(self.post(user='b', credential='cred-a').status_code, 404)
+        self.assertEqual(self.post(user='b', credential='cred-b').status_code, 200)
+
+    def test_body_shape_session_and_csrf(self):
+        anonymous = self.app.test_client()
+        self.assertEqual(anonymous.post('/api/planning/queue-proposals', json={}, headers={'Origin': ORIGIN}).status_code, 401)
+        self.assertEqual(self.clients['a'].post('/api/planning/queue-proposals', json={}, headers={'Origin': ORIGIN}).status_code, 403)
+        for body in ({'message': ONE_SHOT}, {'message': ONE_SHOT, 'credential_id': 'cred-a', 'plan_id': 'p'},
+                     {'message': ONE_SHOT, 'credential_id': 'cred-a', 'token': 'forbidden'}, {'message': True, 'credential_id': 'cred-a'}):
+            self.assertEqual(self.clients['a'].post('/api/planning/queue-proposals', json=body, headers=self.headers['a']).status_code, 400, body)
+        big = self.clients['a'].post('/api/planning/queue-proposals', data='x' * 70000, content_type='application/json', headers=self.headers['a'])
+        self.assertEqual(big.status_code, 413)
+
+    def test_scope_label_is_validated_and_carried_into_entries(self):
+        result = self.result(scope_label='羽毛球')
+        self.assertTrue(all(e['scope_label'] == '羽毛球' for e in result['proposal']['entries']))
+        missing = self.post(scope_label=None)
+        self.assertEqual(missing.status_code, 409)
+        self.assertEqual(missing.get_json()['error'], 'planning_scope_required')
+        for bad in ('', ' x', 'x ', 'a' * 101, 5, 'bad\nlabel', '羽毛球场', '其他活动'):
+            self.assertEqual(self.post(scope_label=bad).status_code, 400, bad)
+
+    def test_queue_conversation_is_restored_and_isolated_by_user_and_credential(self):
+        first = self.post('后天')
+        self.assertEqual(first.status_code, 200)
+        conversation_id = first.get_json()['conversation_id']
+        latest = self.clients['a'].get('/api/planning/queue-conversations?credential_id=cred-a', headers=self.headers['a'])
+        self.assertEqual(latest.get_json()['conversation']['message'], '后天')
+        self.assertEqual(latest.get_json()['conversation']['response_history'][0]['questions'], first.get_json()['questions'])
+
+        continued = self.post('后天', answers=['14-16'], asked_fields=['windows_2h'], conversation_id=conversation_id)
+        self.assertEqual(continued.status_code, 200)
+        restored = self.clients['a'].get('/api/planning/queue-conversations?credential_id=cred-a', headers=self.headers['a']).get_json()['conversation']
+        self.assertEqual(restored['answers'], ['14-16'])
+        self.assertEqual(len(restored['response_history']), 2)
+        self.assertIsNone(self.clients['b'].get('/api/planning/queue-conversations?credential_id=cred-b', headers=self.headers['b']).get_json()['conversation'])
+        cross_user = self.clients['b'].post(
+            '/api/planning/queue-proposals', json={'message':'后天','credential_id':'cred-b','conversation_id':conversation_id},
+            headers=self.headers['b'],
         )
-        for intent in invalid_intents:
-            with self.subTest(intent=intent):
-                response=self.a.post('/api/plans',json={'intent':intent},headers=self.headers['a'])
-                self.assertEqual(response.status_code,400)
-                self.assertEqual(response.get_json()['error'],'invalid_plan')
-        self.assertEqual(self.counts(),(0,0))
+        self.assertEqual(cross_user.status_code, 404)
+        closed = self.clients['a'].post(
+            f'/api/planning/queue-conversations/{conversation_id}/close?credential_id=cred-a',
+            json={}, headers=self.headers['a'],
+        )
+        self.assertEqual(closed.status_code, 204)
+        self.assertIsNone(self.clients['a'].get('/api/planning/queue-conversations?credential_id=cred-a', headers=self.headers['a']).get_json()['conversation'])
 
-    def test_missing_information_and_hallucinated_venue_return_questions(self):
-        self.fake.content=json.dumps({'status':'needs_input','intent':None,'questions':['请补充场馆名称。'],'evidence':{}})
-        result=self.propose('下周六18:00打两个小时，6号场优先。').get_json()
-        self.assertEqual(result['status'],'needs_input');self.assertIsNone(result['proposal'])
-        self.fake.content=ready()
-        result=self.propose('下周六18:00打两个小时，6号场优先，5号场备选。').get_json()
-        self.assertEqual(result['status'],'needs_input')
-        self.assertIn('场馆',result['questions'][0])
-        self.assertIn('例如',result['questions'][0])
-        self.assertEqual(self.counts(),(0,0))
+    def test_relative_date_uses_the_first_turn_business_date_across_midnight(self):
+        first_ms = int(datetime(2026, 10, 10, 23, 59, tzinfo=ZoneInfo('Asia/Shanghai')).timestamp() * 1000)
+        second_ms = int(datetime(2026, 10, 11, 0, 1, tzinfo=ZoneInfo('Asia/Shanghai')).timestamp() * 1000)
+        timestamps = iter([first_ms * 1_000_000, second_ms * 1_000_000])
+        with patch('backend.api.planning.time', SimpleNamespace(time_ns=lambda: next(timestamps))):
+            first_response = self.post('后天')
+            self.assertEqual(first_response.status_code, 200, first_response.get_json())
+            first = first_response.get_json()
+            second = self.post('后天', answers=['14-16'], asked_fields=['windows_2h'],
+                               conversation_id=first['conversation_id']).get_json()
+        self.assertEqual(first['conversation']['strip'][0]['display'], '10月12日 周一')
+        self.assertEqual(second['conversation']['strip'][0]['display'], '10月12日 周一')
 
-    def test_clarifications_choose_one_high_priority_question_and_avoid_repeats(self):
-        date_question = '你说的“10号”具体是几月几日？'
-        self.fake.content = json.dumps({
-            'status':'needs_input', 'intent':None,
-            'questions':[date_question, '你希望几点开始？', '计划打多久？', '想去哪家场馆？'],
-            'evidence':{},
-        }, ensure_ascii=False)
-        first = self.propose('预约10号的').get_json()
-        self.assertEqual(first['questions'], [f'{date_question}例如“10月20日”或“下周六”（不能早于当前业务日期）。'])
-
-        self.fake.content = json.dumps({
-            'status':'needs_input', 'intent':None,
-            'questions':[first['questions'][0], '你希望几点开始？', '计划打多久？'],
-            'evidence':{},
-        }, ensure_ascii=False)
-        response = self.a.post('/api/planning/proposals', json={
-            'message':'预约10号的', 'plan_id':None, 'base_version':None,
-            'answers':['10月20日'], 'follow_up_questions':[first['questions']],
-        }, headers=self.headers['a']).get_json()
-        self.assertEqual(response['questions'], ['你希望几点开始？例如“18:00”（09:00开始，且按时长在22:00前结束）。'])
-        self.assertEqual(self.counts(), (0,0))
-
-    def test_server_applies_field_priority_even_if_model_returns_questions_out_of_order(self):
-        self.fake.content=json.dumps({
-            'status':'needs_input','intent':None,
-            'questions':['想去哪家场馆？','你希望几点开始？','请问预约哪一天？'],
-            'evidence':{},
-        },ensure_ascii=False)
-        response=self.propose('帮我整理一份预约计划。').get_json()
-        self.assertEqual(response['questions'],['请问预约哪一天？例如“10月20日”或“下周六”（不能早于当前业务日期）。'])
-
-    def test_repeat_only_question_is_rephrased_and_ready_evidence_failure_is_specific(self):
-        original = '你说的“10号”具体是几月几日？'
-        self.fake.content = json.dumps({
-            'status':'needs_input', 'intent':None, 'questions':[original], 'evidence':{},
-        }, ensure_ascii=False)
-        response = self.a.post('/api/planning/proposals', json={
-            'message':'预约10号的', 'plan_id':None, 'base_version':None,
-            'answers':['还是10号'], 'follow_up_questions':[[original]],
-        }, headers=self.headers['a']).get_json()
-        self.assertEqual(response['questions'], ['我还不能确定完整预约日期。请直接给出明确日期，例如“2026-10-20”或“下周六”。'])
-
-        self.fake.content = ready(evidence={
-            'target_date':'', 'preferred_start_times':'18:00', 'duration_minutes':'两个小时',
-            'venue_preference':'东区体育馆', 'court_preferences':'6号场优先，5号场备选',
-        })
-        response = self.propose().get_json()
-        self.assertEqual(len(response['questions']), 1)
-        self.assertIn('预约日期', response['questions'][0])
-        self.assertIn('例如', response['questions'][0])
-        self.assertEqual(self.counts(), (0,0))
-
-    def test_same_venue_fallback_wording_does_not_reopen_the_venue_question(self):
-        self.fake.content = json.dumps({
-            'status':'needs_input', 'intent':None,
-            'questions':['请补充场地偏好或同场馆备用意愿。'], 'evidence':{},
-        }, ensure_ascii=False)
-        result = self.propose('下周六18:00打两个小时，东区体育馆。').get_json()
-        self.assertEqual(result['status'], 'needs_input')
-        self.assertIn('场地', result['questions'][0])
-        self.assertIn('6号场优先', result['questions'][0])
-        self.assertNotIn('去哪家场馆', result['questions'][0])
-
-    def test_bad_schema_cannot_create_plan_or_execution_capability(self):
-        for intent in (draft(nodeid='invented'),draft(duration_minutes=True),draft(fallback_policy={'allow_any_court_in_venue':True}),draft(target_date='2026-02-30')):
-            self.fake.content=ready(intent)
-            result=self.propose().get_json()
-            self.assertEqual(result['status'],'needs_input')
-            self.assertIsNone(result['proposal'])
-        self.assertEqual(self.counts(),(0,0))
-
-    def test_incorrect_relative_date_and_unsupported_expansion_fail_closed(self):
-        intent=json.loads(ready())['intent'];intent['target_date']='2026-10-18'
-        self.fake.content=ready(intent)
-        self.assertEqual(self.propose().get_json()['status'],'needs_input')
-        intent=json.loads(ready())['intent'];intent['preferred_start_times']=['19:00']
-        self.fake.content=ready(intent)
-        self.assertEqual(self.propose().get_json()['status'],'needs_input')
-        intent=json.loads(ready())['intent'];intent['fallback_policy']['allow_any_court_in_venue']=True
-        self.fake.content=ready(intent)
-        self.assertEqual(self.propose().get_json()['status'],'needs_input')
-        self.assertEqual(self.counts(),(0,0))
-
-    def test_malformed_model_outputs_are_safe(self):
-        for content in ('not JSON','{"status":"ready","status":"ready"}','{"status":NaN}',ready()+'\nextra','x'*16385, json.dumps({'status':'unsupported','intent':{},'questions':[],'evidence':{}})):
-            self.fake.content=content
-            response=self.propose()
-            self.assertEqual((response.status_code,response.get_json()['error']),(502,'invalid_model_proposal'))
-        self.assertEqual(self.counts(),(0,0))
-
-    def test_unsupported_request_and_sensitive_input_do_not_call_model(self):
-        result=self.propose('帮我直接预约并付款。').get_json()
-        self.assertEqual(result['status'],'unsupported')
-        self.assertEqual(self.fake.calls,[])
-        response=self.propose('Bearer '+'x'*32)
-        self.assertEqual(response.status_code,400)
-        self.assertNotIn('x'*32,response.get_data(as_text=True))
-        self.assertEqual(self.fake.calls,[])
-        self.assertEqual(self.a.post('/api/jobs',json={},headers=self.headers['a']).status_code,404)
-
-    def test_model_unavailable_does_not_break_manual_create(self):
-        for code,status in (('provider_not_configured',409),('provider_timeout',504),('provider_auth_failed',502)):
-            self.fake.failure=AIModelError(code,status)
-            response=self.propose()
-            self.assertEqual((response.status_code,response.get_json()['error']),(status,code))
-        self.assertEqual(self.a.post('/api/plans',json={'intent':draft()},headers=self.headers['a']).status_code,201)
-
-    def test_session_csrf_body_and_unknown_fields(self):
-        self.assertEqual(self.app.test_client().post('/api/planning/proposals',json={},headers={'Origin':ORIGIN}).status_code,401)
-        self.assertEqual(self.a.post('/api/planning/proposals',json={},headers={'Origin':ORIGIN}).status_code,403)
-        for body in ({'message':MESSAGE},{'message':MESSAGE,'plan_id':None,'base_version':None,'token':'forbidden'}, {'message':True,'plan_id':None,'base_version':None}, {'message':MESSAGE,'plan_id':None,'base_version':1}):
-            self.assertEqual(self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).status_code,400)
-        self.assertEqual(self.a.post('/api/planning/proposals',data='x'*16385,content_type='application/json',headers=self.headers['a']).status_code,413)
-
-    def test_saved_timezone_is_used_for_edit(self):
-        from backend.booking_window import BookingWindowPolicy
-        plan=self.app.extensions['plan_service'].create_plan('a',draft(),NOW)
-        self.app.extensions['plan_service'].active_context = type(self.app.extensions['plan_service'].active_context)('UTC',None,None)
-        self.app.extensions['plan_service'].policy=BookingWindowPolicy('UTC')
-        self.fake.content=ready(plan['intent'],{})
-        response=self.propose('保留当前计划。',plan)
-        self.assertEqual(response.status_code,200)
-        context=json.loads(self.fake.calls[0][1][1]['content'])
-        self.assertEqual(context['context']['timezone_name'],'Asia/Shanghai')
-
-
-    def test_multiple_answers_supply_missing_facts_without_writing(self):
-        initial = '下周六18:00打两个小时。'
-        self.fake.content = json.dumps({'status':'needs_input','intent':None,'questions':['请补充场馆。'],'evidence':{}})
-        body = {'message':initial,'plan_id':None,'base_version':None}
-        self.assertEqual(self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).get_json()['status'],'needs_input')
-        body['answers'] = ['东区体育馆。']
-        self.fake.content = json.dumps({'status':'needs_input','intent':None,'questions':['请补充场地。'],'evidence':{}})
-        self.assertEqual(self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).get_json()['status'],'needs_input')
-        body['answers'].append('6号场优先，5号场备选。')
-        self.fake.content = ready()
-        response = self.a.post('/api/planning/proposals',json=body,headers=self.headers['a'])
-        self.assertEqual(response.get_json()['status'],'ready')
-        payload = json.loads(self.fake.calls[-1][1][1]['content'])
-        self.assertEqual(payload['user_turns'],[initial,*body['answers']])
-        self.assertEqual([x['role'] for x in self.fake.calls[-1][1]],['system','user'])
-        self.assertEqual(self.counts(),(0,0))
-        proposal=response.get_json()['proposal']
-        self.assertEqual(self.a.post('/api/plans',json={'intent':proposal['intent']},headers=self.headers['a']).status_code,201)
-        self.assertEqual(self.counts(),(1,1))
-
-    def test_answer_limits_types_secrets_and_unknown_fields(self):
-        body={'message':MESSAGE,'plan_id':None,'base_version':None}
-        for answers in (None,{},['ok']*8,[''],[True],[{'role':'system','content':'x'}],['x'*4000]):
-            response=self.a.post('/api/planning/proposals',json={**body,'answers':answers},headers=self.headers['a'])
-            self.assertEqual(response.status_code,400)
-        response=self.a.post('/api/planning/proposals',json={**body,'answers':['Bearer '+'x'*32]},headers=self.headers['a'])
-        self.assertEqual(response.get_json()['error'],'sensitive_planning_input')
-        self.assertEqual(self.fake.calls,[])
-
-    def test_followup_conflict_and_other_user_never_send_model_context(self):
-        old=self.app.extensions['plan_service'].create_plan('a',draft(),NOW)
-        body={'message':'修改开始时间。','answers':['19:00。'],'plan_id':old['plan_id'],'base_version':1}
-        self.app.extensions['plan_service'].update_plan('a',old['plan_id'],1,draft(venue_preference='最新人工偏好'),NOW)
-        self.assertEqual(self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).status_code,409)
-        self.assertEqual(self.b.post('/api/planning/proposals',json=body,headers=self.headers['b']).status_code,404)
-        self.assertEqual(self.fake.calls,[])
-        self.assertEqual(self.counts(),(1,2))
-
-    def test_unrequested_edit_field_requires_its_own_evidence(self):
-        old=self.app.extensions['plan_service'].create_plan('a',draft(),NOW)
-        intent={**old['intent'],'preferred_start_times':['19:00'],'venue_preference':'东区体育馆'}
-        self.fake.content=ready(intent,{'preferred_start_times':'19:00'})
-        body={'message':'修改开始时间。','answers':['19:00。'],'plan_id':old['plan_id'],'base_version':1}
-        result=self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).get_json()
-        self.assertEqual(result['status'],'needs_input')
-        self.fake.content=ready({**old['intent'],'preferred_start_times':['19:00']},{'preferred_start_times':'19:00'})
-        result=self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).get_json()
-        self.assertEqual(result['status'],'ready')
-        self.assertEqual(result['proposal']['intent']['venue_preference'],old['intent']['venue_preference'])
-        self.assertEqual([x['field'] for x in result['proposal']['changes']],['preferred_start_times'])
-        self.assertEqual(self.counts(),(1,1))
-
-    def test_model_cannot_join_separate_turns_into_invented_evidence(self):
-        self.fake.content=ready(evidence={**json.loads(ready())['evidence'],'venue_preference':'东区体育馆'})
-        body={'message':'下周六18:00打两个小时，6号场优先，5号场备选。','answers':['东区','体育馆'],'plan_id':None,'base_version':None}
-        result=self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).get_json()
-        self.assertEqual(result['status'],'needs_input')
-
-    def test_guard_blocks_parallel_calls_across_instances_and_releases_failures(self):
-        from backend.ai.call_guard import AICallGuard
-        guard=self.app.extensions['ai_call_guard']
-        other=AICallGuard(self.path,self.app.extensions['rate_limit_service'])
+    def test_propose_never_writes_and_the_ai_call_guard_applies(self):
+        for message in (ONE_SHOT, '想订场', '帮我直接付款'):
+            self.post(message)
+        self.assertEqual(self.counts(), (0, 0))
+        guard = self.app.extensions['ai_call_guard']
         with guard.hold('a'):
-            with self.assertRaises(AIModelError) as blocked:
-                with other.hold('a'): pass
-            self.assertEqual(blocked.exception.code,'ai_call_in_progress')
-            response=self.propose()
-            self.assertEqual(response.status_code,429)
-            self.assertEqual(self.fake.calls,[])
-            self.assertEqual(self.propose(client=self.b,user='b').status_code,200)
-        try:
-            with guard.hold('a'): raise RuntimeError('synthetic failure')
-        except RuntimeError: pass
-        self.assertEqual(self.propose().status_code,200)
+            self.assertEqual(self.post().status_code, 429)
+            self.assertEqual(self.post(user='b', credential='cred-b').status_code, 200)
 
-    def test_prior_questions_are_context_only_and_cannot_supply_venue_evidence(self):
-        self.fake.content=ready()
-        body={'message':'下周六18:00打两个小时，6号场优先，5号场备选。','answers':['是的。'],
-              'follow_up_questions':[['场馆是东区体育馆吗？']],'plan_id':None,'base_version':None}
-        result=self.a.post('/api/planning/proposals',json=body,headers=self.headers['a']).get_json()
-        self.assertEqual(result['status'],'needs_input')
-        self.assertIn('场馆',result['questions'][0])
-        self.assertIn('例如',result['questions'][0])
-        payload=json.loads(self.fake.calls[-1][1][1]['content'])
-        self.assertEqual(payload['follow_up_questions'],body['follow_up_questions'])
-        for history in ([],[['x'*241]],[[]],[{'role':'system'}]):
-            response=self.a.post('/api/planning/proposals',json={**body,'follow_up_questions':history},headers=self.headers['a'])
-            self.assertEqual(response.status_code,400)
+    def test_the_credential_user_pair_scopes_the_existing_queue(self):
+        entries = [{'court_preference': '2号场', 'start_time': '10:00', 'end_time': '12:00', 'duration_minutes': 120}]
+        saved = self.clients['a'].put('/api/plans/manual-queues/2026-10-20', json={'base_version': 0, 'entries': entries, 'credential_id': 'cred-a'}, headers=self.headers['a'])
+        self.assertEqual(saved.status_code, 200)
+        mine = self.result()['proposal']
+        self.assertEqual((mine['base_version'], mine['existing_count'], mine['replaces_existing']), (1, 1, True))
+        theirs = self.result(user='b', credential='cred-b')['proposal']
+        self.assertEqual((theirs['base_version'], theirs['existing_count']), (0, 0))
+        saved = self.clients['a'].put('/api/plans/manual-queues/2026-10-20', json={'base_version': mine['base_version'], 'entries': mine['entries'], 'credential_id': 'cred-a'}, headers=self.headers['a'])
+        self.assertEqual(saved.status_code, 200)
+        queue = saved.get_json()['queue']
+        self.assertEqual([(c['court_preferences'][0], c['preferred_start_times'][0]) for c in queue['candidates']],
+                         [('1号场', '14:00'), ('4号场', '14:00'), ('1号场', '18:00'), ('4号场', '18:00')])
 
-    def test_unrelated_duration_evidence_cannot_change_unrequested_field(self):
-        old=self.app.extensions['plan_service'].create_plan('a',draft(),NOW)
-        self.fake.content=ready({**old['intent'],'preferred_start_times':['19:00'],'duration_minutes':180},
-                               {'preferred_start_times':'19:00','duration_minutes':'19:00'})
-        self.assertEqual(self.propose('开始时间改成19:00。',old).get_json()['status'],'needs_input')
-        self.assertEqual(self.counts(),(1,1))
+
+class ScheduleTests(Base):
+    """NOW is Saturday 2026-10-10 10:00 in Shanghai."""
+
+    def schedule(self, message):
+        return self.result(message)['proposal']['schedule']
+
+    def test_a_far_date_names_its_opening_day(self):
+        schedule = self.schedule('10月20日 14-16 1号场 不用候选 不要一小时')
+        self.assertEqual(schedule['state'], 'scheduled')
+        self.assertIn('10月18日 周日 07:30', schedule['text'])
+
+    def test_two_days_ahead_after_the_opening_hour_is_not_automatic(self):
+        schedule = self.schedule('10月12日 14-16 1号场 不用候选 不要一小时')
+        self.assertEqual(schedule['state'], 'passed')
+
+    def test_tomorrow_is_not_automatic(self):
+        self.assertEqual(self.schedule('10月11日 14-16 1号场 不用候选 不要一小时')['state'], 'not_automatic')
+
+    def test_today_is_accepted_but_flagged(self):
+        self.assertEqual(self.schedule('10月10日 14-16 1号场 不用候选 不要一小时')['state'], 'not_automatic')
+
+    def test_a_past_date_is_asked_again(self):
+        result = self.result('10月1日 14-16 1号场 不用候选 不要一小时')
+        self.assertEqual((result['status'], result['conversation']['asking']), ('needs_input', 'target_date'))
+        self.assertIn('已经过了', result['questions'][0])
+
+
+class ParsingTestEndpoint(Base):
+    def test_the_synthetic_wording_builds_a_queue(self):
+        result = self.app.extensions['planning_service'].test_parsing('a', None, NOW)
+        self.assertEqual((result['ok'], result['outcome']), (True, 'parsed'))
+        self.assertTrue(result['proposal']['entries'])
+
+    def test_a_failing_model_is_reported_not_hidden(self):
+        service = self.app.extensions['planning_service']
+        self.provider.queue = [AIModelError('provider_timeout', 504)]
+        with self.assertRaises(AIModelError):
+            service.test_parsing('a', None, NOW)
+        self.provider.queue = ['not json']
+        from backend.plans.service import PlanError
+        with self.assertRaises(PlanError):
+            service.test_parsing('a', None, NOW)
+
+
+if __name__ == '__main__':
+    unittest.main()
+
+
+class QueueSafetyRegressionTests(Base):
+    def test_time_and_duration_answers_cannot_supply_a_court_number(self):
+        message = '后天14-16，不要一小时，不用候选'
+        for answer in ('打2小时', '改成18:00开始，打2小时', '2026年10月20日'):
+            with self.subTest(answer=answer):
+                result = self.result(message, answers=[answer], asked_fields=['courts_2h'])
+                self.assertEqual((result['status'], result['conversation']['asking']), ('needs_input', 'courts_2h'))
+                self.assertIsNone(result['proposal'])
+        self.assertEqual(self.provider.calls, [])
+
+    def test_court_replacements_and_only_cues_do_not_keep_old_preferences(self):
+        for correction in ('只留4号场', '场地改成4号场', '换成4号场'):
+            with self.subTest(correction=correction):
+                result = self.result(f'后天14-16，1号和4号场，{correction}，不要一小时，不用候选')
+                self.assertEqual(result['status'], 'ready')
+                self.assertEqual([e['court_preference'] for e in result['proposal']['entries']], ['4号场'])
+
+    def test_negated_all_courts_never_expands_the_queue(self):
+        result = self.result('后天14-16，1号场，不要所有场地，不要一小时，不用候选')
+        self.assertEqual((result['status'], result['conversation']['asking']), ('needs_input', 'courts_2h'))
+        self.assertIsNone(result['proposal'])
+        result = self.result('后天14-16，所有场地，不要4号场，不要一小时，不用候选')
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual([e['court_preference'] for e in result['proposal']['entries']], [f'{n}号场' for n in range(1, 11) if n != 4])
+
+    def test_window_specific_courts_require_explicit_common_courts(self):
+        message = '后天14-16选1号场，18-20选4号场，不要一小时，不用候选'
+        result = self.result(message)
+        self.assertEqual((result['status'], result['conversation']['asking']), ('needs_input', 'courts_2h'))
+        self.assertIn('不能直接交叉组合', result['questions'][0])
+        self.assertIsNone(result['proposal'])
+        self.assertEqual(self.provider.calls, [])
+        agreed = self.result(message, answers=['1号和4号'], asked_fields=['courts_2h'])
+        self.assertEqual(agreed['status'], 'ready')
+        self.assertEqual(len(agreed['proposal']['entries']), 4)
+
+    def test_scoped_courts_without_the_word_select_do_not_cross_combine(self):
+        result = self.result('后天14-16 1号场，18-20 4号场，不用候选，不要一小时')
+        self.assertEqual((result['status'], result['conversation']['asking']), ('needs_input', 'courts_2h'))
+        self.assertIsNone(result['proposal'])
+        common = self.result('后天14-16和18-20，不用候选，1号和4号场，不要一小时')
+        self.assertEqual(common['status'], 'ready')
+        self.assertEqual(len(common['proposal']['entries']), 4)
+
+    def test_window_specific_courts_stay_ambiguous_when_added_in_a_later_turn(self):
+        message = '后天14-16选1号场，不要一小时'
+        first = self.result(message)
+        self.assertEqual(first['conversation']['asking'], 'more_2h')
+        second = self.result(message, answers=['再加18-20选4号场'], asked_fields=['more_2h'])
+        self.assertEqual((second['status'], second['conversation']['asking']), ('needs_input', 'more_2h'))
+        third = self.result(message, answers=['再加18-20选4号场', '不用'],
+                            asked_fields=['more_2h', 'more_2h'])
+        self.assertEqual((third['status'], third['conversation']['asking']), ('needs_input', 'courts_2h'))
+        self.assertIn('不能直接交叉组合', third['questions'][0])
+        self.assertIsNone(second['proposal'])
+        agreed = self.result(message, answers=['再加18-20选4号场', '不用', '1号和4号'],
+                             asked_fields=['more_2h', 'more_2h', 'courts_2h'])
+        self.assertEqual(agreed['status'], 'ready')
+        self.assertEqual(len(agreed['proposal']['entries']), 4)
+
+    def test_explicit_three_hour_intent_is_clarified_before_queue_generation(self):
+        message = '后天14-16打3小时，1号场，不要一小时，不用候选'
+        result = self.result(message)
+        self.assertEqual((result['status'], result['conversation']['asking']), ('needs_input', 'windows_2h'))
+        self.assertIn('当天累计时长还是单个时段', result['questions'][0])
+        self.assertIsNone(result['proposal'])
+        self.assertEqual(self.provider.calls, [])
+        corrected = self.result(message, answers=['我说错了，按2小时'], asked_fields=['windows_2h'])
+        self.assertEqual(corrected['status'], 'ready')
+        self.assertEqual([(e['start_time'], e['duration_minutes']) for e in corrected['proposal']['entries']], [('14:00', 120)])
+
+    def test_mixed_duration_time_slots_use_their_own_court_groups(self):
+        result = self.result('后天14-16选1号场，18-19选4号场，不用候选')
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual([(e['start_time'], e['duration_minutes'], e['court_preference'])
+                          for e in result['proposal']['entries']],
+                         [('14:00', 120, '1号场'), ('18:00', 60, '4号场')])
+
+    def test_yes_for_one_hour_and_no_to_more_candidates_are_separate_answers(self):
+        message = '后天14-16，1号场，不要额外候选'
+        result = self.result(message, answers=['我要，15-16，不用候选'], asked_fields=['want_1h'])
+        self.assertEqual((result['status'], result['conversation']['asking']), ('needs_input', 'courts_1h'))
+        self.assertIsNone(result['proposal'])
+        result = self.result(message, answers=['我要，15-16，不用候选', '3号场'],
+                             asked_fields=['want_1h', 'courts_1h'])
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual([(e['duration_minutes'], e['court_preference']) for e in result['proposal']['entries']],
+                         [(120, '1号场'), (60, '3号场')])
+
+    def test_invalid_time_is_not_silently_dropped_from_a_mixed_request(self):
+        result = self.result('后天25-27和18-20，1号场，不要一小时，不用候选')
+        self.assertEqual((result['status'], result['conversation']['asking']), ('needs_input', 'windows_2h'))
+        self.assertIn('25-27', result['questions'][0])
+        self.assertIsNone(result['proposal'])
+
+    def test_saved_agent_entries_have_the_execution_query_scope(self):
+        p = self.result()['proposal']
+        queue = self.app.extensions['plan_service'].save_manual_queue('a', p['target_date'], p['base_version'], p['entries'], NOW, 'cred-a')
+        self.assertTrue(all(c['query_scope_label'] == '羽毛球' for c in queue['candidates']))

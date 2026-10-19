@@ -8,7 +8,7 @@ const props = defineProps({
 const emit = defineEmits(['update:mode']);
 
 const choices = [
-  { value: 'new', title: '新建预约意向', description: '从描述开始整理预约', icon: 'plus' },
+  { value: 'queue', title: '整理抢票队列', description: '从描述生成可核对的候选队列', icon: 'plus' },
   { value: 'edit', title: '修改已有计划', description: '核对并调整指定计划', icon: 'edit' },
 ];
 </script>

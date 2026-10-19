@@ -17,10 +17,12 @@ from werkzeug.serving import make_server
 from backend.app import create_app
 from backend.ai.provider import ProviderFailure
 from backend.ai.planning import PlanningService
+from backend.ai.intent_planning import IntentPlanningService
 from backend.ai.service import AIProviderService
 from backend.auth.passwords import hash_password
 from backend.credentials.keyring import CredentialKeyring
 from backend.credentials.contracts import AdapterValidationResult
+from backend.credentials.upstream import BoundedHttpResponse
 from backend.db import connect_database
 from backend.migrate import migrate_database
 from backend.tests.support import credential_test_settings
@@ -47,45 +49,26 @@ class SyntheticPlanningTransport:
         self.counts['calls'] += 1
         self._record()
         payload = json.loads(messages[-1]['content'])
-        message = payload['user_request']
-        if '模拟失败' in message or config.model == 'synthetic-failure':
+        turns = payload.get('user_turns', [payload.get('user_request', '')])
+        if '模拟失败' in json.dumps(turns, ensure_ascii=False) or config.model == 'synthetic-failure':
             raise ProviderFailure('provider_unavailable', 502)
+        if messages[0]['content'].startswith('你是预约意向草稿助手'):
+            intent = dict(payload['current_intent'])
+            request = payload['user_request']
+            if '4号场' in request:
+                intent['court_preferences'] = ['4号场']
+                evidence = {'court_preferences': '4号场'}
+            else:
+                evidence = {}
+            return json.dumps({'status': 'ready', 'intent': intent, 'questions': [], 'evidence': evidence}, ensure_ascii=False)
         if config.model == 'synthetic-invalid-json':
             return 'not structured JSON'
-        if config.model == 'synthetic-needs-input':
-            return json.dumps({'status':'needs_input','intent':None,'evidence':{},'questions':['请补充信息。']}, ensure_ascii=False)
-        before = payload['current_intent']
-        evidence = {}
-        if before is None:
-            if '东区体育馆' not in message:
-                return json.dumps({'status':'needs_input','intent':None,'evidence':{},'questions':['请补充场馆名称或描述。']}, ensure_ascii=False)
-            target = re.search(r'\d{4}-\d{2}-\d{2}', message)
-            clock = re.search(r'\d{2}:\d{2}', message)
-            if (not target and '下周六' not in message) or not clock or not any(word in message for word in ('两个小时','两小时','2小时','120分钟')):
-                return json.dumps({'status':'needs_input','intent':None,'evidence':{},'questions':['请补充日期、开始时间和预约时长。']}, ensure_ascii=False)
-            date_quote = target[0] if target else '下周六'
-            if '6号场' not in message and '5号场' not in message:
-                return json.dumps({'status':'needs_input','intent':None,'evidence':{},'questions':['请补充场地偏好或同场馆备用意愿。']}, ensure_ascii=False)
-            duration_quote = next(word for word in ('两个小时','两小时','2小时','120分钟') if word in message)
-            intent = {'target_date':target[0] if target else payload['relative_dates']['下周六'],
-                'preferred_start_times':[clock[0]], 'duration_minutes':120, 'venue_preference':'东区体育馆',
-                'court_preferences':[court for court in ('6号场','5号场') if court in message], 'fallback_policy':{
-                    'allow_any_court_in_venue':False,'allow_time_shift':False,'allowed_start_time_range':None},
-                'price_ceiling_minor':None}
-            evidence = {'target_date':date_quote,'preferred_start_times':clock[0],'duration_minutes':duration_quote,
-                        'venue_preference':'东区体育馆','court_preferences':next((t for t in payload.get('user_turns',[message]) if '号场' in t), message)}
-        else:
-            intent = json.loads(json.dumps(before))
-            clock = re.search(r'\d{2}:\d{2}', message)
-            if not clock and '开始时间' in message:
-                return json.dumps({'status':'needs_input','intent':None,'evidence':{},'questions':['希望改为几点开始？']}, ensure_ascii=False)
-            if clock:
-                intent['preferred_start_times'] = [clock[0]]
-                evidence['preferred_start_times'] = clock[0]
-            if '5号场' in message and ('第一' in message or '优先' in message):
-                intent['court_preferences'] = sorted(intent['court_preferences'], key=lambda value: 0 if '5号场' in value else 1)
-                evidence['court_preferences'] = next((t for t in payload.get('user_turns',[message]) if '5号场' in t), message)
-        return json.dumps({'status':'ready','intent':intent,'questions':[],'evidence':evidence}, ensure_ascii=False)
+        if '追问排序器' in messages[0]['content']:
+            allowed = [item['field'] for item in payload['blocking_fields']]
+            return json.dumps({'field': allowed[0]}, ensure_ascii=False)
+        if config.model == 'synthetic-warning':
+            return json.dumps({'warnings': ['合成提示：请核对队列里的场地。']}, ensure_ascii=False)
+        return json.dumps({'warnings': []})
 
 
 class SyntheticCredentialAdapter:
@@ -95,6 +78,29 @@ class SyntheticCredentialAdapter:
             'success', 'synthetic_preview_credential', b'synthetic-preview-account',
             'getuserinfo-idserial-v1', '2xx', None, 'complete', 200,
         )
+
+
+class SyntheticAvailabilityTransport:
+    """Only local fixture responses; never forwards a request to the upstream."""
+    def post_json(self, url, *, headers, json_body):
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        today = datetime.now(ZoneInfo('Asia/Shanghai')).date()
+        if url.endswith('/getBookingNode'):
+            body = {'success': True, 'resultData': [{'id': 'synthetic-badminton', 'nodename': '羽毛球'}]}
+        elif url.endswith('/bookingByTime'):
+            times = [f'{hour:02d}:00' for hour in range(9, 23)]
+            body = {'success': True, 'resultData': {
+                'stepnumber': len(times),
+                'nodeList': [{'nodeid': f'synthetic-court-{n}', 'sitename': f'{n}号场'} for n in range(1, 11)],
+                'timeList': [{'time': t, 'status': '0'} for t in times],
+                'conflictList': [], 'priceList': [], 'isNew': False,
+                'bookingstartdate': today.isoformat(), 'bookingenddate': (today + timedelta(days=2)).isoformat(),
+                'bookingstarttime': '07:30', 'bookingendtime': '22:00',
+            }}
+        else:
+            raise AssertionError('unrecognised synthetic availability route')
+        return BoundedHttpResponse(200, json.dumps(body).encode(), None, None, 'complete')
 
 
 def synthetic_token(marker: str, now_utc_ms: int) -> str:
@@ -136,15 +142,20 @@ def main():
     record()
     migrate_database(database,5000)
     app = create_app({**credential_test_settings(database),'APP_ENV':'development','APP_ALLOWED_ORIGINS':args.origin,
+                      'SESSION_COOKIE_NAME':'yumao_planning_qa_session',
                       'UPSTREAM_GET_USER_INFO_MIN_INTERVAL_MS':'10',
+                      'LIVE_AVAILABILITY_ENABLED':'true',
+                      'UPSTREAM_ITEM_AES_KEY_ASCII':'0123456789abcdef', 'UPSTREAM_ITEM_AES_IV_ASCII':'abcdef0123456789',
                       'AVAILABILITY_SIMULATION_ENABLED':'true' if args.simulation else 'false',
                       'BOOKING_TIMEZONE':'Asia/Shanghai','BOOKING_CURRENCY_CODE':'CNY','BOOKING_CURRENCY_MINOR_UNIT_EXPONENT':'2'})
     settings = app.extensions['app_settings']
+    app.extensions['live_availability_service']._transport = SyntheticAvailabilityTransport()
     provider = AIProviderService(database_path=database,busy_timeout_ms=5000,
         keyring=CredentialKeyring(settings.credential_encryption_keys,settings.credential_encryption_active_key_id),
         transport=SyntheticPlanningTransport(root),destination_validator=lambda _url: None)
     app.extensions['ai_provider_service'] = provider
     app.extensions['planning_service'] = PlanningService(app.extensions['plan_service'],provider)
+    app.extensions['intent_planning_service'] = IntentPlanningService(app.extensions['plan_service'],provider)
     with closing(connect_database(database,5000)) as db:
         now = time.time_ns()//1_000_000
         password = hash_password('Synthetic-only-password-42')
