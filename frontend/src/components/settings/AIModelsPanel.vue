@@ -3,7 +3,6 @@ import { computed, inject, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import AppIcon from '../AppIcon.vue';
 import ModelPresetPicker from './ModelPresetPicker.vue';
 import ModelEditorForm from './ModelEditorForm.vue';
-import PlanSnapshotDetails from '../plans/PlanSnapshotDetails.vue';
 import { providerDiscoveryErrorMessage, providerErrorMessage } from '../../api/providerErrors.js';
 
 const api=inject('aiModelsApi');
@@ -56,9 +55,9 @@ async function testParsing(model){
  const generation=epoch,id=session.user.user_id;testingId.value=model.id;testingKind.value='parsing';error.value='';notice.value='';parsingResult.value=null;
  try{const result=await api.testParsing(model.id);if(!valid(generation,id))return;
   parsingResult.value={...result,modelName:model.name};
-  if(result.outcome==='parsed')notice.value='连接正常且计划解析成功。测试不会保存预约计划。';
-  else if(result.outcome==='needs_input')notice.value='模型能够连接，但仍要求补充信息。';
-  else error.value='模型能够连接，但未能解析这条合成预约语句。';
+  if(result.outcome==='parsed')notice.value='连接正常，追问优先级与队列复核测试通过。测试不会保存预约队列。';
+  else if(result.outcome==='needs_input')notice.value='模型能够连接，但这条合成语句没有整理出完整队列。';
+  else error.value='模型能够连接，但未能完成队列整理测试。';
  }catch(failure){if(valid(generation,id))error.value=testErrorMessage(failure?.code);}
  finally{if(valid(generation,id))testingId.value='';}
 }
@@ -91,10 +90,10 @@ onBeforeUnmount(()=>{alive=false;epoch++;sequence++;});
     </div>
    </template>
    <section v-if="parsingResult" class="parsing-preview" aria-label="模型解析能力测试结果">
-    <h3>{{ parsingResult.modelName }} · 计划解析测试</h3>
-    <PlanSnapshotDetails v-if="parsingResult.proposal" :snapshot="parsingResult.proposal" />
+    <h3>{{ parsingResult.modelName }} · 队列整理测试</h3>
+    <ol v-if="parsingResult.proposal?.entries?.length" class="parsing-entries"><li v-for="entry in parsingResult.proposal.entries" :key="`${entry.duration_minutes}-${entry.start_time}-${entry.court_preference}`">{{ entry.duration_minutes===120?'2小时':'1小时' }} {{ entry.start_time }}-{{ entry.end_time }} {{ entry.court_preference }}</li></ol>
     <ul v-if="parsingResult.questions?.length"><li v-for="(question,index) in parsingResult.questions" :key="index">{{ question }}</li></ul>
-    <p class="muted">使用服务器合成语句，仅验证本次解析；不保存计划，也不代表可执行预约。</p>
+    <p class="muted">使用服务器合成语句，验证模型能选择下一项追问并按格式复核队列；不保存队列，也不代表可执行预约。</p>
    </section>
    <button v-if="!adding&&!editing" class="secondary-button add-model" type="button" :disabled="busy" @click="adding=true">添加AI模型</button>
    <ModelEditorForm v-if="adding||editing" :model="editing" :initial-preset="preset" :busy="busy||discovering" :discover-busy="discovering" :discovered-models="discoveredModels" :discovery-error="discoveryError" @submit="saveModel" @cancel="cancelEdit" @discover="discoverModels" @clear-discovery="clearDiscovery" />

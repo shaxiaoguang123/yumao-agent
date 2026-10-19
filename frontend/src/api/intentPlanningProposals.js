@@ -1,0 +1,12 @@
+export function createIntentPlanningProposalApi(client) {
+  if (typeof client?.request !== 'function') throw new TypeError('an authenticated HTTP client is required');
+  return {
+    generate: (message, plan_id, base_version, answers, follow_up_questions, credential_id, conversation_id) => client.request('/api/planning/proposals', {
+      method: 'POST',
+      body: {message, plan_id, base_version, ...(answers?.length ? {answers} : {}),
+        ...(follow_up_questions?.length ? {follow_up_questions} : {}), ...(credential_id ? {credential_id} : {}),
+        ...(conversation_id ? {conversation_id} : {})},
+    }),
+    close: (conversation_id) => client.request(`/api/planning/conversations/${encodeURIComponent(conversation_id)}/close`, {method:'POST',body:{}}),
+  };
+}

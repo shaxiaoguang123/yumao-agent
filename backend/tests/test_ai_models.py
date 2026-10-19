@@ -74,25 +74,27 @@ class AIModelTests(unittest.TestCase):
 
     def test_explicit_parsing_tests_validate_without_saving_and_isolate_model(self):
         import json
-        from test_planning import ready
         selected=self._create(name='Selected').get_json()['model']
         tested=self._create(name='Tested').get_json()['model']
         self.service.set_preferences('user-a',selected['id'],None)
         def reply(config,messages):
             self.transport.calls.append((config,messages))
-            payload=json.loads(messages[-1]['content'])
-            intent=json.loads(ready())['intent']
-            intent['target_date']=payload['relative_dates']['下周六']
-            return ready(intent,{**json.loads(ready())['evidence'],'duration_minutes':'120分钟','court_preferences':'优先6号场，5号场作为备选'})
+            if '追问排序器' in messages[0]['content']:
+                payload=json.loads(messages[-1]['content'])
+                return json.dumps({'field':payload['blocking_fields'][0]['field']})
+            return json.dumps({'warnings':[]})
         self.transport.chat=reply
         endpoint='/api/ai/models/'+tested['id']+'/test-parsing'
         response=self.a.post(endpoint,json={},headers=self._headers(self.csrf_a))
         self.assertEqual(response.status_code,200)
-        self.assertEqual(response.get_json()['outcome'],'parsed')
+        body=response.get_json()
+        self.assertEqual(body['outcome'],'parsed')
+        self.assertTrue(body['proposal']['entries'])
         self.assertEqual(self.transport.calls[-1][0].provider_id,tested['id'])
         self.assertEqual(self.service.list_models('user-a')['selected_model_id'],selected['id'])
         self.assertEqual(self.b.post(endpoint,json={},headers=self._headers(self.csrf_b)).status_code,404)
-        self.assertEqual(len(self.transport.calls),1)
+        self.assertEqual(len(self.transport.calls),2)
+        self.assertIn('追问排序器',self.transport.calls[0][1][0]['content'])
         with connect_database(self.path,5000) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM booking_plan_revisions').fetchone()[0],0)
         self.assertEqual(self.app.test_client().post(endpoint,json={},headers=self._headers()).status_code,401)
@@ -100,16 +102,13 @@ class AIModelTests(unittest.TestCase):
 
     def test_parsing_capability_failures_remain_safe(self):
         import json
-        from test_planning import ready
         model=self._create().get_json()['model']
         endpoint='/api/ai/models/'+model['id']+'/test-parsing'
-        for content in ('raw supplier text', ready(intent={**json.loads(ready())['intent'],'nodeid':'forbidden'})):
+        for content in ('raw supplier text', json.dumps({'warnings':'x'}), json.dumps({'warnings':[],'entries':[]})):
             self.transport.chat=lambda *_args: content
             response=self.a.post(endpoint,json={},headers=self._headers(self.csrf_a))
             self.assertEqual((response.status_code,response.get_json()['error']),(502,'invalid_model_proposal'))
             self.assertNotIn('raw supplier',response.get_data(as_text=True))
-        self.transport.chat=lambda *_args: json.dumps({'status':'needs_input','intent':None,'questions':['请补充信息。'],'evidence':{}})
-        self.assertEqual(self.a.post(endpoint,json={},headers=self._headers(self.csrf_a)).get_json()['outcome'],'needs_input')
         for code in ('provider_auth_failed','provider_access_denied','provider_model_or_endpoint_not_found','provider_rate_limited','provider_timeout','provider_unavailable'):
             def failure(*_args): raise ProviderFailure(code,502)
             self.transport.chat=failure

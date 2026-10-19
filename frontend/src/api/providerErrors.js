@@ -13,7 +13,7 @@ const messages = {
   provider_tls_failed: 'HTTPS 安全连接失败，请检查服务商证书和 TLS 配置。',
   provider_server_error: '服务商暂时发生错误，请稍后重试。',
   provider_request_rejected: '服务商拒绝了请求，请检查接口地址、认证方式和账户权限。',
-  invalid_model_proposal: '连接正常，但模型返回的计划结构或字段依据不符合要求，请更换模型或调整配置。',
+  invalid_model_proposal: '连接正常，但模型没有按要求的格式返回复核结果，请更换模型或调整配置。',
   provider_timeout: '连接超时，请检查服务地址和网络后重试。',
   provider_dns_timeout: '连接超时，请检查服务地址和网络后重试。',
   provider_unavailable: '暂时无法连接服务商，请检查网络和服务状态。',
@@ -24,7 +24,8 @@ const messages = {
   ai_call_in_progress: '已有模型调用正在进行，请等待完成后再试（包括其他标签页）。',
   ai_call_rate_limited: '模型调用过于频繁，请稍后再试。',
   planning_context_limit: '对话内容已达到长度上限，请重新开始并简化描述。',
-  invalid_planning_request: '对话格式或轮数超出限制，最多支持原始描述和 7 次补充。',
+  planning_scope_required: '请先在“查询场地”读取当前 Token 的预约类别，再重新整理队列。',
+  invalid_planning_request: '对话格式或轮数超出限制，最多支持原始描述和 20 次补充。',
 };
 export function providerErrorMessage(code) {
   const aliases = {access_denied:'provider_auth_failed',model_or_endpoint_not_found:'provider_model_or_endpoint_not_found',rate_limited:'provider_rate_limited'};

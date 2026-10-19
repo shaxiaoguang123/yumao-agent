@@ -1,8 +1,12 @@
 export function createPlanningProposalApi(client) {
   if (typeof client?.request !== 'function') throw new TypeError('an authenticated HTTP client is required');
+  const scopedPath=(path,credentialId)=>`${path}?${new URLSearchParams({credential_id:credentialId})}`;
   return {
-    generate: (message, plan_id, base_version, answers, follow_up_questions, credential_id) => client.request('/api/planning/proposals', {
-      method:'POST', body:{message,plan_id,base_version,...(answers?.length?{answers}:{}),...(follow_up_questions?.length?{follow_up_questions}:{}),...(credential_id?{credential_id}:{})},
+    generate: ({message, credentialId, answers, askedFields, scopeLabel, conversationId}) => client.request('/api/planning/queue-proposals', {
+      method:'POST',
+      body:{message,credential_id:credentialId,...(conversationId?{conversation_id:conversationId}:{}),...(answers?.length?{answers,asked_fields:askedFields}:{}),...(scopeLabel?{scope_label:scopeLabel}:{})},
     }),
+    restore: (credentialId) => client.request(scopedPath('/api/planning/queue-conversations',credentialId)),
+    close: (conversationId,credentialId) => client.request(scopedPath(`/api/planning/queue-conversations/${encodeURIComponent(conversationId)}/close`,credentialId),{method:'POST',body:{}}),
   };
 }

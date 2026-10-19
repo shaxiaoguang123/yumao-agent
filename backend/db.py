@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 _MIGRATION_NAME_RE = re.compile(r"\A(?P<version>[0-9]{4})_[a-z0-9_]+\.sql\Z")
 
 _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
@@ -67,6 +67,10 @@ _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
     "booking_execution_stages": frozenset({
         "stage_id", "run_id", "round_number", "candidate_index", "stage_key",
         "started_at_utc_ms", "completed_at_utc_ms", "elapsed_ms", "outcome", "safe_code",
+    }),
+    "planning_conversations": frozenset({
+        "conversation_id", "conversation_kind", "user_id", "credential_id", "business_date", "state_json",
+        "response_history_json", "created_at_utc_ms", "updated_at_utc_ms",
     }),
     "credential_validation_observations": frozenset({
         "validation_attempt_id", "user_id", "credential_id", "operation_kind",
@@ -238,6 +242,7 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
         and (schema_version >= 8 or name not in {
             "booking_execution_settings", "booking_execution_runs", "booking_execution_stages",
         })
+        and (schema_version >= 9 or name != "planning_conversations")
         and (schema_version >= 2 or name not in {
             "credentials",
             "credential_token_revisions",
@@ -297,6 +302,8 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
             ("credential_token_revisions", "created_by_user_id", "users", "user_id"),
             ("credential_lifecycle_audits", "actor_user_id", "users", "user_id"),
         )
+    if schema_version >= 9:
+        foreign_keys += (("planning_conversations", "user_id", "users", "user_id"),)
     for table_name, column_name, parent_table, parent_column in foreign_keys:
         if not _has_foreign_key(connection, table_name, column_name, parent_table, parent_column):
             raise SchemaNotReadyError(f"required foreign key is missing from {table_name}")
@@ -367,6 +374,14 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
                     "booking_plan_revisions",
                     (("source_revision_id", "revision_id"), ("source_plan_id", "plan_id"),
                      ("user_id", "user_id"), ("source_version", "revision_number")),
+                ),
+            )
+        if schema_version >= 9:
+            composite_foreign_keys += (
+                (
+                    "planning_conversations",
+                    "credentials",
+                    (("user_id", "user_id"), ("credential_id", "credential_id")),
                 ),
             )
         for table_name, parent_table, column_map in composite_foreign_keys:

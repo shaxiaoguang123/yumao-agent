@@ -5,7 +5,7 @@ import AppIcon from '../AppIcon.vue';
 const props = defineProps({
   message: { type: String, default: '' },
   answer: { type: String, default: '' },
-  mode: { type: String, default: 'new' },
+  mode: { type: String, default: 'queue' },
   targetId: { type: String, default: '' },
   plans: { type: Array, default: () => [] },
   status: { type: String, default: 'idle' },
@@ -17,17 +17,15 @@ const props = defineProps({
   locked: Boolean,
   selectionDisabled: Boolean,
 });
-const emit = defineEmits(['update:message', 'update:answer', 'update:targetId', 'send', 'edit-request']);
+const emit = defineEmits(['update:message', 'update:answer', 'update:target-id', 'send', 'edit-request']);
 
 const fields = [
-  { key: 'date', label: '预约日期', text: '预约日期：' },
-  { key: 'time', label: '开始时间', text: '开始时间：' },
-  { key: 'duration', label: '预约时长', text: '预约时长：' },
-  { key: 'venue', label: '场馆', text: '场馆：' },
-  { key: 'courts', label: '场地顺序', text: '场地偏好顺序：' },
+  { key: 'date', label: '日期', text: '日期：' },
+  { key: 'windows', label: '2小时时段', text: '2小时时段：' },
+  { key: 'courts', label: '场地', text: '场地：' },
+  { key: 'one', label: '1小时备选', text: '1小时备选：' },
 ];
 const canSend = computed(() => !props.busy && !props.blocked && !props.locked && !props.sendBlocked
-  && (props.mode !== 'edit' || Boolean(props.targetId))
   && Boolean((props.followUp ? props.answer : props.message).trim()));
 
 function insertField(text) {
@@ -44,23 +42,15 @@ function submit() {
 
 <template>
   <section class="proposal-composer" :class="{ 'is-suppressed': suppressed }" aria-label="预约需求输入">
-    <label v-if="mode === 'edit'" class="proposal-target-field" for="proposal-target">
-      <span class="sr-only">要修改的计划</span>
-      <select
-        id="proposal-target"
-        :value="targetId"
-        data-testid="proposal-target"
-        :disabled="busy || locked || selectionDisabled"
-        @change="emit('update:targetId', $event.target.value)"
-      >
-        <option value="">请选择已有计划</option>
-        <option v-for="plan in plans" :key="plan.plan_id" :value="plan.plan_id">{{ plan.intent.venue_preference }} · {{ plan.intent.target_date }} · v{{ plan.version }}</option>
-      </select>
-      <small v-if="!plans.length">当前凭据下没有可修改的计划；可以重新开始新建意向。</small>
-    </label>
-
     <form class="proposal-compose-form" @submit.prevent="submit">
-      <label class="sr-only" :for="followUp ? 'proposal-follow-up-answer' : 'proposal-first-message'">{{ followUp ? '补充回答' : '预约需求' }}</label>
+      <label v-if="mode === 'edit'" class="proposal-target-select" for="proposal-target-plan">
+        修改已有计划
+        <select id="proposal-target-plan" :value="targetId" :disabled="selectionDisabled || busy" @change="emit('update:target-id', $event.target.value)">
+          <option value="">选择要修改的计划</option>
+          <option v-for="plan in plans" :key="plan.plan_id" :value="plan.plan_id">{{ plan.intent.venue_preference }} · {{ plan.intent.target_date }} · v{{ plan.version }}</option>
+        </select>
+      </label>
+      <label class="sr-only" :for="followUp ? 'proposal-follow-up-answer' : 'proposal-first-message'">{{ followUp ? '补充回答' : mode === 'edit' ? '修改需求' : '预约需求' }}</label>
       <div class="proposal-input-box">
         <textarea
           v-if="followUp"
@@ -71,7 +61,7 @@ function submit() {
           rows="2"
           maxlength="4000"
           :disabled="busy || locked || blocked"
-          placeholder="回答上方的问题；不确定的部分可以继续说明。"
+          :placeholder="mode === 'edit' ? '回答上方的问题就行，例如“4号场”' : '回答上方的问题就行，例如“14-16”或“1号和4号”'"
           @input="emit('update:answer', $event.target.value)"
           @keydown.enter.exact.prevent="submit"
           @keydown.ctrl.enter.prevent="submit"
@@ -86,7 +76,7 @@ function submit() {
           rows="2"
           maxlength="4000"
           :disabled="busy || locked || blocked"
-          placeholder="例如：10月24日 18:00 开始，打 2 小时，东区体育馆，6 号场优先"
+          :placeholder="mode === 'edit' ? '例如：把优先场地改成4号场，时间保持不变' : '例如：后天 14-16 和 18-20，1号和4号场'"
           @input="emit('update:message', $event.target.value)"
           @keydown.enter.exact.prevent="submit"
           @keydown.ctrl.enter.prevent="submit"
@@ -97,7 +87,7 @@ function submit() {
           :data-testid="followUp ? 'continue-proposal' : 'generate-proposal'"
           type="submit"
           :disabled="!canSend"
-          :aria-label="busy ? '正在整理' : followUp ? '发送回答并继续' : '发送预约需求'"
+          :aria-label="busy ? '正在整理' : followUp ? '发送回答并继续' : mode === 'edit' ? '发送计划修改需求' : '发送预约需求'"
           @click.prevent="submit"
         >
           <span>{{ busy ? '处理中…' : '发送' }}</span>
@@ -112,8 +102,7 @@ function submit() {
           </div>
         </details>
         <p v-if="blocked" class="composer-hint is-blocked">先完成预约凭据验证和支付密码设置，再发送需求。</p>
-        <p v-else-if="mode === 'edit' && !targetId" class="composer-hint">先选择要修改的计划。</p>
-        <p v-else class="composer-hint">日期、时间、时长、场馆和场地偏好需要明确 · Enter 发送，Shift+Enter 换行</p>
+        <p v-else class="composer-hint">{{ mode === 'edit' ? '只描述需要修改的内容；其他字段会保留 · Enter 发送，Shift+Enter 换行' : '先说日期，再说 2 小时的时间段和场地；缺什么我会问 · Enter 发送，Shift+Enter 换行' }}</p>
       </div>
     </form>
   </section>
@@ -122,10 +111,9 @@ function submit() {
 <style scoped>
 .proposal-composer { min-width: 0; padding:8px 16px 16px; border-top: 1px solid var(--line); background: var(--surface); }
 .proposal-composer.is-suppressed { display: none; }
-.proposal-target-field { display: grid; gap:8px; margin:0 0 8px; font-size: 13px; font-weight: 600; }
-.proposal-target-field select { width: 100%; min-height:var(--control-height); padding:8px 8px; border: 1px solid var(--line); border-radius:16px; background: var(--surface); color: var(--ink); font: inherit; font-size: 15px; font-weight: 400; }
-.proposal-target-field small { color: var(--muted); font-weight: 400; }
 .proposal-compose-form { display: grid; gap:8px; }
+.proposal-target-select { display:grid; gap:8px; color:var(--muted); font-size:13px; }
+.proposal-target-select select { min-height:var(--control-height); width:100%; padding:8px 12px; border:1px solid var(--line); border-radius:12px; background:var(--surface); color:var(--ink); font:inherit; }
 .proposal-input-box { display: flex; align-items: flex-end; gap:8px; padding:8px 8px 8px 16px; border: 1px solid var(--line); border-radius:16px; background: var(--page); }
 .proposal-input-box:focus-within { border-color: var(--brand); box-shadow: var(--focus); }
 .proposal-input-box textarea { flex: 1; width: 100%; min-width: 0; min-height:var(--control-height); max-height: 120px; resize: vertical; border: 0; padding:8px 0; background: transparent; color: var(--ink); font: inherit; font-size: 15px; line-height: 1.55; }
@@ -145,10 +133,10 @@ function submit() {
 .proposal-field-options button { min-height:var(--control-height); padding:8px 8px; border: 1px solid var(--line); border-radius:16px; background: var(--surface); color: var(--ink); font-size: 13px; cursor: pointer; }
 .proposal-field-options button:hover:not(:disabled) { border-color: var(--brand); background: var(--brand-soft); }
 .proposal-field-options button:disabled { opacity: .55; cursor: not-allowed; }
-.proposal-composer :deep(button:focus-visible), .proposal-composer :deep(select:focus-visible), .proposal-composer :deep(summary:focus-visible) { outline: 3px solid var(--brand); outline-offset: 2px; }
+.proposal-composer :deep(button:focus-visible), .proposal-composer :deep(summary:focus-visible) { outline: 3px solid var(--brand); outline-offset: 2px; }
 @media (max-width: 600px) {
   .proposal-composer { padding:8px; }
   .proposal-compose-meta { align-items: flex-start; flex-direction: column; }
-  .proposal-input-box textarea, .proposal-target-field select { font-size: 16px; }
+  .proposal-input-box textarea { font-size: 16px; }
 }
 </style>

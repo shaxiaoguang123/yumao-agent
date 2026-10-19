@@ -3,7 +3,7 @@ import { computed, inject, shallowRef, watch } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 import AppIcon from '../AppIcon.vue';
 import PlanHistory from './PlanHistory.vue';
-import ProposalAssistant from './ProposalAssistant.vue';
+import ProposalModeWorkspace from './ProposalModeWorkspace.vue';
 import LiveAvailabilityPanel from './LiveAvailabilityPanel.vue';
 import PlanSectionTabs from './PlanSectionTabs.vue';
 import BookingDateStrip from './BookingDateStrip.vue';
@@ -15,7 +15,7 @@ import BookingExecutionSettings from '../BookingExecutionSettings.vue';
 import { useManualQueue, queueEntries } from '../../composables/useManualQueue.js';
 import { usePlans } from '../../composables/usePlans.js';
 import { visibleIntentPlans, visibleManualQueuePlans } from '../../utils/planQueueVisibility.js';
-const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('planningProposalApi',null);
+const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('planningProposalApi',null),intentProposalApi=inject('intentPlanningProposalApi',null);
 const liveApi=inject('liveAvailabilityApi',null),credentialApi=inject('credentialApi',null);
 const courtOptions=shallowRef([]),queueScopeLabel=shallowRef(''),queryDate=shallowRef(''),selectedCredentialId=shallowRef(''),credentialRefreshKey=shallowRef(0),planDateFilter=shallowRef(''),pendingDeletePlan=shallowRef(null);
 const activeSection=shallowRef('query'),manualDate=shallowRef('');
@@ -41,6 +41,12 @@ watch(defaultWindow,value=>{
  if(!value){manualDate.value='';queryDate.value='';activeSection.value='query';}
  else {if(!queryDate.value)queryDate.value=value.queryable_target_dates?.[2]||value.default_target_date||'';if(!manualDate.value)manualDate.value=value.default_target_date||value.queryable_target_dates?.[2]||'';}
 },{flush:'sync',immediate:true});
+function onAgentSaved({target_date}={}){queueChanged(target_date);}
+function openManualFromAgent({target_date}={}){
+ if(queueState.dateLocked)return;
+ if(typeof target_date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(target_date))manualDate.value=target_date;
+ activeSection.value='manual';
+}
 function rememberCourtLabels(names){if(JSON.stringify(courtOptions.value)!==JSON.stringify(names))courtOptions.value=[...names];}
 function rememberQueueScope(label){queueScopeLabel.value=typeof label==='string'?label:'';}
 watch(()=>[session?.status,session?.user?.user_id,session?.invalidationEpoch],()=>{courtOptions.value=[];queueScopeLabel.value='';pendingDeletePlan.value=null;planDateFilter.value='';},{flush:'sync'});
@@ -64,11 +70,11 @@ const queryContextKey=computed(()=>JSON.stringify({user:session?.user?.user_id,e
     <ManualQueueWorkspace :state="queueState" :court-names="courtOptions" :scope-label="queueScopeLabel" :target-date="manualDate" />
    </section>
    <section v-show="activeSection==='agent'" id="plan-panel-agent" role="tabpanel" aria-labelledby="plan-tab-agent" class="plan-workspace-section">
-    <ProposalAssistant v-if="proposalApi" :plans="plans" :plan-api="api" :proposal-api="proposalApi" :credential-api="credentialApi" :credential-refresh-key="credentialRefreshKey" :session="session" :credential-id="selectedCredentialId" @refresh-request="refresh">
+    <ProposalModeWorkspace v-if="proposalApi" :plans="plans" :plan-api="api" :proposal-api="proposalApi" :intent-proposal-api="intentProposalApi" :credential-api="credentialApi" :credential-refresh-key="credentialRefreshKey" :session="session" :credential-id="selectedCredentialId" :scope-label="queueScopeLabel" @refresh-request="refresh" @saved="onAgentSaved" @manual-request="openManualFromAgent">
      <template #header-actions>
       <PlanCredentialControl v-if="credentialApi" v-model="selectedCredentialId" :api="credentialApi" :session="session" :timezone-name="defaultWindow?.business_timezone_name||'Asia/Shanghai'" :disabled="queueState.dateLocked" @updated="credentialRefreshKey++" />
      </template>
-    </ProposalAssistant>
+    </ProposalModeWorkspace>
     <p v-else class="panel muted">Agent 服务当前未配置，请先检查模型设置。</p>
    </section>
    <section v-show="activeSection==='current'" id="plan-panel-current" role="tabpanel" aria-labelledby="plan-tab-current" class="plan-workspace-section">

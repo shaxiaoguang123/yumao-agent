@@ -7,6 +7,13 @@ const props = defineProps({
   message: { type: String, default: '' },
   answers: { type: Array, default: () => [] },
   questionHistory: { type: Array, default: () => [] },
+  roundHeadings: { type: Array, default: () => [] },
+  heading: { type: String, default: '' },
+  assistantSubtitle: { type: String, default: '说出想订的日期和时间，我帮你排好抢票队列。' },
+  welcomeTitle: { type: String, default: '说说想订哪天、什么时间' },
+  welcomeDescription: { type: String, default: '一句话就行，缺的我会一次问一项。例如：' },
+  welcomeExample: { type: String, default: '后天 14-16 和 18-20，1号和4号场' },
+  welcomeFooter: { type: String, default: '先排 2 小时的队列，再问要不要 1 小时的备选。' },
   questions: { type: Array, default: () => [] },
   pendingTurn: { type: String, default: '' },
   status: { type: String, default: 'idle' },
@@ -17,16 +24,6 @@ const props = defineProps({
   slots: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['restart']);
-
-function slotHeading(questions) {
-  const text = (questions || []).join(' ');
-  if (/场馆|哪家/.test(text)) return '场馆';
-  if (/场地|号场/.test(text)) return '场地';
-  if (/多久|时长|小时|分钟/.test(text)) return '时长';
-  if (/几点|开始时间|什么时间/.test(text)) return '时间';
-  if (/日期|几月|哪一天|哪天|几号/.test(text)) return '日期';
-  return '还缺一项';
-}
 
 const feed = ref(null);
 const transcript = computed(() => {
@@ -40,13 +37,13 @@ const transcript = computed(() => {
   }
   items.push({ id: 'initial-request', role: 'user', kind: 'text', text: props.message });
   props.questionHistory.forEach((round, index) => {
-    items.push({ id: `questions-${index}`, role: 'assistant', kind: 'questions', questions: round });
+    items.push({ id: `questions-${index}`, role: 'assistant', kind: 'questions', heading: props.roundHeadings[index] || '', questions: round });
     if (props.answers[index]) {
       items.push({ id: `answer-${index}`, role: 'user', kind: 'text', text: props.answers[index] });
     }
   });
   if (props.questions.length && props.status !== 'unsupported') {
-    items.push({ id: 'current-questions', role: 'assistant', kind: 'questions', questions: props.questions });
+    items.push({ id: 'current-questions', role: 'assistant', kind: 'questions', heading: props.heading, questions: props.questions });
   }
   if (props.pendingTurn && props.status === 'generating') {
     items.push({ id: 'pending-answer', role: 'user', kind: 'text', text: props.pendingTurn, pending: true });
@@ -74,7 +71,7 @@ watch(
     <header class="proposal-chat-heading">
       <div class="proposal-chat-identity">
         <span class="proposal-chat-avatar"><AppIcon name="bot" /></span>
-        <div><h2 id="proposal-chat-title">预约助手</h2><p>先选新建或修改，再写下已经确定的安排。</p></div>
+          <div><h2 id="proposal-chat-title">预约助手</h2><p>{{ assistantSubtitle }}</p></div>
       </div>
       <div class="chat-header-actions">
         <slot name="header-actions" />
@@ -96,12 +93,13 @@ watch(
         <li v-for="item in transcript" :key="item.id" class="chat-row" :class="[`is-${item.role}`, { 'is-welcome': item.kind === 'welcome' }]">
           <div class="chat-bubble" :class="`bubble-${item.kind}`">
             <template v-if="item.kind === 'welcome'">
-              <strong>先选择要做的事</strong>
-              <p>新建是从一句话开始。修改是在已有计划上调整。缺的部分我会一次问一项。</p>
-              <slot name="welcome-actions" />
+              <strong>{{ welcomeTitle }}</strong>
+              <p>{{ welcomeDescription }}</p>
+              <p class="chat-example">{{ welcomeExample }}</p>
+              <p>{{ welcomeFooter }}</p>
             </template>
             <template v-else-if="item.kind === 'questions'">
-              <strong>{{ slotHeading(item.questions) }}</strong>
+              <strong v-if="item.heading">{{ item.heading }}</strong>
               <p v-for="(question, index) in item.questions" :key="`${index}-${question}`">{{ question }}</p>
             </template>
             <template v-else-if="item.kind === 'thinking'">
@@ -147,7 +145,7 @@ watch(
 
 <style scoped>
 .proposal-chat { display: flex; flex-direction: column; width: 100%; height: auto; min-height:0; overflow: hidden; border: 1px solid var(--line); border-radius:8px; background: var(--surface); }
-.slot-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap:8px; margin:0; padding:8px 16px; list-style: none; border-bottom: 1px solid var(--line); background: var(--surface); }
+.slot-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:8px; margin:0; padding:8px 16px; list-style: none; border-bottom: 1px solid var(--line); background: var(--surface); }
 .slot-strip li { min-width: 0; padding:8px; border-radius:8px; background: var(--page); }
 .slot-strip span, .slot-strip strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slot-strip span { color: var(--muted); font-size: 12px; }
@@ -202,7 +200,7 @@ watch(
 .trace-item time { white-space: nowrap; }
 @keyframes chat-pulse { 50% { opacity: .35; } }
 @media (max-width: 680px) {
-  .slot-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .slot-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .proposal-chat { height: auto; min-height:0; }
   .proposal-chat-heading { align-items: flex-start; }
   .chat-header-actions :deep(.plan-credential-control) { max-width: 100%; }

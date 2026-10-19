@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
+import secrets
 import time
-from flask import Blueprint, current_app, g, jsonify
+from datetime import date
+from flask import Blueprint, current_app, g, jsonify, request
 
 from backend.api.auth import require_csrf, require_session
 from backend.api.ai_models import _body
@@ -30,11 +32,31 @@ def _storage(_exc):
     return jsonify({"error": "plan_storage_unavailable"}), 503
 
 
+def _queue_trace_event(result: dict, state: dict, now_utc_ms: int) -> dict:
+    conversation = result.get("conversation") or {}
+    if conversation.get("escalation"):
+        title, detail = "建议改用手动选场", "这一项多次没能确认；已确认的日期可带到选择预约页。"
+    elif result["status"] == "needs_input":
+        title, detail = "还缺一项信息", "先确认当前这一项；答复后继续。当前没有保存队列。"
+    elif result["status"] == "ready":
+        count = (result.get("proposal") or {}).get("entry_count", 0)
+        title, detail = "候选队列已整理好", f"共 {count} 项，等待核对并确认保存。"
+    else:
+        title, detail = "请求不属于整理范围", "助手不会代为查询、预约、付款或创建任务。"
+    return {
+        "submitted_title": "提交补充回答" if state["answers"] else "提交预约需求",
+        "submitted_detail": "继续核对必需信息。" if state["answers"] else "开始整理日期、2小时时段和场地。",
+        "result_title": title, "result_detail": detail, "at_utc_ms": now_utc_ms,
+    }
+
+
 @planning_bp.post("/proposals")
 @require_session
 @require_csrf
 def proposals():
-    body = _body({"message", "plan_id", "base_version"}, {"message", "plan_id", "base_version", "answers", "follow_up_questions", "credential_id"})
+    """LLM-backed plan creation and edit proposal; saving still uses the plans API."""
+    body = _body({"message", "plan_id", "base_version"},
+                 {"message", "plan_id", "base_version", "answers", "follow_up_questions", "credential_id", "conversation_id"})
     if "answers" in body and type(body["answers"]) is not list:
         raise PlanError("invalid_planning_request", 400)
     user_id = g.session_context.user.user_id
@@ -42,10 +64,119 @@ def proposals():
     if credential_id is not None:
         if type(credential_id) is not str or not credential_id or current_app.extensions["credential_service"].get_for_user(user_id, credential_id) is None:
             raise PlanError("credential_not_found", 404)
+    now_utc_ms = time.time_ns() // 1_000_000
+    store = current_app.extensions["planning_conversation_store"]
+    conversation_id = body.get("conversation_id")
+    answers = body.get("answers") or []
+    state = {
+        "message": body["message"].strip() if type(body["message"]) is str else body["message"],
+        "answers": [item.strip() if type(item) is str else item for item in answers],
+        "follow_up_questions": body.get("follow_up_questions") or [],
+        "plan_id": body["plan_id"], "base_version": body["base_version"], "credential_id": credential_id,
+    }
+    if conversation_id is not None:
+        if type(conversation_id) is not str or not 20 <= len(conversation_id) <= 128:
+            raise PlanError("invalid_planning_request", 400)
+        previous = store.get(conversation_id, user_id, credential_id, kind="intent")
+        if previous is None:
+            raise PlanError("planning_conversation_not_found", 404)
+        store.validate_next(previous, state)
+        business_date = date.fromisoformat(previous["business_date"])
+    else:
+        conversation_id = secrets.token_urlsafe(24)
+        business_date = current_app.extensions["intent_planning_service"].business_date_at(now_utc_ms)
+    with current_app.extensions["ai_call_guard"].hold(user_id):
+        result = current_app.extensions["intent_planning_service"].propose(
+            user_id, body["message"], body["plan_id"], body["base_version"],
+            now_utc_ms, answers=body.get("answers"),
+            follow_up_questions=body.get("follow_up_questions"), credential_id=credential_id,
+            reference_date=business_date,
+        )
+    result["conversation_id"] = conversation_id
+    store.save(conversation_id, user_id, credential_id, business_date.isoformat(), state, result, now_utc_ms, kind="intent")
+    return jsonify(result)
+
+
+@planning_bp.post("/queue-proposals")
+@require_session
+@require_csrf
+def queue_proposals():
+    body = _body({"message", "credential_id"},
+                 {"message", "credential_id", "answers", "asked_fields", "scope_label", "conversation_id"})
+    if "answers" in body and type(body["answers"]) is not list:
+        raise PlanError("invalid_planning_request", 400)
+    user_id = g.session_context.user.user_id
+    credential_id = body["credential_id"]
+    if type(credential_id) is not str or not credential_id or current_app.extensions["credential_service"].get_for_user(user_id, credential_id) is None:
+        raise PlanError("credential_not_found", 404)
+    now_utc_ms = time.time_ns() // 1_000_000
+    store = current_app.extensions["planning_conversation_store"]
+    conversation_id = body.get("conversation_id")
+    answers = body.get("answers") or []
+    asked_fields = body.get("asked_fields")
+    if asked_fields is None:
+        asked_fields = [None] * len(answers)
+    state = {
+        "message": body["message"].strip() if type(body["message"]) is str else body["message"],
+        "answers": [item.strip() if type(item) is str else item for item in answers],
+        "asked_fields": asked_fields,
+        "scope_label": body.get("scope_label"),
+    }
+    if conversation_id is not None:
+        if type(conversation_id) is not str or not 20 <= len(conversation_id) <= 128:
+            raise PlanError("invalid_planning_request", 400)
+        previous = store.get(conversation_id, user_id, credential_id)
+        if previous is None:
+            raise PlanError("planning_conversation_not_found", 404)
+        store.validate_next(previous, state)
+        business_date = date.fromisoformat(previous["business_date"])
+    else:
+        conversation_id = secrets.token_urlsafe(24)
+        business_date = current_app.extensions["planning_service"].business_date_at(now_utc_ms)
     with current_app.extensions["ai_call_guard"].hold(user_id):
         result = current_app.extensions["planning_service"].propose(
-            user_id, body["message"], body["plan_id"], body["base_version"],
-            time.time_ns() // 1_000_000, answers=body.get("answers"),
-            follow_up_questions=body.get("follow_up_questions"), credential_id=credential_id,
+            user_id, body["message"], now_utc_ms, credential_id=credential_id,
+            answers=body.get("answers"), asked_fields=body.get("asked_fields"), scope_label=body.get("scope_label"),
+            reference_date=business_date,
         )
+    result["conversation_id"] = conversation_id
+    store.save(conversation_id, user_id, credential_id, business_date.isoformat(), state,
+               {**result, "trace_event": _queue_trace_event(result, state, now_utc_ms)}, now_utc_ms)
     return jsonify(result)
+
+
+@planning_bp.get("/queue-conversations")
+@require_session
+def active_queue_conversation():
+    credential_id = request.args.get("credential_id", "")
+    user_id = g.session_context.user.user_id
+    if not credential_id or current_app.extensions["credential_service"].get_for_user(user_id, credential_id) is None:
+        raise PlanError("credential_not_found", 404)
+    return jsonify({"conversation": current_app.extensions["planning_conversation_store"].latest(user_id, credential_id)})
+
+
+@planning_bp.post("/queue-conversations/<conversation_id>/close")
+@require_session
+@require_csrf
+def close_queue_conversation(conversation_id):
+    body = _body(set(), set())
+    del body
+    if not 20 <= len(conversation_id) <= 128:
+        raise PlanError("invalid_planning_request", 400)
+    current_app.extensions["planning_conversation_store"].close(
+        conversation_id, g.session_context.user.user_id, request.args.get("credential_id", ""),
+    )
+    return "", 204
+
+
+@planning_bp.post("/conversations/<conversation_id>/close")
+@require_session
+@require_csrf
+def close_intent_conversation(conversation_id):
+    _body(set(), set())
+    if not 20 <= len(conversation_id) <= 128:
+        raise PlanError("invalid_planning_request", 400)
+    current_app.extensions["planning_conversation_store"].close(
+        conversation_id, g.session_context.user.user_id, None, kind="intent",
+    )
+    return "", 204

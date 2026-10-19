@@ -10,8 +10,8 @@ const candidate=(court='6号场',start='18:00',duration=120,scope='羽毛球')=>
 const queue=(date,credentialId='credential-a',candidates=[candidate()])=>({plan_id:`queue-${date}`,target_date:date,credential_id:credentialId,version:3,candidates});
 const bookingWindow={...windowState,business_date:'2026-10-15',default_target_date:'2026-10-17',target_date:'2026-10-17',queryable_target_dates:['2026-10-15','2026-10-16','2026-10-17']};
 const credentials=[
- {credential_id:'credential-a',label:'Token A',enabled:true,account_binding_state:'confirmed',requires_revalidation:false,last_confirmed_validation_state:'confirmed_valid',expiry_state:'expiry_ok'},
- {credential_id:'credential-b',label:'Token B',enabled:true,account_binding_state:'confirmed',requires_revalidation:false,last_confirmed_validation_state:'confirmed_valid',expiry_state:'expiry_ok'},
+ {credential_id:'credential-a',label:'Token A',enabled:true,has_payment_password:true,account_binding_state:'confirmed',requires_revalidation:false,last_confirmed_validation_state:'confirmed_valid',expiry_state:'expiry_ok'},
+ {credential_id:'credential-b',label:'Token B',enabled:true,has_payment_password:true,account_binding_state:'confirmed',requires_revalidation:false,last_confirmed_validation_state:'confirmed_valid',expiry_state:'expiry_ok'},
 ];
 function apiFixture(overrides={}){
  const queuesByCredential={'credential-a':[queue('2026-10-17'),queue('2026-10-20','credential-a',[candidate('2号场','19:00',60)])],'credential-b':[queue('2026-10-16','credential-b')]};
@@ -24,8 +24,8 @@ function apiFixture(overrides={}){
   ...overrides,
  };
 }
-async function mountPlans(api=apiFixture()){
- const router=createRouter({history:createMemoryHistory(),routes:[{path:'/plans',component:PlansView}]});await router.push('/plans');await router.isReady();
+async function mountPlans(api=apiFixture(),extraProvide={}){
+ const router=createRouter({history:createMemoryHistory(),routes:[{path:'/plans',component:PlansView},{path:'/ai-models',name:'ai-models',component:{template:'<div />'}}]});await router.push('/plans');await router.isReady();
  const session=reactive({status:'authenticated',user:{user_id:'owner',username:'Owner'},csrfToken:'csrf-a',invalidationEpoch:0});
  const executionSettings=(credentialId)=>({credential_id:credentialId,version:0,settings:{reconciliation_time:'00:30',clock_calibration_lead_ms:1000,start_offset_ms:0,booking_node_delay_ms:0,booking_by_time_delay_ms:0,get_user_info_delay_ms:0,get_children_delay_ms:0,get_pay_price_delay_ms:0,create_booking_delay_ms:0,open_platform_pay_order_delay_ms:0,payment_verify_delay_ms:0},worker_enabled:false});
  const credentialApi={list:vi.fn(async()=>({credentials})),executionSettings:vi.fn(async id=>executionSettings(id)),updateExecutionSettings:vi.fn(async(id,version,settings)=>({credential_id:id,version:version+1,settings,worker_enabled:false}))};
@@ -34,7 +34,7 @@ async function mountPlans(api=apiFixture()){
   categories:vi.fn(async()=>({data_state:'live_observed_unverified',source:'official_read_only',options:[{reference:'scope-a',label:'羽毛球',physical_venue_verified:false}]})),
   grid:vi.fn(async({targetDate})=>({grid_version:'official-bookingByTime-live-observation-v1',data_state:'live_observed_unverified',simulation:false,target_date:targetDate,timezone_name:'Asia/Shanghai',query_scope:{display_name:'羽毛球',physical_venue_verified:false},can_select:false,can_select_intent:true,can_match:false,can_bind:false,can_book:false,can_pay:false,can_create_job:false,client_selection_window:'open',source:{data_state:'live_observed_unverified',trust_state:'display_only_unverified',price_state:'omitted_unit_unverified',captured_at_utc_ms:Date.now(),ui_stale_after_utc_ms:Date.now()+60000},courts:[{display_name:'6号场'},{display_name:'5号场'}],rows:[{time_label:'18:00',time_status_code:'0',intent_start_time:'18:00',intent_end_time:'19:00',cells:[{state:'observed_unknown',selectable:false,intent_selectable:false},{state:'observed_unknown',selectable:false,intent_selectable:false}]}],notice:'测试观察'})),
  };
- const wrapper=mount({components:{RouterView},template:'<RouterView />'},{global:{plugins:[router],provide:{planApi:api,sessionStore:session,credentialApi,liveAvailabilityApi:liveApi}}});
+ const wrapper=mount({components:{RouterView},template:'<RouterView />'},{global:{plugins:[router],provide:{planApi:api,sessionStore:session,credentialApi,liveAvailabilityApi:liveApi,...extraProvide}}});
  await new Promise(resolve=>setTimeout(resolve,20));await flushPromises();return{wrapper,api,session,router,liveApi,credentialApi};
 }
 
@@ -81,5 +81,41 @@ describe('reservation plan workspace',()=>{
   const credentialDisclosure=wrapper.get('#plan-panel-current .credential-popover');credentialDisclosure.element.open=true;await credentialDisclosure.trigger('toggle');await flushPromises();
   await wrapper.get('#plan-panel-current [data-testid="selection-credential"]').setValue('credential-b');await flushPromises();
   expect(credentialApi.executionSettings).toHaveBeenLastCalledWith('credential-b');
+ });
+
+ it('opens manual selection on the confirmed date when the assistant hands over',async()=>{
+  const escalation={kind:'stalled',field:'venue_preference',message:'这一项我连续几次都没能确认。',prefill:{target_date:'2026-10-20'}};
+  const planningProposalApi={generate:vi.fn(async()=>({status:'needs_input',questions:[escalation.message],proposal:null,conversation:{phase:'escalated',asking:'venue_preference',reason:'missing',turns_used:3,turns_max:12,attempts:{},slots:[],notices:[],escalation}}))};
+  const {wrapper}=await mountPlans(apiFixture(),{planningProposalApi});
+  await wrapper.get('[data-testid="plan-tab-agent"]').trigger('click');await flushPromises();
+  await wrapper.get('[data-testid="proposal-message"]').setValue('想订场');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
+  await wrapper.get('[data-testid="open-manual"]').trigger('click');await flushPromises();
+  expect(wrapper.get('[data-testid="plan-tab-manual"]').attributes('aria-selected')).toBe('true');
+  expect(wrapper.get('#plan-panel-manual').isVisible()).toBe(true);
+  expect(wrapper.get('#plan-panel-manual').text()).toContain('20');
+ });
+
+ it('falls back to the manual tab without a date when the hand-off carries none',async()=>{
+  const escalation={kind:'turn_limit',field:null,message:'这次整理的轮数已经用完。',prefill:{}};
+  const planningProposalApi={generate:vi.fn(async()=>({status:'needs_input',questions:[escalation.message],proposal:null,conversation:{phase:'escalated',asking:null,reason:null,turns_used:12,turns_max:12,attempts:{},slots:[],notices:[],escalation}}))};
+  const {wrapper}=await mountPlans(apiFixture(),{planningProposalApi});
+  await wrapper.get('[data-testid="plan-tab-agent"]').trigger('click');await flushPromises();
+  await wrapper.get('[data-testid="proposal-message"]').setValue('想订场');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
+  await wrapper.get('[data-testid="open-manual"]').trigger('click');await flushPromises();
+  expect(wrapper.get('[data-testid="plan-tab-manual"]').attributes('aria-selected')).toBe('true');
+ });
+
+ it('refreshes the manual queue list after the assistant saves a queue',async()=>{
+  const entries=[{court_preference:'1号场',start_time:'14:00',end_time:'16:00',duration_minutes:120}];
+  const proposal={kind:'manual_queue_draft',target_date:'2026-10-17',target_label:'10月17日 周六',entries,entry_count:1,base_version:3,existing_count:0,replaces_existing:false,schedule:{state:'scheduled',text:'ok'},execution_note:'note',warnings:[],review:{state:'reviewed'},provider:null,can_book:false,can_pay:false,can_create_job:false,can_query_upstream:false};
+  const planningProposalApi={generate:vi.fn(async()=>({status:'ready',questions:[],proposal,conversation:{phase:'ready',asking:null,heading:null,strip:[],slots:[],notices:[],escalation:null,turns_used:0,turns_max:20}}))};
+  const api=apiFixture({saveQueue:vi.fn(async(date,version,list)=>({queue:{...queue(date),version:version+1,candidates:[]}}))});
+  const {wrapper}=await mountPlans(api,{planningProposalApi});
+  await wrapper.get('[data-testid="plan-tab-agent"]').trigger('click');await flushPromises();
+  await wrapper.get('[data-testid="proposal-message"]').setValue('周六 14-16 1号场');await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();
+  const before=api.queues.mock.calls.length;
+  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
+  expect(api.saveQueue).toHaveBeenCalledWith('2026-10-17',3,entries,'credential-a');
+  expect(api.queues.mock.calls.length).toBeGreaterThan(before);
  });
 });
