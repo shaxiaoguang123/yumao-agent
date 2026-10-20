@@ -82,6 +82,12 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
     if (url.pathname === '/api/credentials' && record.method === 'GET') {
       await delay(state.listDelay); if (state.listNetworkError) { record.status = 'MOCK_NETWORK_ABORT'; await route.abort('failed'); return; } await reply(state.listError ? 503 : 200, state.listError ? { error: 'upstream_unavailable' } : { credentials: state.credentials }); return;
     }
+    if (url.pathname === '/api/ai/models' && record.method === 'GET') {
+      await reply(200, { effective_model_id: 'visual-model', selected_model_id: 'visual-model', default_model_id: null, service_default: null, models: [{ id: 'visual-model', auth_mode: 'bearer', has_api_key: true }] }); return;
+    }
+    if (url.pathname === '/api/ai/models/visual-model/test' && record.method === 'POST') {
+      await reply(200, { ok: true, message: 'synthetic connection success' }); return;
+    }
     if (url.pathname === '/api/plans' && record.method === 'GET') { await reply(200, { plans: [] }); return; }
     if (scopedPlanningConversationRead && record.method === 'GET') { await reply(200, { conversation: null }); return; }
     if (url.pathname === '/api/plans/options' && record.method === 'GET') {

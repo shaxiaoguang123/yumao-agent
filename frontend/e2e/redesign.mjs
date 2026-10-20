@@ -1,4 +1,9 @@
-import { viewports } from './fixtures.mjs';
+import { fixtures, viewports } from './fixtures.mjs';
+
+const planReadyCredentials = fixtures.map((item) => item.credential_id === 'visual-confirmed'
+  ? { ...item, has_payment_password: true }
+  : item);
+
 export async function runRedesign(qa) {
  const {scenario,BASE,check,count,layout,screenshot,waitCredentials}=qa;
  for(const viewport of viewports) await scenario(`redesign-credential-discovery-${viewport.name}`,'user',async ctx=>{
@@ -23,6 +28,7 @@ export async function runRedesign(qa) {
   check(ctx.name,'automatic execution schedule is no longer on credential management',await ctx.page.getByText('自动执行时间',{exact:true}).count()===0&&count(ctx,'/api/booking-execution/credentials/visual-confirmed/settings','GET')===0);
   const restoreResponse=ctx.page.waitForResponse(response=>{const url=new URL(response.url());return url.pathname==='/api/planning/queue-conversations'&&response.request().method()==='GET';});
   await ctx.page.goto(BASE+'/plans');
+  await ctx.page.getByTestId('plan-tab-agent').click();
   const restoredConversation=await restoreResponse;
   check(ctx.name,'Agent restores an empty conversation for the active credential',restoredConversation.ok()&&(await restoredConversation.json()).conversation===null);
   await ctx.page.getByTestId('plan-tab-current').click();
@@ -33,5 +39,5 @@ export async function runRedesign(qa) {
   await settings.getByText('已保存；执行器启用后，非空队列会按这些设置处理并执行。',{exact:true}).waitFor();
   check(ctx.name,'per-Token schedule saves through CSRF-protected API',count(ctx,'/api/booking-execution/credentials/visual-confirmed/settings','PUT')===1&&ctx.state.requests.filter(item=>item.path==='/api/booking-execution/credentials/visual-confirmed/settings'&&item.method==='PUT').every(item=>item.csrfValid===true));
   await layout(ctx);await screenshot(ctx,ctx.name);
- },{},viewport);
+ },{credentials:planReadyCredentials},viewport);
 }
