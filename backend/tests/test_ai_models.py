@@ -88,6 +88,7 @@ class AIModelTests(unittest.TestCase):
         self.assertEqual(response.status_code,200)
         body=response.get_json()
         self.assertEqual(body['outcome'],'parsed')
+        self.assertEqual(body['question_check'],{'answered':True})
         self.assertTrue(body['proposal']['entries'])
         self.assertEqual([call[0].provider_id for call in self.transport.calls],[tested['id'],tested['id']])
         self.assertEqual(self.service.list_models('user-a')['selected_model_id'],selected['id'])
