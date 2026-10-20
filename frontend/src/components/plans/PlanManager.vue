@@ -1,6 +1,6 @@
 <script setup>
-import { computed, inject, shallowRef, watch } from 'vue';
-import { onBeforeRouteLeave } from 'vue-router';
+import { computed, inject, onBeforeUnmount, shallowRef, watch } from 'vue';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import AppIcon from '../AppIcon.vue';
 import PlanHistory from './PlanHistory.vue';
 import ProposalModeWorkspace from './ProposalModeWorkspace.vue';
@@ -15,10 +15,16 @@ import BookingExecutionSettings from '../BookingExecutionSettings.vue';
 import { useManualQueue, queueEntries } from '../../composables/useManualQueue.js';
 import { usePlans } from '../../composables/usePlans.js';
 import { visibleIntentPlans, visibleManualQueuePlans } from '../../utils/planQueueVisibility.js';
+import { agentModelWasRecentlyReady, rememberAgentModelReady } from '../../utils/agentReadiness.js';
+import { providerErrorMessage } from '../../api/providerErrors.js';
 const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('planningProposalApi',null),intentProposalApi=inject('intentPlanningProposalApi',null);
 const liveApi=inject('liveAvailabilityApi',null),credentialApi=inject('credentialApi',null);
+const aiModelsApi=inject('aiModelsApi',null),router=useRouter(),route=useRoute();
 const courtOptions=shallowRef([]),queueScopeLabel=shallowRef(''),queryDate=shallowRef(''),selectedCredentialId=shallowRef(''),credentialRefreshKey=shallowRef(0),planDateFilter=shallowRef(''),pendingDeletePlan=shallowRef(null);
-const activeSection=shallowRef('query'),manualDate=shallowRef('');
+const activeSection=shallowRef(route.query.tab==='agent'?'agent':'query'),manualDate=shallowRef('');
+const agentReadiness=shallowRef('idle');
+const agentReadinessError=shallowRef('');
+let agentCheckSequence=0;
 const {plans,defaultWindow,listStatus,metadataError,saving,message,saveError,history,historyPlanId,historyStatus,authorized,refresh,initialize,remove,showHistory,closeHistory}=usePlans(api,session,()=>selectedCredentialId.value);
 const visiblePlans=computed(()=>visibleIntentPlans(plans.value,{dateFilter:planDateFilter.value,businessDate:defaultWindow.value?.business_date||''}));
 function queueChanged(date){queueState.refreshList();if(date===manualDate.value&&!queueState.dateLocked)queueState.load();}
@@ -38,7 +44,7 @@ const manualExtraDate=computed(()=>{
 });
 onBeforeRouteLeave(async()=>{if(!authorized.value||!queueState.dirty)return true;await queueState.flush();return !queueState.dirty;});
 watch(defaultWindow,value=>{
- if(!value){manualDate.value='';queryDate.value='';activeSection.value='query';}
+ if(!value){manualDate.value='';queryDate.value='';}
  else {if(!queryDate.value)queryDate.value=value.queryable_target_dates?.[2]||value.default_target_date||'';if(!manualDate.value)manualDate.value=value.default_target_date||value.queryable_target_dates?.[2]||'';}
 },{flush:'sync',immediate:true});
 function onAgentSaved({target_date}={}){queueChanged(target_date);}
@@ -49,15 +55,57 @@ function openManualFromAgent({target_date}={}){
 }
 function rememberCourtLabels(names){if(JSON.stringify(courtOptions.value)!==JSON.stringify(names))courtOptions.value=[...names];}
 function rememberQueueScope(label){queueScopeLabel.value=typeof label==='string'?label:'';}
-watch(()=>[session?.status,session?.user?.user_id,session?.invalidationEpoch],()=>{courtOptions.value=[];queueScopeLabel.value='';pendingDeletePlan.value=null;planDateFilter.value='';},{flush:'sync'});
+function redirectToModelSettings(reason){
+ if(session?.status!=='authenticated')return router.replace({name:'login'});
+ return router.replace({name:'ai-models',query:{returnTo:'agent',reason}});
+}
+async function checkAgentService(){
+ if(agentReadiness.value==='checking'||agentReadiness.value==='ready')return;
+ const sequence=++agentCheckSequence;
+ const userId=session?.user?.user_id;
+ agentReadiness.value='checking';
+ if(!aiModelsApi){agentReadiness.value='blocked';await redirectToModelSettings('provider_not_configured');return;}
+ try{
+  const state=await aiModelsApi.list();
+  if(sequence!==agentCheckSequence||activeSection.value!=='agent'||session?.user?.user_id!==userId)return;
+  const modelId=state?.effective_model_id;
+  const model=modelId==='service_default'
+   ? state?.service_default
+   : state?.models?.find(item=>item.id===modelId);
+  if(!modelId||!model){agentReadiness.value='blocked';await redirectToModelSettings('provider_not_configured');return;}
+  if(model.auth_mode==='bearer'&&model.has_api_key!==true){agentReadiness.value='blocked';await redirectToModelSettings('provider_api_key_required');return;}
+  if(!agentModelWasRecentlyReady(userId,modelId))await aiModelsApi.test(modelId);
+  if(sequence!==agentCheckSequence||activeSection.value!=='agent'||session?.user?.user_id!==userId)return;
+  rememberAgentModelReady(userId,modelId);
+  agentReadinessError.value='';
+  agentReadiness.value='ready';
+ }catch(error){
+  if(sequence!==agentCheckSequence||activeSection.value!=='agent')return;
+  if(error?.sessionInvalid||session?.status==='unauthenticated'){agentReadiness.value='blocked';await router.replace({name:'login'});return;}
+  if(['provider_rate_limited','ai_call_rate_limited','ai_call_in_progress'].includes(error?.code)){
+   agentReadiness.value='error';agentReadinessError.value=providerErrorMessage(error.code);return;
+  }
+  agentReadiness.value='blocked';
+  agentReadinessError.value='';
+  await redirectToModelSettings(typeof error?.code==='string'?error.code:'provider_unavailable');
+ }
+}
+function changeSection(section){
+ activeSection.value=section;
+ if(section==='agent'){agentReadinessError.value='';void checkAgentService();}
+ else {agentCheckSequence++;agentReadiness.value='idle';agentReadinessError.value='';}
+}
+watch(()=>[session?.status,session?.user?.user_id,session?.invalidationEpoch],()=>{agentCheckSequence++;agentReadiness.value='idle';courtOptions.value=[];queueScopeLabel.value='';pendingDeletePlan.value=null;planDateFilter.value='';},{flush:'sync'});
+onBeforeUnmount(()=>{agentCheckSequence++;});
 const queryContextKey=computed(()=>JSON.stringify({user:session?.user?.user_id,epoch:session?.invalidationEpoch}));
+if(activeSection.value==='agent')void checkAgentService();
 </script>
 <template>
  <div class="plans-page">
   <h1 class="sr-only">预约计划</h1>
   <div v-if="!authorized" class="panel"><p role="alert">{{ session?.status==='unauthenticated' ? '登录状态已失效，请重新登录。' : '暂时无法确认登录状态，请重试。' }}</p></div>
   <template v-else>
-   <PlanSectionTabs v-model="activeSection" :plan-count="planCount" />
+   <PlanSectionTabs :model-value="activeSection" :plan-count="planCount" @update:model-value="changeSection" />
    <p v-if="metadataError" class="form-error" role="alert">日期范围读取失败，请重试。 <button class="secondary-button" type="button" @click="initialize">重新读取</button></p>
    <p v-if="message" class="form-success" role="status">{{ message }}</p>
    <p v-if="saveError" class="form-error" role="alert">{{ saveError }}</p>
@@ -70,12 +118,15 @@ const queryContextKey=computed(()=>JSON.stringify({user:session?.user?.user_id,e
     <ManualQueueWorkspace :state="queueState" :court-names="courtOptions" :scope-label="queueScopeLabel" :target-date="manualDate" />
    </section>
    <section v-show="activeSection==='agent'" id="plan-panel-agent" role="tabpanel" aria-labelledby="plan-tab-agent" class="plan-workspace-section">
-    <ProposalModeWorkspace v-if="proposalApi" :plans="plans" :plan-api="api" :proposal-api="proposalApi" :intent-proposal-api="intentProposalApi" :credential-api="credentialApi" :credential-refresh-key="credentialRefreshKey" :session="session" :credential-id="selectedCredentialId" :scope-label="queueScopeLabel" @refresh-request="refresh" @saved="onAgentSaved" @manual-request="openManualFromAgent">
+    <p v-if="agentReadiness==='checking'" class="panel status-loading" role="status">正在检查模型配置和连接状态…</p>
+    <ProposalModeWorkspace v-else-if="agentReadiness==='ready'&&proposalApi" :plans="plans" :plan-api="api" :proposal-api="proposalApi" :intent-proposal-api="intentProposalApi" :credential-api="credentialApi" :credential-refresh-key="credentialRefreshKey" :session="session" :credential-id="selectedCredentialId" :scope-label="queueScopeLabel" @refresh-request="refresh" @saved="onAgentSaved" @manual-request="openManualFromAgent" @provider-unavailable="redirectToModelSettings">
      <template #header-actions>
       <PlanCredentialControl v-if="credentialApi" v-model="selectedCredentialId" :api="credentialApi" :session="session" :timezone-name="defaultWindow?.business_timezone_name||'Asia/Shanghai'" :disabled="queueState.dateLocked" @updated="credentialRefreshKey++" />
      </template>
     </ProposalModeWorkspace>
-    <p v-else class="panel muted">Agent 服务当前未配置，请先检查模型设置。</p>
+    <p v-else-if="agentReadiness==='error'" class="panel form-error" role="alert">{{ agentReadinessError }} <button class="secondary-button" type="button" @click="checkAgentService">重新检查</button></p>
+    <p v-else-if="agentReadiness==='blocked'" class="panel muted">正在前往模型设置；请检查模型配置并测试连接。</p>
+    <p v-else class="panel muted">选择 Agent 预约后会先检查模型配置。</p>
    </section>
    <section v-show="activeSection==='current'" id="plan-panel-current" role="tabpanel" aria-labelledby="plan-tab-current" class="plan-workspace-section">
    <div class="ticket-filter-bar">

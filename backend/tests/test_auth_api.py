@@ -861,6 +861,67 @@ class AuthApiTests(unittest.TestCase):
         self.assertGreaterEqual(active_admins, 1)
         self.assertTrue(all(status in (204, 401, 403, 409) for status in statuses), statuses)
 
+    def test_admin_user_list_is_authorized_filtered_and_does_not_expose_secrets(self) -> None:
+        self.assertEqual(self.client.get("/api/admin/users").status_code, 401)
+        admin_csrf = self._login_user(
+            "admin-1", "Admin", "admin password for tests", role="admin"
+        )
+        self._insert_user("user-1", "Alice", "alice correct test password")
+        response = self.client.get("/api/admin/users")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(payload["summary"], {
+            "total": 2, "active": 2, "disabled": 0, "admins": 1, "active_admins": 1,
+        })
+        self.assertEqual(
+            set(payload["users"][0]),
+            {"user_id", "username", "role", "status", "created_at_utc_ms"},
+        )
+        self.assertNotIn("password_hash", response.get_data(as_text=True))
+        self.assertNotIn("normalized_username", response.get_data(as_text=True))
+        filtered = self.client.get("/api/admin/users?q=ali&role=user&limit=1&offset=0")
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual(filtered.get_json()["total"], 1)
+        self.assertEqual(filtered.get_json()["users"][0]["username"], "Alice")
+
+        user_client = self.app.test_client()
+        user_login = user_client.post(
+            "/api/auth/login",
+            json={"username": "Alice", "password": "alice correct test password"},
+            headers=self._origin_headers(),
+        )
+        forbidden = user_client.get("/api/admin/users")
+        self.assertEqual(forbidden.status_code, 403)
+
+    def test_admin_can_reenable_a_disabled_user_without_restoring_old_sessions(self) -> None:
+        admin_csrf = self._login_user(
+            "admin-1", "Admin", "admin password for tests", role="admin"
+        )
+        self._insert_user("user-1", "Alice", "alice correct test password")
+        user_client = self.app.test_client()
+        user_login = user_client.post(
+            "/api/auth/login",
+            json={"username": "Alice", "password": "alice correct test password"},
+            headers=self._origin_headers(),
+        )
+        self.assertEqual(user_login.status_code, 200)
+        old_session = user_client.get_cookie("yumao_session").value
+        self.assertEqual(self._post_with_csrf(
+            self.client, "/api/admin/users/user-1/disable", admin_csrf, json={}
+        ).status_code, 204)
+        self.assertEqual(self._post_with_csrf(
+            self.client, "/api/admin/users/user-1/enable", admin_csrf, json={}
+        ).status_code, 204)
+        self.assertEqual(self._user_status("user-1")[0], "active")
+        self.assertIsNone(self.sessions.resolve(old_session, self._now_ms()))
+
+    def test_admin_user_list_rejects_invalid_filters_and_limits(self) -> None:
+        self._login_user("admin-1", "Admin", "admin password for tests", role="admin")
+        for query in ("?status=unknown", "?role=owner", "?limit=101", "?offset=-1", "?q=" + "x" * 129):
+            response = self.client.get(f"/api/admin/users{query}")
+            self.assertEqual(response.status_code, 400, query)
+
 
 class FirstAdminBootstrapTests(unittest.TestCase):
     def setUp(self) -> None:

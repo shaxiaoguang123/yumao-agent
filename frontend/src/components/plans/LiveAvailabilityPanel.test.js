@@ -63,7 +63,7 @@ describe('badminton date-driven observation flow',()=>{
  it('does not choose an unrelated category when badminton is missing',async()=>{
   const {wrapper,api}=await setup({categories:vi.fn(async()=>({...categories,options:[categories.options[0]]}))});expect(wrapper.text()).toContain('未返回唯一的羽毛球');expect(api.grid).not.toHaveBeenCalled();
  });
- it('makes no read when disabled',async()=>{
-  const {wrapper,credentialApi,api}=await setup({options:vi.fn(async()=>({enabled:false}))});expect(wrapper.find('[data-testid="query-live-grid"]').exists()).toBe(false);expect(credentialApi.list).not.toHaveBeenCalled();expect(api.categories).not.toHaveBeenCalled();
+ it('explains the disabled state instead of rendering a blank panel',async()=>{
+  const {wrapper,credentialApi,api}=await setup({options:vi.fn(async()=>({enabled:false,disabled_reason:'feature_disabled'}))});await settle();expect(wrapper.find('[data-testid="live-availability-panel"]').exists()).toBe(true);expect(wrapper.get('.query-disabled').text()).toContain('服务端尚未启用');expect(wrapper.find('[data-testid="query-live-grid"]').exists()).toBe(false);expect(credentialApi.list).not.toHaveBeenCalled();expect(api.categories).not.toHaveBeenCalled();
  });
 });

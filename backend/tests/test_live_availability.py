@@ -223,7 +223,9 @@ class LiveAvailabilityApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 429)
         self.assertIn('Retry-After', response.headers)
         production = create_app({**self.config, 'APP_ENV': 'production'})
-        self.assertFalse(production.extensions['live_availability_service'].options()['enabled'])
+        disabled_options = production.extensions['live_availability_service'].options()
+        self.assertFalse(disabled_options['enabled'])
+        self.assertEqual(disabled_options['disabled_reason'], 'feature_disabled')
 
 
 if __name__ == '__main__':

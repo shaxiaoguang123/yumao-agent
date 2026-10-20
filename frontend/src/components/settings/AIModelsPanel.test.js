@@ -1,11 +1,12 @@
 import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils';
 import { reactive } from 'vue';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 enableAutoUnmount(afterEach);
 const model={id:'model-1',name:'Work model',base_url:'https://provider.test/v1',model:'chat-model',auth_mode:'bearer',has_api_key:true,version:1,source:'user'};
 function fixture(overrides={}){return {list:vi.fn(async()=>({models:[model],service_default:{...model,id:'service_default',name:'Service'},selected_model_id:'model-1',default_model_id:'service_default',effective_model_id:'model-1'})),create:vi.fn(async()=>({})),update:vi.fn(async()=>({})),remove:vi.fn(async()=>({})),preferences:vi.fn(async()=>({})),discover:vi.fn(async()=>({models:['deepseek-flash','qwen-plus']})),discoverSaved:vi.fn(async()=>({models:['chat-model','new-model']})),test:vi.fn(async()=>({ok:true,message:'连接成功'})),...overrides};}
-async function mountPanel(api=fixture()) {const {default:component}=await import('./AIModelsPanel.vue');const session=reactive({status:'authenticated',user:{user_id:'owner'},csrfToken:'csrf-a'});const wrapper=mount(component,{global:{provide:{aiModelsApi:api,sessionStore:session}}});await flushPromises();return {wrapper,api,session};}
+async function mountPanel(api=fixture(),query={}) {const {default:component}=await import('./AIModelsPanel.vue');const session=reactive({status:'authenticated',user:{user_id:'owner'},csrfToken:'csrf-a'});const empty={template:'<div />'};const router=createRouter({history:createMemoryHistory(),routes:[{path:'/settings/ai-models',name:'ai-models',component:empty},{path:'/plans',name:'plans',component:empty}]});await router.push({name:'ai-models',query});await router.isReady();const wrapper=mount(component,{global:{plugins:[router],provide:{aiModelsApi:api,sessionStore:session}}});await flushPromises();return {wrapper,api,session,router};}
 
 describe('AI models settings',()=>{
  it('shows an empty configuration as a setup prompt while preserving the service model option',async()=>{
@@ -61,6 +62,15 @@ describe('AI models settings',()=>{
  });
  it('shows a safe connection reason when the test endpoint returns ok=false with HTTP 200',async()=>{
   const {wrapper}=await mountPanel(fixture({test:vi.fn(async()=>({ok:false,error:'provider_timeout',status:504}))}));await wrapper.findAll('button').find(button=>button.text()==='测试连接').trigger('click');await flushPromises();expect(wrapper.text()).toContain('连接超时');expect(wrapper.text()).not.toContain('模型连接成功');
+ });
+ it('explains an Agent redirect and returns after the active model passes a connection test',async()=>{
+  const {wrapper,api,router}=await mountPanel(fixture(),{returnTo:'agent',reason:'provider_auth_failed'});
+  expect(wrapper.get('.agent-setup-message').text()).toContain('Agent 暂不可用');
+  expect(wrapper.get('.agent-setup-message').text()).toContain('认证失败');
+  await wrapper.findAll('button').find(button=>button.text()==='测试连接').trigger('click');await flushPromises();
+  expect(api.test).toHaveBeenCalledWith('model-1');
+  expect(router.currentRoute.value.name).toBe('plans');
+  expect(router.currentRoute.value.query).toEqual({tab:'agent'});
  });
  it.each([
   ['provider_auth_failed','认证失败或当前密钥没有访问权限'],

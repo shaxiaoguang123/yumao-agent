@@ -274,6 +274,10 @@ class AIModelTests(unittest.TestCase):
         self.assertEqual(RecordingConnection.last.path,"/v1/chat/completions")
         self.assertNotIn("Authorization",RecordingConnection.last.headers)
 
+        with patch("backend.ai.provider._PinnedHTTPSConnection",RecordingConnection):
+            self.assertTrue(transport.test(ProviderConfig("m","m","https://vendor.example/v1","model","none")))
+        self.assertEqual(json.loads(RecordingConnection.last.body)["max_tokens"],8)
+
         RecordingConnection.getresponse=lambda self: Response(302,b"vendor body")
         with patch("backend.ai.provider._PinnedHTTPSConnection",RecordingConnection):
             with self.assertRaises(ProviderFailure) as redirect:

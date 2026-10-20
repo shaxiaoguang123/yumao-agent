@@ -16,6 +16,7 @@ async function mountApp(role) {
       { path: '/account', name: 'account', component: emptyView },
       { path: '/settings/ai-models', name: 'ai-models', component: emptyView },
       { path: '/login', name: 'login', component: emptyView },
+      { path: '/admin', name: 'admin-users', component: emptyView },
       { path: '/admin/invitations', name: 'admin-invitations', component: emptyView },
     ],
   });
@@ -37,6 +38,7 @@ describe('application navigation', () => {
   it('shows invitation management only for an administrator', async () => {
     const { wrapper } = await mountApp('admin');
 
+    expect(wrapper.get('[data-testid="admin-users-link"]').attributes('href')).toBe('/admin');
     expect(wrapper.get('[data-testid="admin-invitations-link"]').attributes('href'))
       .toBe('/admin/invitations');
   });
@@ -44,6 +46,7 @@ describe('application navigation', () => {
   it('hides invitation management from an ordinary user and anonymous visitor', async () => {
     for (const role of ['user', null]) {
       const { wrapper } = await mountApp(role);
+      expect(wrapper.find('[data-testid="admin-users-link"]').exists()).toBe(false);
       expect(wrapper.find('[data-testid="admin-invitations-link"]').exists()).toBe(false);
       wrapper.unmount();
     }
@@ -52,7 +55,7 @@ describe('application navigation', () => {
   it('updates role navigation without rebuilding the application when Session is cleared', async () => {
     const { wrapper, sessionStore } = await mountApp('admin');
     expect(wrapper.get('nav[aria-label="主导航"]').findAll('a').map((a) => a.text()))
-      .toEqual(['首页', '预约凭据', '预约计划', '邀请码管理', '账户', '设置 · AI模型']);
+      .toEqual(['首页', '预约凭据', '预约计划', '用户管理', '邀请码管理', '账户', '设置 · AI模型']);
     sessionStore.user = null;
     await wrapper.vm.$nextTick();
     expect(wrapper.get('nav').findAll('a').map((a) => a.text())).toEqual(['登录']);

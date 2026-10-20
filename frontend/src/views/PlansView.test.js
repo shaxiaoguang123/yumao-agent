@@ -24,8 +24,8 @@ function apiFixture(overrides={}){
   ...overrides,
  };
 }
-async function mountPlans(api=apiFixture(),extraProvide={}){
- const router=createRouter({history:createMemoryHistory(),routes:[{path:'/plans',component:PlansView},{path:'/ai-models',name:'ai-models',component:{template:'<div />'}}]});await router.push('/plans');await router.isReady();
+async function mountPlans(api=apiFixture(),extraProvide={},startPath='/plans'){
+ const router=createRouter({history:createMemoryHistory(),routes:[{path:'/plans',name:'plans',component:PlansView},{path:'/ai-models',name:'ai-models',component:{template:'<div />'}},{path:'/credentials',name:'credentials',component:{template:'<div />'}},{path:'/login',name:'login',component:{template:'<div />'}}]});await router.push(startPath);await router.isReady();
  const session=reactive({status:'authenticated',user:{user_id:'owner',username:'Owner'},csrfToken:'csrf-a',invalidationEpoch:0});
  const executionSettings=(credentialId)=>({credential_id:credentialId,version:0,settings:{reconciliation_time:'00:30',clock_calibration_lead_ms:1000,start_offset_ms:0,booking_node_delay_ms:0,booking_by_time_delay_ms:0,get_user_info_delay_ms:0,get_children_delay_ms:0,get_pay_price_delay_ms:0,create_booking_delay_ms:0,open_platform_pay_order_delay_ms:0,payment_verify_delay_ms:0},worker_enabled:false});
  const credentialApi={list:vi.fn(async()=>({credentials})),executionSettings:vi.fn(async id=>executionSettings(id)),updateExecutionSettings:vi.fn(async(id,version,settings)=>({credential_id:id,version:version+1,settings,worker_enabled:false}))};
@@ -34,7 +34,8 @@ async function mountPlans(api=apiFixture(),extraProvide={}){
   categories:vi.fn(async()=>({data_state:'live_observed_unverified',source:'official_read_only',options:[{reference:'scope-a',label:'羽毛球',physical_venue_verified:false}]})),
   grid:vi.fn(async({targetDate})=>({grid_version:'official-bookingByTime-live-observation-v1',data_state:'live_observed_unverified',simulation:false,target_date:targetDate,timezone_name:'Asia/Shanghai',query_scope:{display_name:'羽毛球',physical_venue_verified:false},can_select:false,can_select_intent:true,can_match:false,can_bind:false,can_book:false,can_pay:false,can_create_job:false,client_selection_window:'open',source:{data_state:'live_observed_unverified',trust_state:'display_only_unverified',price_state:'omitted_unit_unverified',captured_at_utc_ms:Date.now(),ui_stale_after_utc_ms:Date.now()+60000},courts:[{display_name:'6号场'},{display_name:'5号场'}],rows:[{time_label:'18:00',time_status_code:'0',intent_start_time:'18:00',intent_end_time:'19:00',cells:[{state:'observed_unknown',selectable:false,intent_selectable:false},{state:'observed_unknown',selectable:false,intent_selectable:false}]}],notice:'测试观察'})),
  };
- const wrapper=mount({components:{RouterView},template:'<RouterView />'},{global:{plugins:[router],provide:{planApi:api,sessionStore:session,credentialApi,liveAvailabilityApi:liveApi,...extraProvide}}});
+ const aiModelsApi={list:vi.fn(async()=>({effective_model_id:'model-a',models:[{id:'model-a',auth_mode:'bearer',has_api_key:true}],service_default:null})),test:vi.fn(async()=>({ok:true})),...extraProvide.aiModelsApi};
+ const wrapper=mount({components:{RouterView},template:'<RouterView />'},{global:{plugins:[router],provide:{planApi:api,sessionStore:session,credentialApi,liveAvailabilityApi:liveApi,aiModelsApi,...extraProvide}}});
  await new Promise(resolve=>setTimeout(resolve,20));await flushPromises();return{wrapper,api,session,router,liveApi,credentialApi};
 }
 
@@ -93,6 +94,30 @@ describe('reservation plan workspace',()=>{
   expect(wrapper.get('[data-testid="plan-tab-manual"]').attributes('aria-selected')).toBe('true');
   expect(wrapper.get('#plan-panel-manual').isVisible()).toBe(true);
   expect(wrapper.get('#plan-panel-manual').text()).toContain('20');
+ });
+
+ it('checks the active AI model before showing Agent and redirects on provider failure',async()=>{
+  const aiModelsApi={list:vi.fn(async()=>({effective_model_id:'model-fail',models:[{id:'model-fail',auth_mode:'bearer',has_api_key:true}]})),test:vi.fn(async()=>{throw Object.assign(new Error('provider auth failed'),{code:'provider_auth_failed'});})};
+  const {wrapper,router}=await mountPlans(apiFixture(),{aiModelsApi});
+  await wrapper.get('[data-testid="plan-tab-agent"]').trigger('click');await flushPromises();
+  expect(aiModelsApi.test).toHaveBeenCalledWith('model-fail');
+  expect(router.currentRoute.value.name).toBe('ai-models');
+  expect(router.currentRoute.value.query).toEqual({returnTo:'agent',reason:'provider_auth_failed'});
+ });
+
+ it('preserves a direct Agent deep link while the date window loads',async()=>{
+  const {wrapper}=await mountPlans(apiFixture(),{},'/plans?tab=agent');
+  await flushPromises();
+  expect(wrapper.get('[data-testid="plan-tab-agent"]').attributes('aria-selected')).toBe('true');
+ });
+
+ it('keeps Agent reachable for a temporary rate limit and offers a retry',async()=>{
+  const aiModelsApi={list:vi.fn(async()=>({effective_model_id:'model-limited',models:[{id:'model-limited',auth_mode:'bearer',has_api_key:true}]})),test:vi.fn(async()=>{throw Object.assign(new Error('rate limited'),{code:'provider_rate_limited'});})};
+  const {wrapper,router}=await mountPlans(apiFixture(),{aiModelsApi});
+  await wrapper.get('[data-testid="plan-tab-agent"]').trigger('click');await flushPromises();
+  expect(router.currentRoute.value.name).toBe('plans');
+  expect(wrapper.get('#plan-panel-agent [role="alert"]').text()).toContain('服务商请求过于频繁');
+  expect(wrapper.get('#plan-panel-agent [role="alert"] button').text()).toBe('重新检查');
  });
 
  it('falls back to the manual tab without a date when the hand-off carries none',async()=>{

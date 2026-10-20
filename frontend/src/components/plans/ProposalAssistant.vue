@@ -7,7 +7,7 @@ import { providerErrorMessage } from '../../api/providerErrors.js';
 import { initialState, isLegal, legacyStatus, selectors, transition } from './proposalMachine.js';
 
 const props=defineProps({planApi:{type:Object,required:true},proposalApi:{type:Object,required:true},credentialApi:{type:Object,default:null},credentialRefreshKey:{type:Number,default:0},session:{type:Object,required:true},credentialId:{type:String,default:''},scopeLabel:{type:String,default:''}});
-const emit=defineEmits(['saved','refresh-request','manual-request','mode-started','mode-reset']);
+const emit=defineEmits(['saved','refresh-request','manual-request','mode-started','mode-reset','provider-unavailable']);
 const MAX_ANSWERS=20,HOURS={120:'2小时',60:'1小时'};
 const machine=shallowRef(initialState());
 function dispatch(type,extra={}){machine.value=transition(machine.value,{type,...extra});}
@@ -146,6 +146,7 @@ async function generate({supplement=false}={}){
   pendingTurn.value='';traceEvent('请求未完成','请查看提示后重试；没有保存任何队列。');
   dispatch('FAIL',{code:err?.code});
   error.value=err?.code==='credential_not_found'?'找不到这个预约凭据，请重新选择。':err?.code==='invalid_model_proposal'?'模型返回的内容不符合格式，请重试。':`整理失败：${providerErrorMessage(err?.code)}`;
+  if(err?.code?.startsWith('provider_')&&err.code!=='provider_rate_limited')emit('provider-unavailable',err.code);
  }finally{if(valid(generation,id,csrf)&&sequence===requestId&&status.value==='generating')dispatch('INPUT_CHANGED');}
 }
 const savedKeys=candidates=>candidates.map(c=>[c.duration_minutes,c.preferred_start_times?.[0]??c.start_time,c.court_preferences?.[0]??c.court_preference,c.query_scope_label??c.scope_label??null]);
