@@ -1,4 +1,4 @@
-"""Booking-queue drafting. Questions and the queue are server-built; the model only reviews.
+"""Booking-queue drafting. The server builds the queue; the model answers context Q&A and reviews.
 
 This service has no plan-writing or booking tools: it returns a proposal and the user
 confirms it through the normal manual-queue save.

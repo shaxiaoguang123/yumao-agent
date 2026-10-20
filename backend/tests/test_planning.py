@@ -14,6 +14,7 @@ from backend.ai.service import AIModelError
 from backend.app import create_app
 from backend.db import connect_database
 from backend.migrate import migrate_database
+from backend.plans.service import PlanError
 from support import credential_test_settings
 from plan_test_support import NOW
 
@@ -128,7 +129,8 @@ class ReadyTests(Base):
     def test_contextual_question_uses_model_and_keeps_the_current_step_open(self):
         first = self.result('后天 14-16 1号场')
         self.assertEqual(first['conversation']['asking'], 'booking_mode')
-        question = self.result('后天 14-16 1号场', answers=['这两种队列有什么区别？'], asked_fields=['booking_mode'])
+        question = self.result('后天 14-16 1号场', answers=['这两种队列有什么区别？'],
+                               asked_fields=['booking_mode'], conversation_id=first['conversation_id'])
         self.assertEqual(question['conversation']['asking'], 'booking_mode')
         self.assertIn('分开确认', question['conversation']['contextual_reply'])
         self.assertEqual(question['conversation']['turn_kinds'], ['answer', 'question'])
@@ -339,6 +341,82 @@ class SafetyTests(Base):
         )
         self.assertEqual(resumed.status_code, 200)
         self.assertEqual(self.clients['a'].get('/api/planning/queue-conversations?credential_id=cred-a', headers=self.headers['a']).get_json()['conversation']['conversation_id'], conversation_id)
+
+    def test_queue_workflow_state_and_conversation_version_are_persisted(self):
+        first = self.post('后天')
+        self.assertEqual(first.status_code, 200)
+        result = first.get_json()
+        self.assertEqual((result['workflow_state'], result['conversation']['workflow_state']),
+                         ('awaiting_clarification', 'awaiting_clarification'))
+        self.assertEqual(result['conversation_version'], 1)
+        conversation_id = result['conversation_id']
+        saved = self.app.extensions['planning_conversation_store'].get(conversation_id, 'a', 'cred-a')
+        self.assertEqual(saved['version'], 1)
+        self.assertEqual(saved['response_history'][-1]['conversation_version'], 1)
+
+    def test_stale_parallel_conversation_write_is_rejected(self):
+        initial = self.post('后天').get_json()
+        store = self.app.extensions['planning_conversation_store']
+        saved = store.get(initial['conversation_id'], 'a', 'cred-a')
+        state = {key: saved[key] for key in ('message', 'answers', 'asked_fields', 'scope_label', 'turn_kinds')}
+        self.assertEqual(store.save(initial['conversation_id'], 'a', 'cred-a', saved['business_date'], state,
+                                    initial, NOW, expected_version=saved['version']), 2)
+        with self.assertRaises(PlanError) as caught:
+            store.save(initial['conversation_id'], 'a', 'cred-a', saved['business_date'], state,
+                       initial, NOW, expected_version=saved['version'])
+        self.assertEqual(caught.exception.code, 'planning_conversation_conflict')
+        self.assertEqual(store.get(initial['conversation_id'], 'a', 'cred-a')['version'], 2)
+
+    def test_resuming_unknown_conversation_does_not_close_the_active_one(self):
+        current = self.post('后天').get_json()['conversation_id']
+        missing = self.clients['a'].post(
+            '/api/planning/queue-conversations/' + 'x' * 24 + '/resume?credential_id=cred-a',
+            json={}, headers=self.headers['a'],
+        )
+        self.assertEqual(missing.status_code, 404)
+        latest = self.clients['a'].get('/api/planning/queue-conversations?credential_id=cred-a',
+                                       headers=self.headers['a']).get_json()
+        self.assertEqual(latest['conversation']['conversation_id'], current)
+
+    def test_saving_queue_records_saved_terminal_state_in_conversation_history(self):
+        proposal = self.result()
+        payload = proposal['proposal']
+        saved_queue = self.clients['a'].put(
+            f"/api/plans/manual-queues/{payload['target_date']}",
+            json={'base_version': payload['base_version'], 'entries': payload['entries'], 'credential_id': 'cred-a'},
+            headers=self.headers['a'],
+        )
+        self.assertEqual(saved_queue.status_code, 200)
+        closed = self.clients['a'].post(
+            f"/api/planning/queue-conversations/{proposal['conversation_id']}/close?credential_id=cred-a",
+            json={'outcome': 'saved'}, headers=self.headers['a'],
+        )
+        self.assertEqual(closed.status_code, 204)
+        saved = self.app.extensions['planning_conversation_store'].get(proposal['conversation_id'], 'a', 'cred-a')
+        self.assertEqual(saved['status'], 'closed')
+        self.assertEqual(saved['response_history'][-1]['workflow_state'], 'saved')
+        self.assertEqual(saved['response_history'][-1]['conversation']['workflow_state'], 'saved')
+        history = self.app.extensions['planning_conversation_store'].list_recent('a', 'cred-a')
+        self.assertEqual(history[0]['preview'], '队列已保存')
+
+    def test_saved_terminal_state_requires_a_matching_persisted_queue(self):
+        proposal = self.result()
+        response = self.clients['a'].post(
+            f"/api/planning/queue-conversations/{proposal['conversation_id']}/close?credential_id=cred-a",
+            json={'outcome': 'saved'}, headers=self.headers['a'],
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()['error'], 'planning_queue_not_saved')
+        saved = self.app.extensions['planning_conversation_store'].get(proposal['conversation_id'], 'a', 'cred-a')
+        self.assertEqual(saved['status'], 'active')
+
+    def test_queue_close_rejects_unknown_workflow_outcomes(self):
+        conversation_id = self.post('后天').get_json()['conversation_id']
+        response = self.clients['a'].post(
+            f"/api/planning/queue-conversations/{conversation_id}/close?credential_id=cred-a",
+            json={'outcome': 'booked'}, headers=self.headers['a'],
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_relative_date_uses_the_first_turn_business_date_across_midnight(self):
         first_ms = int(datetime(2026, 10, 10, 23, 59, tzinfo=ZoneInfo('Asia/Shanghai')).timestamp() * 1000)

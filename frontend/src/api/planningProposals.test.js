@@ -16,6 +16,8 @@ describe('planning proposal API',()=>{
   expect(client.request.mock.calls[1][0]).toBe('/api/planning/queue-conversations?credential_id=cred-1');
   await proposals.close('conversation-identifier-123','cred-1');
   expect(client.request.mock.calls[2]).toEqual(['/api/planning/queue-conversations/conversation-identifier-123/close?credential_id=cred-1',{method:'POST',body:{}}]);
+  await proposals.close('conversation-identifier-123','cred-1','saved');
+  expect(client.request.mock.calls[3]).toEqual(['/api/planning/queue-conversations/conversation-identifier-123/close?credential_id=cred-1',{method:'POST',body:{outcome:'saved'}}]);
  });
  it('loads a selected history item and resumes it through the credential-scoped API',async()=>{
   const {client,api:proposals}=api();

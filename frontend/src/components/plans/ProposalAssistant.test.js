@@ -199,11 +199,12 @@ describe('queue assistant: preview and save',()=>{
  });
 
  it('saves through the manual-queue endpoint with the version it was built on',async()=>{
-  const config=fixture({result:ready({},{base_version:3,existing_count:2,replaces_existing:true})});
+  const config=fixture({result:{...ready({},{base_version:3,existing_count:2,replaces_existing:true}),conversation_id:'saved-conversation-123'}});
   const {wrapper,planApi}=await mountAssistant(config);await send(wrapper,'后天 14-16 和 18-20，1号4号场');
   expect(wrapper.get('[data-testid="replace-warning"]').text()).toContain('已经有 2 项候选');
   await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
   expect(planApi.saveQueue).toHaveBeenCalledWith('2026-10-20',3,ENTRIES,'credential-a');
+  expect(config.proposalApi.close).toHaveBeenCalledWith('saved-conversation-123','credential-a','saved');
   expect(wrapper.text()).toContain('队列已保存 · 10月20日 周二 · 共 4 项候选');
   expect(wrapper.emitted('saved')[0][0].target_date).toBe('2026-10-20');expect(wrapper.emitted('refresh-request')).toHaveLength(1);
   expect(wrapper.find('[data-testid="queue-preview"]').exists()).toBe(false);

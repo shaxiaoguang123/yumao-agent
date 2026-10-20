@@ -32,5 +32,5 @@ booking_plan.json
 /app_exe(1)/
 /*.exe
 /frontend/dist/
-/frontend/node_modules/
+/frontend/node_modules
 /frontend/.vite/

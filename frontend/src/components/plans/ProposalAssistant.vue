@@ -93,7 +93,7 @@ async function refreshConversationHistory(){
 watch(()=>[props.session.status,props.session.user?.user_id,props.session.csrfToken,props.credentialId],(values,previous)=>{resetForSession(values,previous);void restoreConversation();},{flush:'sync'});
 onMounted(()=>restoreConversation());
 watch(message,()=>{requestId++;if(status.value==='generating')dispatch('INPUT_CHANGED');clearConversation();savedNotice.value='';},{flush:'sync'});
-async function closeCurrentConversation(){
+async function closeCurrentConversation(outcome='cancelled'){
  restoreSequence++;
  const id=conversationId.value;
  let conversationIdToClose=id;
@@ -104,7 +104,8 @@ async function closeCurrentConversation(){
  }
  if(!conversationIdToClose||typeof props.proposalApi.close!=='function'||!props.credentialId)return true;
  try{
-  await props.proposalApi.close(conversationIdToClose,props.credentialId);
+  if(outcome==='saved')await props.proposalApi.close(conversationIdToClose,props.credentialId,outcome);
+  else await props.proposalApi.close(conversationIdToClose,props.credentialId);
   if(conversationId.value===conversationIdToClose)conversationId.value='';
   await refreshConversationHistory();
   return true;
@@ -191,8 +192,9 @@ const savedKeys=candidates=>candidates.map(c=>[c.duration_minutes,c.preferred_st
 async function finishSaved(current,queue){
  savedNotice.value=`队列已保存 · ${current.target_label} · 共 ${current.entry_count} 项候选`;
  traceEvent('队列保存成功',`已写入“选择预约”队列（${current.target_date}）。`);
+ const archived=await closeCurrentConversation('saved');
  proposal.value=null;generatedFor.value=null;dispatch('SAVE_OK');clearConversation();
- await closeCurrentConversation();
+ if(!archived)error.value='队列已保存，但对话状态未能归档到历史记录。';
  emit('saved',{target_date:current.target_date,queue});emit('refresh-request');
 }
 async function confirmLanded(current,credentialId){

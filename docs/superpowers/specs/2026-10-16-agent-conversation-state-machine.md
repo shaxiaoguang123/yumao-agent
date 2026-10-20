@@ -2,7 +2,7 @@
 
 日期：2026-10-16  
 范围：预约意向对话、澄清、预览、保存前校验  
-建议编排：LangGraph 1.x；继续使用项目自己的模型 Provider 适配器
+建议编排：LangGraph 0.2.60；继续使用项目自己的模型 Provider 适配器
 
 ## 现状和问题
 
@@ -15,6 +15,8 @@
 采用 **LangGraph 状态图** 做有限、可审计的流程编排。流程需要条件分支、补问循环、人工审核节点和独立保存节点；这些正是 LangGraph 适用的控制流。Agent 仍通过 `AIProviderService` 调用当前 OpenAI-compatible Provider，不引入另一个模型 SDK，也不开放工具调用。
 
 这不是多个自主 Agent。它是一个预约助手，由几个职责单一的节点组成。预约执行器继续留在独立服务中。
+
+当前实现把会话全文和响应历史持久化在项目 SQLite 会话表中；续聊时先按用户和凭据读取，再调用 LangGraph，新对话则从初始消息开始。暂不另加 LangGraph checkpoint 存储，避免重复保存同一份对话状态。
 
 ## 对话状态
 
@@ -129,3 +131,9 @@ Agent 状态机终点是 `saved`。每日 D+2 的队列复核、07:30 校准、�
 6. 用 Codex 内置浏览器验证桌面与窄屏聊天界面；不触发真实预约或支付。
 
 选型依据：LangGraph 当前文档将它定位为可混合确定性步骤与模型步骤的状态编排运行时，支持分支、循环和人工审核；本项目不需要 Deep Agents 的文件系统、规划工具或子代理能力。参考 [LangGraph overview](https://docs.langchain.com/oss/python/langgraph/overview)、[Thinking in LangGraph](https://docs.langchain.com/oss/python/langgraph/thinking-in-langgraph) 和 [Human-in-the-loop interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)。
+
+## 当前实现记录（2026-10-20）
+
+- 依赖固定为 LangGraph 0.2.60。`QueuePlanningGraph` 将既有确定性解析和模型答疑/复核放在处理节点中，再路由到补问、审核、升级或不支持状态；不提供预约或付款工具。
+- `PlanningConversationStore` 是持久化来源：SQLite 中的响应历史保存工作流状态，行版本通过 CAS 拒绝并发覆盖；保存与取消会分别把末轮状态记为 `saved` 或 `cancelled`。
+- 候选队列仍通过人工队列 API 和计划版本校验保存。另建 LangGraph checkpoint 或拆分回合事件 API 不在这次改动中。
