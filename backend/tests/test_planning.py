@@ -31,9 +31,8 @@ class ScriptedProvider:
     def chat(self, user_id, messages, **_kw):
         self.calls.append(messages)
         reply = self.queue.pop(0) if len(self.queue) > 1 else self.queue[0]
-        if reply == OK and '追问排序器' in messages[0]['content']:
-            payload = json.loads(messages[-1]['content'])
-            reply = json.dumps({'field': payload['blocking_fields'][0]['field']})
+        if reply == OK and '羽毛球预约队列助手' in messages[0]['content']:
+            reply = json.dumps({'kind': 'question', 'reply': '1小时和2小时分开确认时间与场地，避免互相套用。'}, ensure_ascii=False)
         if isinstance(reply, Exception):
             raise reply
         return reply, {'name': '合成模型', 'model': 'synthetic-model'}
@@ -118,20 +117,21 @@ class ReadyTests(Base):
         for secret in ('cred-a', 'user_id', 'token'):
             self.assertNotIn(secret, text)
 
-    def test_model_ranks_open_fields_but_the_date_gate_stays_server_owned(self):
-        self.result('我想订场')
+    def test_model_cannot_change_the_required_stage_order(self):
+        result = self.result('后天 14-16 1号场')
+        self.assertEqual(result['conversation']['asking'], 'booking_mode')
         self.assertEqual(self.provider.calls, [])
-        self.provider.queue = [json.dumps({'field': 'courts_2h'})]
-        result = self.result('后天 14-16')
-        self.assertEqual(result['conversation']['asking'], 'courts_2h')
-        self.assertIn('号场', result['questions'][0])
-        self.assertEqual(self.provider.payload()['blocking_fields'][0]['field'], 'more_2h')
+        result = self.result('后天 14-16 1号场', answers=['3'], asked_fields=['booking_mode'])
+        self.assertEqual(result['conversation']['asking'], 'windows_1h')
+        self.assertEqual(self.provider.calls, [])
 
-    def test_model_cannot_choose_a_field_that_is_not_blocking(self):
-        self.provider.queue = [json.dumps({'field': 'target_date'})]
-        result = self.result('后天 14-16')
-        self.assertEqual(result['conversation']['asking'], 'more_2h')
-        self.assertIn('默认顺序', result['conversation']['notices'][-1])
+    def test_contextual_question_uses_model_and_keeps_the_current_step_open(self):
+        first = self.result('后天 14-16 1号场')
+        self.assertEqual(first['conversation']['asking'], 'booking_mode')
+        question = self.result('后天 14-16 1号场', answers=['这两种队列有什么区别？'], asked_fields=['booking_mode'])
+        self.assertEqual(question['conversation']['asking'], 'booking_mode')
+        self.assertIn('分开确认', question['conversation']['contextual_reply'])
+        self.assertEqual(question['conversation']['turn_kinds'], ['answer', 'question'])
 
     def test_warnings_are_cleaned_and_never_change_the_queue(self):
         self.provider.queue = [json.dumps({'warnings': ['你提到的 3 号场没有出现在队列里', 'x' * 200, 'sk-' + 'a' * 30, '  多  余  空格  ', '第四条'] })]
@@ -172,60 +172,62 @@ class ReadyTests(Base):
 class ConversationTests(Base):
     def test_questions_come_in_the_described_order_and_carry_asked_fields(self):
         first = self.result('我想订场')
-        self.assertEqual(first['conversation']['asking'], 'target_date')
-        second = self.result('我想订场', answers=['10月20日'], asked_fields=['target_date'])
-        self.assertEqual(second['conversation']['asking'], 'windows_2h')
-        self.assertIn('已记录：10月20日 周二', second['questions'][0])
-        third = self.result('我想订场', answers=['10月20日', '14-16'], asked_fields=['target_date', 'windows_2h'])
-        self.assertEqual(third['conversation']['asking'], 'more_2h')
+        self.assertEqual(first['conversation']['asking'], 'booking_mode')
+        second = self.result('我想订场', answers=['3'], asked_fields=['booking_mode'])
+        self.assertEqual(second['conversation']['asking'], 'target_date')
+        third = self.result('我想订场', answers=['3', '10月20日'], asked_fields=['booking_mode', 'target_date'])
+        self.assertEqual(third['conversation']['asking'], 'windows_2h')
+        fourth = self.result('我想订场', answers=['3', '10月20日', '14-16'],
+                             asked_fields=['booking_mode', 'target_date', 'windows_2h'])
+        self.assertEqual(fourth['conversation']['asking'], 'courts_2h')
+        self.assertIn('已记录：10月20日 周二', fourth['questions'][0])
 
     def test_the_view_describes_progress_for_the_ui(self):
-        view = self.result('10月20日 14-16')['conversation']
-        self.assertEqual([i['id'] for i in view['strip']], ['date', 'windows', 'courts', 'one'])
-        self.assertEqual(view['heading'], '候选时间')
-        self.assertEqual({i['id']: i['state'] for i in view['strip']}, {'date': 'done', 'windows': 'current', 'courts': 'empty', 'one': 'empty'})
+        view = self.result('10月20日 只抢2小时 14-16')['conversation']
+        self.assertEqual([i['id'] for i in view['strip']], ['mode', 'date', '2h', '1h'])
+        self.assertEqual(view['heading'], '2小时场地')
+        self.assertEqual({i['id']: i['state'] for i in view['strip']}, {'mode': 'done', 'date': 'done', '2h': 'current', '1h': 'off'})
         self.assertEqual([s['field'] for s in view['slots']], list(conv.PRIORITY))
         self.assertEqual((view['turns_used'], view['turns_max']), (0, conv.MAX_ANSWERS))
 
-    def test_the_one_hour_queue_is_a_second_stage(self):
-        message = '10月20日 14-16 不用候选 1号场'
+    def test_both_duration_queues_have_independent_windows_and_courts(self):
+        message = '10月20日 14-16 1号场，1小时15-16 3号场'
         result = self.result(message)
-        self.assertEqual(result['conversation']['asking'], 'want_1h')
-        result = self.result(message, answers=['要', '15-16', '不用', '1号场'],
-                             asked_fields=['want_1h', 'windows_1h', 'more_1h', 'courts_1h'])
         self.assertEqual(result['status'], 'ready')
-        self.assertEqual([(e['duration_minutes'], e['start_time']) for e in result['proposal']['entries']], [(120, '14:00'), (60, '15:00')])
+        self.assertEqual([(e['duration_minutes'], e['start_time'], e['court_preference']) for e in result['proposal']['entries']],
+                         [(120, '14:00', '1号场'), (60, '15:00', '3号场')])
 
-    def test_declining_both_durations_never_reactivates_a_queue(self):
-        message = '后天14-16 1号场 不要一小时 不要两个小时 不用候选'
+    def test_mode_is_required_even_when_duration_words_are_present(self):
+        message = '后天14-16 1号场 不要一小时 不要两个小时'
         result = self.result(message)
-        self.assertEqual((result['status'], result['conversation']['asking']), ('needs_input', 'want_1h'))
-        self.assertEqual(result['conversation']['phase'], 'repairing')
-        self.assertEqual(result['conversation']['heading'], '选择预约时长')
-        self.assertIn('目前没有可保存的候选', result['questions'][0])
+        self.assertEqual((result['status'], result['conversation']['asking']), ('needs_input', 'booking_mode'))
+        self.assertIn('只抢2小时', result['questions'][0])
         self.assertIsNone(result['proposal'])
-        strip = {item['id']: item for item in result['conversation']['strip']}
-        self.assertEqual(strip['windows']['display'], '')
-        self.assertEqual((strip['one']['state'], strip['one']['display']), ('current', '正在确认'))
         self.assertEqual(self.provider.calls, [])
 
-    def test_reenabling_a_duration_keeps_its_original_courts(self):
-        message = '后天14-16 1号场 不要一小时 不要两个小时 不用候选'
-        result = self.result(message, answers=['只要2小时'], asked_fields=['want_1h'])
+    def test_selecting_both_requires_a_separate_one_hour_court(self):
+        message = '后天14-16 1号场'
+        result = self.result(message, answers=['3'], asked_fields=['booking_mode'])
+        self.assertEqual(result['conversation']['asking'], 'windows_1h')
+        result = self.result(message, answers=['3', '15-16'], asked_fields=['booking_mode', 'windows_1h'])
+        self.assertEqual(result['conversation']['asking'], 'courts_1h')
+        result = self.result(message, answers=['3', '15-16', '3号场'],
+                             asked_fields=['booking_mode', 'windows_1h', 'courts_1h'])
         self.assertEqual(result['status'], 'ready')
         self.assertEqual([(entry['duration_minutes'], entry['court_preference'])
-                          for entry in result['proposal']['entries']], [(120, '1号场')])
+                          for entry in result['proposal']['entries']], [(120, '1号场'), (60, '3号场')])
 
     def test_overlap_is_explained_and_resolved_by_the_user(self):
-        message = '10月20日 14-16 15-17 不用候选'
+        message = '10月20日 只要2小时 14-16 15-17'
         result = self.result(message)
         self.assertEqual(result['conversation']['asking'], 'overlap_2h')
         self.assertIn('14-16 与 15-17', result['questions'][0])
-        result = self.result(message, answers=['去掉15-17', '1号场', '不用'], asked_fields=['overlap_2h', 'courts_2h', 'want_1h'])
+        result = self.result(message, answers=['去掉15-17', '1号场'], asked_fields=['overlap_2h', 'courts_2h'])
         self.assertEqual([e['start_time'] for e in result['proposal']['entries']], ['14:00'])
 
     def test_the_questions_never_mention_a_venue_or_minutes(self):
-        for message, answers, asked in (('我想订场', [], []), ('我想订场', ['10月20日'], ['target_date']), ('10月20日 14-16', [], [])):
+        for message, answers, asked in (('我想订场', [], []), ('我想订场', ['3'], ['booking_mode']),
+                                        ('10月20日 只抢2小时 14-16', [], [])):
             question = self.result(message, answers=answers or None, asked_fields=asked or None)['questions'][0]
             self.assertNotIn('场馆', question)
             self.assertNotIn('分钟', question)
@@ -236,7 +238,7 @@ class ConversationTests(Base):
         self.assertEqual(self.post(ONE_SHOT, answers=['好'], asked_fields=[None]).status_code, 200)
 
     def test_a_field_asked_three_times_hands_over_with_the_confirmed_date(self):
-        message = '10月20日 14-16 不用候选'
+        message = '10月20日 只要2小时 14-16'
         asked = ['courts_2h'] * 3
         result = self.result(message, answers=['不知道', '随便', '再说'], asked_fields=asked)
         view = result['conversation']
@@ -307,12 +309,16 @@ class SafetyTests(Base):
         self.assertEqual(latest.get_json()['conversation']['message'], '后天')
         self.assertEqual(latest.get_json()['conversation']['response_history'][0]['questions'], first.get_json()['questions'])
 
-        continued = self.post('后天', answers=['14-16'], asked_fields=['windows_2h'], conversation_id=conversation_id)
+        mode = self.post('后天', answers=['1'], asked_fields=['booking_mode'], conversation_id=conversation_id)
+        self.assertEqual(mode.status_code, 200)
+        continued = self.post('后天', answers=['1', '14-16'], asked_fields=['booking_mode', 'windows_2h'], conversation_id=conversation_id)
         self.assertEqual(continued.status_code, 200)
         restored = self.clients['a'].get('/api/planning/queue-conversations?credential_id=cred-a', headers=self.headers['a']).get_json()['conversation']
-        self.assertEqual(restored['answers'], ['14-16'])
-        self.assertEqual(len(restored['response_history']), 2)
-        self.assertIsNone(self.clients['b'].get('/api/planning/queue-conversations?credential_id=cred-b', headers=self.headers['b']).get_json()['conversation'])
+        self.assertEqual(restored['answers'], ['1', '14-16'])
+        self.assertEqual(len(restored['response_history']), 3)
+        other = self.clients['b'].get('/api/planning/queue-conversations?credential_id=cred-b', headers=self.headers['b']).get_json()
+        self.assertIsNone(other['conversation'])
+        self.assertEqual(other['conversations'], [])
         cross_user = self.clients['b'].post(
             '/api/planning/queue-proposals', json={'message':'后天','credential_id':'cred-b','conversation_id':conversation_id},
             headers=self.headers['b'],
@@ -323,20 +329,29 @@ class SafetyTests(Base):
             json={}, headers=self.headers['a'],
         )
         self.assertEqual(closed.status_code, 204)
-        self.assertIsNone(self.clients['a'].get('/api/planning/queue-conversations?credential_id=cred-a', headers=self.headers['a']).get_json()['conversation'])
+        history = self.clients['a'].get('/api/planning/queue-conversations?credential_id=cred-a', headers=self.headers['a']).get_json()
+        self.assertIsNone(history['conversation'])
+        self.assertEqual(history['conversations'][0]['conversation_id'], conversation_id)
+        self.assertEqual(history['conversations'][0]['status'], 'closed')
+        resumed = self.clients['a'].post(
+            f'/api/planning/queue-conversations/{conversation_id}/resume?credential_id=cred-a',
+            json={}, headers=self.headers['a'],
+        )
+        self.assertEqual(resumed.status_code, 200)
+        self.assertEqual(self.clients['a'].get('/api/planning/queue-conversations?credential_id=cred-a', headers=self.headers['a']).get_json()['conversation']['conversation_id'], conversation_id)
 
     def test_relative_date_uses_the_first_turn_business_date_across_midnight(self):
         first_ms = int(datetime(2026, 10, 10, 23, 59, tzinfo=ZoneInfo('Asia/Shanghai')).timestamp() * 1000)
         second_ms = int(datetime(2026, 10, 11, 0, 1, tzinfo=ZoneInfo('Asia/Shanghai')).timestamp() * 1000)
         timestamps = iter([first_ms * 1_000_000, second_ms * 1_000_000])
         with patch('backend.api.planning.time', SimpleNamespace(time_ns=lambda: next(timestamps))):
-            first_response = self.post('后天')
+            first_response = self.post('只抢2小时 后天')
             self.assertEqual(first_response.status_code, 200, first_response.get_json())
             first = first_response.get_json()
-            second = self.post('后天', answers=['14-16'], asked_fields=['windows_2h'],
+            second = self.post('只抢2小时 后天', answers=['14-16'], asked_fields=['windows_2h'],
                                conversation_id=first['conversation_id']).get_json()
-        self.assertEqual(first['conversation']['strip'][0]['display'], '10月12日 周一')
-        self.assertEqual(second['conversation']['strip'][0]['display'], '10月12日 周一')
+        self.assertEqual(first['conversation']['strip'][1]['display'], '10月12日 周一')
+        self.assertEqual(second['conversation']['strip'][1]['display'], '10月12日 周一')
 
     def test_propose_never_writes_and_the_ai_call_guard_applies(self):
         for message in (ONE_SHOT, '想订场', '帮我直接付款'):
@@ -454,19 +469,12 @@ class QueueSafetyRegressionTests(Base):
         self.assertEqual(common['status'], 'ready')
         self.assertEqual(len(common['proposal']['entries']), 4)
 
-    def test_window_specific_courts_stay_ambiguous_when_added_in_a_later_turn(self):
-        message = '后天14-16选1号场，不要一小时'
+    def test_window_specific_courts_stay_ambiguous_until_user_agrees_to_a_common_set(self):
+        message = '后天14-16选1号场，18-20选4号场，不要一小时'
         first = self.result(message)
-        self.assertEqual(first['conversation']['asking'], 'more_2h')
-        second = self.result(message, answers=['再加18-20选4号场'], asked_fields=['more_2h'])
-        self.assertEqual((second['status'], second['conversation']['asking']), ('needs_input', 'more_2h'))
-        third = self.result(message, answers=['再加18-20选4号场', '不用'],
-                            asked_fields=['more_2h', 'more_2h'])
-        self.assertEqual((third['status'], third['conversation']['asking']), ('needs_input', 'courts_2h'))
-        self.assertIn('不能直接交叉组合', third['questions'][0])
-        self.assertIsNone(second['proposal'])
-        agreed = self.result(message, answers=['再加18-20选4号场', '不用', '1号和4号'],
-                             asked_fields=['more_2h', 'more_2h', 'courts_2h'])
+        self.assertEqual(first['conversation']['asking'], 'courts_2h')
+        self.assertIn('不能直接交叉组合', first['questions'][0])
+        agreed = self.result(message, answers=['1号和4号'], asked_fields=['courts_2h'])
         self.assertEqual(agreed['status'], 'ready')
         self.assertEqual(len(agreed['proposal']['entries']), 4)
 
@@ -488,13 +496,12 @@ class QueueSafetyRegressionTests(Base):
                           for e in result['proposal']['entries']],
                          [('14:00', 120, '1号场'), ('18:00', 60, '4号场')])
 
-    def test_yes_for_one_hour_and_no_to_more_candidates_are_separate_answers(self):
-        message = '后天14-16，1号场，不要额外候选'
-        result = self.result(message, answers=['我要，15-16，不用候选'], asked_fields=['want_1h'])
+    def test_both_groups_require_independent_court_choices(self):
+        message = '后天14-16，1号场，1小时15-16'
+        result = self.result(message)
         self.assertEqual((result['status'], result['conversation']['asking']), ('needs_input', 'courts_1h'))
         self.assertIsNone(result['proposal'])
-        result = self.result(message, answers=['我要，15-16，不用候选', '3号场'],
-                             asked_fields=['want_1h', 'courts_1h'])
+        result = self.result(message, answers=['3号场'], asked_fields=['courts_1h'])
         self.assertEqual(result['status'], 'ready')
         self.assertEqual([(e['duration_minutes'], e['court_preference']) for e in result['proposal']['entries']],
                          [(120, '1号场'), (60, '3号场')])

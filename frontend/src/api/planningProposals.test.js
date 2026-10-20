@@ -17,10 +17,17 @@ describe('planning proposal API',()=>{
   await proposals.close('conversation-identifier-123','cred-1');
   expect(client.request.mock.calls[2]).toEqual(['/api/planning/queue-conversations/conversation-identifier-123/close?credential_id=cred-1',{method:'POST',body:{}}]);
  });
+ it('loads a selected history item and resumes it through the credential-scoped API',async()=>{
+  const {client,api:proposals}=api();
+  await proposals.restore('cred-1','conversation-identifier-123');
+  expect(client.request.mock.calls[0][0]).toBe('/api/planning/queue-conversations/conversation-identifier-123?credential_id=cred-1');
+  await proposals.resume('conversation-identifier-123','cred-1');
+  expect(client.request.mock.calls[1]).toEqual(['/api/planning/queue-conversations/conversation-identifier-123/resume?credential_id=cred-1',{method:'POST',body:{}}]);
+ });
  it('sends answers together with the field each earlier question was about',async()=>{
   const {client,api:proposals}=api();
-  await proposals.generate({message:'原话',credentialId:'cred-1',answers:['14-16','不用'],askedFields:['windows_2h','more_2h']});
-  expect(client.request.mock.calls[0][1].body).toEqual({message:'原话',credential_id:'cred-1',answers:['14-16','不用'],asked_fields:['windows_2h','more_2h']});
+  await proposals.generate({message:'原话',credentialId:'cred-1',answers:['3','14-16'],askedFields:['booking_mode','windows_2h']});
+  expect(client.request.mock.calls[0][1].body).toEqual({message:'原话',credential_id:'cred-1',answers:['3','14-16'],asked_fields:['booking_mode','windows_2h']});
  });
  it('keeps null entries so asked fields stay aligned with the answers',async()=>{
   const {client,api:proposals}=api();

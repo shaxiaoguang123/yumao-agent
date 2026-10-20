@@ -62,7 +62,7 @@ async function testParsing(model){
  const generation=epoch,id=session.user.user_id;testingId.value=model.id;testingKind.value='parsing';error.value='';notice.value='';parsingResult.value=null;
  try{const result=await api.testParsing(model.id);if(!valid(generation,id))return;
   parsingResult.value={...result,modelName:model.name};
-  if(result.outcome==='parsed')notice.value='连接正常，追问优先级与队列复核测试通过。测试不会保存预约队列。';
+  if(result.outcome==='parsed')notice.value='连接正常，上下文问答与队列复核测试通过。测试不会保存预约队列。';
   else if(result.outcome==='needs_input')notice.value='模型能够连接，但这条合成语句没有整理出完整队列。';
   else error.value='模型能够连接，但未能完成队列整理测试。';
  }catch(failure){if(valid(generation,id))error.value=testErrorMessage(failure?.code);}

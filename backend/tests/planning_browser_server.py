@@ -62,11 +62,10 @@ class SyntheticPlanningTransport:
             else:
                 evidence = {}
             return json.dumps({'status': 'ready', 'intent': intent, 'questions': [], 'evidence': evidence}, ensure_ascii=False)
+        if '判断用户最新一句是纯问题' in messages[0]['content']:
+            return json.dumps({'kind': 'question', 'reply': '两种队列的时间和场地分别确认，互不继承。'}, ensure_ascii=False)
         if config.model == 'synthetic-invalid-json':
             return 'not structured JSON'
-        if '追问排序器' in messages[0]['content']:
-            allowed = [item['field'] for item in payload['blocking_fields']]
-            return json.dumps({'field': allowed[0]}, ensure_ascii=False)
         if config.model == 'synthetic-warning':
             return json.dumps({'warnings': ['合成提示：请核对队列里的场地。']}, ensure_ascii=False)
         return json.dumps({'warnings': []})

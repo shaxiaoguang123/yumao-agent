@@ -45,7 +45,7 @@ def _queue_trace_event(result: dict, state: dict, now_utc_ms: int) -> dict:
         title, detail = "请求不属于整理范围", "助手不会代为查询、预约、付款或创建任务。"
     return {
         "submitted_title": "提交补充回答" if state["answers"] else "提交预约需求",
-        "submitted_detail": "继续核对必需信息。" if state["answers"] else "开始整理日期、2小时时段和场地。",
+        "submitted_detail": "继续核对必需信息。" if state["answers"] else "开始确认队列类型、日期、时段和场地。",
         "result_title": title, "result_detail": detail, "at_utc_ms": now_utc_ms,
     }
 
@@ -114,6 +114,7 @@ def queue_proposals():
     conversation_id = body.get("conversation_id")
     answers = body.get("answers") or []
     asked_fields = body.get("asked_fields")
+    previous_turn_kinds = ["answer"] * len(answers)
     if asked_fields is None:
         asked_fields = [None] * len(answers)
     state = {
@@ -128,6 +129,9 @@ def queue_proposals():
         previous = store.get(conversation_id, user_id, credential_id)
         if previous is None:
             raise PlanError("planning_conversation_not_found", 404)
+        replaying = len(answers) == len(previous["answers"])
+        previous_turn_kinds = previous.get("turn_kinds") or ["answer"] * (len(previous["answers"]) + 1)
+        state["turn_kinds"] = previous_turn_kinds if replaying else [*previous_turn_kinds, "answer"]
         store.validate_next(previous, state)
         business_date = date.fromisoformat(previous["business_date"])
     else:
@@ -137,9 +141,10 @@ def queue_proposals():
         result = current_app.extensions["planning_service"].propose(
             user_id, body["message"], now_utc_ms, credential_id=credential_id,
             answers=body.get("answers"), asked_fields=body.get("asked_fields"), scope_label=body.get("scope_label"),
-            reference_date=business_date,
+            reference_date=business_date, previous_turn_kinds=previous_turn_kinds,
         )
     result["conversation_id"] = conversation_id
+    state["turn_kinds"] = result["conversation"]["turn_kinds"]
     store.save(conversation_id, user_id, credential_id, business_date.isoformat(), state,
                {**result, "trace_event": _queue_trace_event(result, state, now_utc_ms)}, now_utc_ms)
     return jsonify(result)
@@ -152,7 +157,41 @@ def active_queue_conversation():
     user_id = g.session_context.user.user_id
     if not credential_id or current_app.extensions["credential_service"].get_for_user(user_id, credential_id) is None:
         raise PlanError("credential_not_found", 404)
-    return jsonify({"conversation": current_app.extensions["planning_conversation_store"].latest(user_id, credential_id)})
+    store = current_app.extensions["planning_conversation_store"]
+    return jsonify({"conversation": store.latest(user_id, credential_id),
+                    "conversations": store.list_recent(user_id, credential_id)})
+
+
+@planning_bp.get("/queue-conversations/<conversation_id>")
+@require_session
+def queue_conversation(conversation_id):
+    if not 20 <= len(conversation_id) <= 128:
+        raise PlanError("invalid_planning_request", 400)
+    user_id = g.session_context.user.user_id
+    credential_id = request.args.get("credential_id", "")
+    if not credential_id or current_app.extensions["credential_service"].get_for_user(user_id, credential_id) is None:
+        raise PlanError("credential_not_found", 404)
+    saved = current_app.extensions["planning_conversation_store"].get(conversation_id, user_id, credential_id)
+    if saved is None:
+        raise PlanError("planning_conversation_not_found", 404)
+    return jsonify({"conversation": saved})
+
+
+@planning_bp.post("/queue-conversations/<conversation_id>/resume")
+@require_session
+@require_csrf
+def resume_queue_conversation(conversation_id):
+    _body(set(), set())
+    if not 20 <= len(conversation_id) <= 128:
+        raise PlanError("invalid_planning_request", 400)
+    user_id = g.session_context.user.user_id
+    credential_id = request.args.get("credential_id", "")
+    if not credential_id or current_app.extensions["credential_service"].get_for_user(user_id, credential_id) is None:
+        raise PlanError("credential_not_found", 404)
+    store = current_app.extensions["planning_conversation_store"]
+    if not store.activate(conversation_id, user_id, credential_id, time.time_ns() // 1_000_000):
+        raise PlanError("planning_conversation_not_found", 404)
+    return jsonify({"conversation": store.get(conversation_id, user_id, credential_id)})
 
 
 @planning_bp.post("/queue-conversations/<conversation_id>/close")
@@ -164,7 +203,7 @@ def close_queue_conversation(conversation_id):
     if not 20 <= len(conversation_id) <= 128:
         raise PlanError("invalid_planning_request", 400)
     current_app.extensions["planning_conversation_store"].close(
-        conversation_id, g.session_context.user.user_id, request.args.get("credential_id", ""),
+        conversation_id, g.session_context.user.user_id, request.args.get("credential_id", ""), time.time_ns() // 1_000_000,
     )
     return "", 204
 
@@ -177,6 +216,6 @@ def close_intent_conversation(conversation_id):
     if not 20 <= len(conversation_id) <= 128:
         raise PlanError("invalid_planning_request", 400)
     current_app.extensions["planning_conversation_store"].close(
-        conversation_id, g.session_context.user.user_id, None, kind="intent",
+        conversation_id, g.session_context.user.user_id, None, time.time_ns() // 1_000_000, kind="intent",
     )
     return "", 204

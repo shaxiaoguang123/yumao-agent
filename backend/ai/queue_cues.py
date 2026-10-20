@@ -2,18 +2,20 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 _ONE = r"(?:1|一)(?:个)?(?:小时|钟头)"
 _TWO = r"(?:2|两|二)(?:个)?(?:小时|钟头)"
 ONE_HOUR = re.compile(_ONE)
 TWO_HOUR = re.compile(_TWO)
-_WANT = r"(?:要|订|选|需要|想要|想)?"
+_WANT = r"(?:要|订|选|抢|需要|想要|想)?"
 _ONLY = r"(?:只|仅|就)"
 _NOT = r"(?:不|无需|不需要|别|没有)(?:要|用|必|订|选|想|加)?"
 ONLY_ONE = re.compile(_ONLY + _WANT + r"(?:打)?" + _ONE)
 ONLY_TWO = re.compile(_ONLY + _WANT + r"(?:打)?" + _TWO)
 NO_ONE = re.compile(_NOT + r"(?:候选|备选|的)?" + _ONE)
 NO_TWO = re.compile(_NOT + r"(?:候选|备选|的)?" + _TWO)
+_BOTH_GROUPS = re.compile(r"(?:两种|两组|两个?时长).{0,12}(?:都|同时|分别|一起)|(?:都|同时|分别|一起).{0,12}(?:抢|订|排|安排)")
 
 NO_WORDS = ("不要", "不需要", "不用", "没有", "算了", "不加", "不必", "无需", "不想", "不了", "否", "没了", "不添", "不再", "不行", "不好", "no")
 YES_REPLY = re.compile(r"(?:^|[，。；,;!?！？\s])(?:我)?(?:要|需要|想要|加|可以|好的?|是的|同意|对|嗯|yes|ok|okay)(?=$|[，。；,;!?！？\s])", re.I)
@@ -36,6 +38,32 @@ _AFTER_REMOVE = ("去掉", "删掉", "删除", "取消", "不要了", "不用了
 
 def contains_any(text: str, words: tuple[str, ...]) -> bool:
     return any(word in text for word in words)
+
+
+def booking_mode(text: str, field_name: str | None, first: bool = False) -> str | None:
+    """Read an explicit duration choice; a lone 2h/1h window is not a choice."""
+    normalized = unicodedata.normalize("NFKC", text).strip().casefold()
+    if field_name == "booking_mode" or first:
+        choice = re.sub(r"[\s.,、:：()（）)）]+", "", normalized)
+        if re.fullmatch(r"(?:1|a)(?:[.、)）])?", choice):
+            return "two_hour_only"
+        if re.fullmatch(r"(?:2|b)(?:[.、)）])?", choice):
+            return "one_hour_only"
+        if re.fullmatch(r"(?:3|c)(?:[.、)）])?", choice):
+            return "both"
+    has_one, has_two = bool(ONE_HOUR.search(normalized)), bool(TWO_HOUR.search(normalized))
+    if _BOTH_GROUPS.search(normalized) and (has_one and has_two or re.search(r"两种|两组|两个?时长", normalized)):
+        return "both"
+    if ONLY_ONE.search(normalized):
+        return "one_hour_only"
+    if ONLY_TWO.search(normalized):
+        return "two_hour_only"
+    no_one, no_two = NO_ONE.search(normalized), NO_TWO.search(normalized)
+    if no_one and not no_two:
+        return "two_hour_only"
+    if no_two and not no_one:
+        return "one_hour_only"
+    return None
 
 
 def mode_before(text: str, pos: int, floor: int) -> str | None:

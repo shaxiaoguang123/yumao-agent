@@ -22,6 +22,8 @@ class PlanningConversationStore:
             "conversation_id": row["conversation_id"],
             "conversation_kind": row["conversation_kind"],
             "business_date": row["business_date"],
+            "status": row["status"],
+            "closed_at_utc_ms": row["closed_at_utc_ms"],
             **json.loads(row["state_json"]),
             "response_history": json.loads(row["response_history_json"]),
         }
@@ -29,7 +31,7 @@ class PlanningConversationStore:
     def get(self, conversation_id: str, user_id: str, credential_id: str | None, kind: str = "queue"):
         with closing(connect_database(self._database_path, self._busy_timeout_ms)) as db:
             row = db.execute(
-                "SELECT conversation_id, conversation_kind, business_date, state_json, response_history_json "
+                "SELECT conversation_id, conversation_kind, business_date, status, closed_at_utc_ms, state_json, response_history_json "
                 "FROM planning_conversations WHERE conversation_id=? AND user_id=? AND credential_id IS ? AND conversation_kind=?",
                 (conversation_id, user_id, credential_id, kind),
             ).fetchone()
@@ -38,12 +40,38 @@ class PlanningConversationStore:
     def latest(self, user_id: str, credential_id: str, kind: str = "queue"):
         with closing(connect_database(self._database_path, self._busy_timeout_ms)) as db:
             row = db.execute(
-                "SELECT conversation_id, conversation_kind, business_date, state_json, response_history_json "
+                "SELECT conversation_id, conversation_kind, business_date, status, closed_at_utc_ms, state_json, response_history_json "
                 "FROM planning_conversations WHERE user_id=? AND credential_id IS ? AND conversation_kind=? "
+                "AND status='active' "
                 "ORDER BY updated_at_utc_ms DESC, conversation_id DESC LIMIT 1",
                 (user_id, credential_id, kind),
             ).fetchone()
         return self._decode(row)
+
+    def list_recent(self, user_id: str, credential_id: str, kind: str = "queue", limit: int = 50) -> list[dict]:
+        with closing(connect_database(self._database_path, self._busy_timeout_ms)) as db:
+            rows = db.execute(
+                "SELECT conversation_id, business_date, status, updated_at_utc_ms, state_json, response_history_json "
+                "FROM planning_conversations WHERE user_id=? AND credential_id IS ? AND conversation_kind=? "
+                "ORDER BY updated_at_utc_ms DESC, conversation_id DESC LIMIT ?",
+                (user_id, credential_id, kind, min(max(limit, 1), 100)),
+            ).fetchall()
+        result = []
+        for row in rows:
+            state, history = json.loads(row["state_json"]), json.loads(row["response_history_json"])
+            latest = history[-1] if history else {}
+            slots = {item.get("field"): item for item in (latest.get("conversation") or {}).get("slots", [])}
+            target = slots.get("target_date", {}).get("display")
+            mode = slots.get("booking_mode", {}).get("display")
+            title = " · ".join(value for value in (target, mode) if value)
+            if not title:
+                title = " ".join(str(state.get("message", "")).split())[:56] or "预约对话"
+            preview = ((latest.get("conversation") or {}).get("contextual_reply")
+                       or next(iter(latest.get("questions") or []), "候选队列已整理" if latest.get("status") == "ready" else "继续补充预约信息"))
+            result.append({"conversation_id": row["conversation_id"], "business_date": row["business_date"],
+                           "status": row["status"], "updated_at_utc_ms": row["updated_at_utc_ms"],
+                           "title": title, "preview": preview})
+        return result
 
     @staticmethod
     def validate_next(previous: dict, state: dict) -> None:
@@ -55,6 +83,13 @@ class PlanningConversationStore:
                 or len(answers) not in (len(old_answers), len(old_answers) + 1)
                 or answers[:len(old_answers)] != old_answers):
             raise PlanError("planning_conversation_conflict", 409)
+        if previous.get("conversation_kind") == "queue":
+            old_kinds = previous.get("turn_kinds") or ["answer"] * (len(old_answers) + 1)
+            kinds = state.get("turn_kinds")
+            if (type(kinds) is not list or len(kinds) != len(answers) + 1
+                    or kinds[:len(old_kinds)] != old_kinds
+                    or any(kind not in {"answer", "question", "mixed"} for kind in kinds)):
+                raise PlanError("planning_conversation_conflict", 409)
         history = previous["response_history"]
         if "asked_fields" in state:
             expected = [item.get("conversation", {}).get("asking") for item in history[:len(answers)]]
@@ -75,6 +110,11 @@ class PlanningConversationStore:
 
         with closing(connect_database(self._database_path, self._busy_timeout_ms)) as db:
             db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "UPDATE planning_conversations SET status='closed',closed_at_utc_ms=COALESCE(closed_at_utc_ms,?) "
+                "WHERE user_id=? AND credential_id IS ? AND conversation_kind=? AND status='active' AND conversation_id<>?",
+                (now_utc_ms, user_id, credential_id, kind, conversation_id),
+            )
             row = db.execute(
                 "SELECT conversation_kind, user_id, credential_id, business_date, state_json, response_history_json "
                 "FROM planning_conversations WHERE conversation_id=?",
@@ -84,8 +124,8 @@ class PlanningConversationStore:
                 history = [response]
                 db.execute(
                     "INSERT INTO planning_conversations "
-                    "(conversation_id,conversation_kind,user_id,credential_id,business_date,state_json,response_history_json,created_at_utc_ms,updated_at_utc_ms) "
-                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    "(conversation_id,conversation_kind,user_id,credential_id,business_date,state_json,response_history_json,created_at_utc_ms,updated_at_utc_ms,status) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,'active')",
                     (conversation_id, kind, user_id, credential_id, business_date, state_json,
                      json.dumps(history, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
                      now_utc_ms, now_utc_ms),
@@ -96,6 +136,7 @@ class PlanningConversationStore:
                 previous = json.loads(row["state_json"])
                 history = json.loads(row["response_history_json"])
                 previous["response_history"] = history
+                previous["conversation_kind"] = row["conversation_kind"]
                 self.validate_next(previous, state)
                 old_answers, answers = previous["answers"], state["answers"]
                 if not history:
@@ -107,17 +148,41 @@ class PlanningConversationStore:
                 if len(history) > 21:
                     raise PlanError("planning_context_limit", 400)
                 db.execute(
-                    "UPDATE planning_conversations SET state_json=?,response_history_json=?,updated_at_utc_ms=? "
+                    "UPDATE planning_conversations SET state_json=?,response_history_json=?,updated_at_utc_ms=?,status='active',closed_at_utc_ms=NULL "
                     "WHERE conversation_id=? AND user_id=? AND credential_id IS ?",
                     (state_json, json.dumps(history, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
                      now_utc_ms, conversation_id, user_id, credential_id),
                 )
             db.commit()
 
-    def close(self, conversation_id: str, user_id: str, credential_id: str | None, kind: str = "queue") -> None:
+    def activate(self, conversation_id: str, user_id: str, credential_id: str, now_utc_ms: int,
+                 kind: str = "queue") -> bool:
         with closing(connect_database(self._database_path, self._busy_timeout_ms)) as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute(
-                "DELETE FROM planning_conversations WHERE conversation_id=? AND user_id=? "
-                "AND conversation_kind=? AND (credential_id IS ? OR ? IS NULL)",
-                (conversation_id, user_id, kind, credential_id, credential_id),
+                "UPDATE planning_conversations SET status='closed',closed_at_utc_ms=COALESCE(closed_at_utc_ms,?) "
+                "WHERE user_id=? AND credential_id IS ? AND conversation_kind=? AND status='active' AND conversation_id<>?",
+                (now_utc_ms, user_id, credential_id, kind, conversation_id),
             )
+            cursor = db.execute(
+                "UPDATE planning_conversations SET status='active',closed_at_utc_ms=NULL,updated_at_utc_ms=? "
+                "WHERE conversation_id=? AND user_id=? AND credential_id IS ? AND conversation_kind=?",
+                (now_utc_ms, conversation_id, user_id, credential_id, kind),
+            )
+            db.commit()
+        return cursor.rowcount == 1
+
+    def close(self, conversation_id: str, user_id: str, credential_id: str | None, now_utc_ms: int,
+              kind: str = "queue") -> None:
+        with closing(connect_database(self._database_path, self._busy_timeout_ms)) as db:
+            if kind == "intent":
+                db.execute(
+                    "DELETE FROM planning_conversations WHERE conversation_id=? AND user_id=? AND conversation_kind=? AND credential_id IS ?",
+                    (conversation_id, user_id, kind, credential_id),
+                )
+            else:
+                db.execute(
+                    "UPDATE planning_conversations SET status='closed',closed_at_utc_ms=? WHERE conversation_id=? AND user_id=? "
+                    "AND conversation_kind=? AND credential_id IS ?",
+                    (now_utc_ms, conversation_id, user_id, kind, credential_id),
+                )

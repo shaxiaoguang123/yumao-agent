@@ -22,11 +22,9 @@ MAX_ENTRIES = 32
 @dataclass
 class Group:
     minutes: int
-    wanted: bool | None = None
     windows: list[tuple[int, int]] = field(default_factory=list)
     issue: str | None = None
     issue_text: str = ""
-    more_done: bool = False
     acked: set = field(default_factory=set)
     courts: list[int] = field(default_factory=list)
     bad_courts: list[int] = field(default_factory=list)
@@ -36,6 +34,7 @@ class Group:
 
 @dataclass
 class Draft:
+    booking_mode: str | None = None
     date_state: str = "empty"
     dates: tuple = ()
     groups: dict[int, Group] = field(default_factory=lambda: {TWO: Group(TWO), ONE: Group(ONE)})
@@ -52,9 +51,9 @@ class Draft:
 
     def effective(self, minutes: int) -> bool:
         """Does this group take part in the queue?"""
-        if minutes == TWO:
-            return self.g2.wanted is not False
-        return self.g1.wanted is True or (self.g1.wanted is None and self.g2.wanted is False)
+        return self.booking_mode == "both" or (
+            self.booking_mode == "two_hour_only" and minutes == TWO
+        ) or (self.booking_mode == "one_hour_only" and minutes == ONE)
 
     def courts_of(self, minutes: int) -> list[int]:
         return self.groups[minutes].courts
@@ -112,7 +111,6 @@ def _apply_windows(draft: Draft, turn: str, field_name: str | None) -> None:
     touched: dict[int, tuple[str, str] | None] = {}
     replaced: set[int] = set()
     previous_mode, previous_stop = None, None
-    added = False
     for mention in scan.mentions:
         mode = cue.mode_before(text, mention.pos, cue.sentence_start(text, mention.pos))
         if mode is None and previous_stop is not None and cue.only_separators(text[previous_stop:mention.pos]):
@@ -143,61 +141,18 @@ def _apply_windows(draft: Draft, turn: str, field_name: str | None) -> None:
             group.windows.clear()
             group.acked.clear()
             replaced.add(minutes)
-        if mode == "only":
-            group.more_done = True
         tag = TAG[minutes]
         if field_name == f"overlap_{tag}" and mode is None and key in group.windows:
             group.windows = [w for w in group.windows if w == key or not overlaps(w, key)]
         elif key not in group.windows:
             group.windows.append(key)
-            added = True
         touched.setdefault(minutes, None)
     for minutes, outcome in touched.items():
         group = draft.groups[minutes]
         group.issue, group.issue_text = (outcome if outcome else (None, ""))
-    _hour_wishes(draft, text, field_name, scan, touched, added)
-
-
-def _hour_wishes(draft: Draft, text: str, field_name: str | None, scan, touched: dict, added: bool) -> None:
-    g1, g2 = draft.g1, draft.g2
-    only_one, only_two = cue.ONLY_ONE.search(text), cue.ONLY_TWO.search(text)
-    if only_one:
-        g1.wanted, g2.wanted = True, False
-    elif only_two:
-        g2.wanted, g1.wanted = True, False
-    if cue.NO_ONE.search(text) and not only_one:
-        g1.wanted = False
-    if cue.NO_TWO.search(text) and not only_two:
-        g2.wanted = False
-    plain = not scan.mentions
-    if field_name in ("windows_2h", "windows_1h") and plain and cue.contains_any(text, cue.NO_WORDS):
-        group = g2 if field_name == "windows_2h" else g1
-        group.issue, group.issue_text = None, ""
-        if not group.windows:
-            group.wanted = False
-    if field_name == "want_1h" and not (only_one or only_two):
-        if cue.NO_ONE.search(text):
-            g1.wanted = False
-        elif scan.mentions or cue.YES_REPLY.search(text) or cue.ONE_HOUR.search(text):
-            g1.wanted = True
-        elif cue.contains_any(text, cue.NO_WORDS):
-            g1.wanted = False
-    for minutes, outcome in touched.items():
-        group = draft.groups[minutes]
-        if group.wanted is None and (group.windows or outcome):
-            group.wanted = True
-    for group in (g1, g2):
-        if group.windows and group.wanted is None:
-            group.wanted = True
-    if field_name in ("more_2h", "more_1h"):
-        group = g2 if field_name == "more_2h" else g1
-        if not added and cue.contains_any(text, cue.NO_MORE):
-            group.more_done = True
-    if cue.NO_MORE_ANYWHERE.search(text):
-        g1.more_done = g2.more_done = True
     if field_name in ("overlap_2h", "overlap_1h"):
-        group = g2 if field_name == "overlap_2h" else g1
-        if cue.contains_any(text, cue.KEEP_STRONG) or (plain and cue.contains_any(text, cue.KEEP_WEAK)):
+        group = draft.g2 if field_name == "overlap_2h" else draft.g1
+        if cue.contains_any(text, cue.KEEP_STRONG) or (not scan.mentions and cue.contains_any(text, cue.KEEP_WEAK)):
             group.acked |= {frozenset(pair) for pair in overlapping_pairs(group.windows)}
 
 
@@ -222,16 +177,14 @@ def _apply_courts(draft: Draft, turn: str, field_name: str | None) -> None:
     if not mentions and field_name and field_name.startswith("courts_"):
         mentions = court_nlu.scan_bare_courts(turn)
     mentions.sort(key=lambda mention: mention.pos)
-    fallback = ONE if field_name and field_name.endswith("_1h") else TWO if (field_name and field_name.endswith("_2h")) or draft.effective(TWO) else ONE
+    fallback = ONE if (field_name and field_name.endswith("_1h")) or draft.booking_mode == "one_hour_only" else TWO
     floor = 0
     previous_mode, previous_stop = None, None
     for mention in mentions:
         preceding_text = text[floor:mention.pos]
         window, window_minutes = _preceding_window(scan, mention.pos)
         stated_minutes = cue.governing_hours(preceding_text)
-        both_disabled = draft.g1.wanted is False and draft.g2.wanted is False
-        target = stated_minutes or (window_minutes if window_minutes in (TWO, ONE)
-                                    and (draft.effective(window_minutes) or both_disabled) else fallback)
+        target = stated_minutes or (window_minutes if window_minutes in (TWO, ONE) else fallback)
         scoped_window = window if window_minutes == target else None
         floor = mention.pos + len(mention.text)
         group = draft.groups[target]
@@ -294,10 +247,28 @@ def _apply_courts(draft: Draft, turn: str, field_name: str | None) -> None:
         group.court_scope_ambiguous = len({tuple(bound) for bound in group.court_bindings.values()}) > 1
 
 
-def fold(turns: list[str], asked: list, today: date, *, reference_date: date | None = None) -> Draft:
+def fold(turns: list[str], asked: list, today: date, *, reference_date: date | None = None,
+         turn_kinds: list[str] | None = None) -> Draft:
     draft = Draft(asked=list(asked))
     reference_date = reference_date or today
+    turn_kinds = turn_kinds or ["answer"] * len(turns)
+    if len(turn_kinds) != len(turns):
+        raise ValueError("turn_kinds must match turns")
     for index, turn in enumerate(turns):
+        if turn_kinds[index] == "question":
+            continue
+        field_name = asked[index - 1] if index and index - 1 < len(asked) else None
+        mode = cue.booking_mode(turn, field_name, first=index == 0)
+        if mode:
+            draft.booking_mode = mode
+        scan = scan_windows(turn)
+        durations = {mention.end - mention.start for mention in scan.mentions
+                     if mention.kind == "range" and mention.start is not None and mention.end is not None}
+        if {TWO, ONE}.issubset(durations):
+            draft.booking_mode = "both"
+    for index, turn in enumerate(turns):
+        if turn_kinds[index] == "question":
+            continue
         field_name = asked[index - 1] if index and index - 1 < len(asked) else None
         _date_from(turn, reference_date, draft, field_name, index == 0)
         _apply_windows(draft, turn, field_name)
