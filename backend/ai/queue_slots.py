@@ -35,9 +35,9 @@ def _date_slot(draft: Draft, today: date) -> Slot:
 
 
 def _group_slots(draft: Draft, minutes: int, tag: str) -> dict[str, Slot]:
-    group, asks = draft.groups[minutes], Counter(draft.asked)
+    group = draft.groups[minutes]
     if not draft.effective(minutes):
-        return {f"{name}_{tag}": _off(f"{name}_{tag}") for name in ("windows", "more", "overlap", "courts")}
+        return {f"{name}_{tag}": _off(f"{name}_{tag}") for name in ("windows", "overlap", "courts")}
     windows, courts = f"windows_{tag}", f"courts_{tag}"
     if group.issue:
         detail = text.issue_detail(minutes, group.issue, group.issue_text)
@@ -48,11 +48,8 @@ def _group_slots(draft: Draft, minutes: int, tag: str) -> dict[str, Slot]:
     else:
         windows_slot = _slot(windows, SlotStatus.EMPTY, reason=Reason.MISSING)
     settled = windows_slot.status in _DONE
-    more_done = group.more_done or asks[f"more_{tag}"] >= 2
-    more = _slot(f"more_{tag}", SlotStatus.VERIFIED if more_done else SlotStatus.EMPTY, reason=None if more_done else Reason.MISSING,
-                 active=settled)
     pairs = [p for p in overlapping_pairs(group.windows) if frozenset(p) not in group.acked]
-    if pairs and asks[f"overlap_{tag}"] < 2:
+    if pairs:
         overlap = _slot(f"overlap_{tag}", SlotStatus.AMBIGUOUS, pairs, active=settled)
     else:
         overlap = _slot(f"overlap_{tag}", SlotStatus.VERIFIED, active=settled and len(group.windows) > 1)
@@ -66,25 +63,19 @@ def _group_slots(draft: Draft, minutes: int, tag: str) -> dict[str, Slot]:
         courts_slot = _slot(courts, SlotStatus.PROPOSED, list(group_courts), text.show_courts(group_courts))
     else:
         courts_slot = _slot(courts, SlotStatus.EMPTY, reason=Reason.MISSING)
-    return {windows: windows_slot, f"more_{tag}": more, f"overlap_{tag}": overlap, courts: courts_slot}
+    return {windows: windows_slot, f"overlap_{tag}": overlap, courts: courts_slot}
 
 
-def _want_slot(draft: Draft) -> Slot:
-    if draft.g1.wanted is False and draft.g2.wanted is False:
-        return _slot("want_1h", SlotStatus.INVALID, detail="both_disabled")
-    if draft.g2.wanted is False:
-        return _off("want_1h")
-    if draft.g1.wanted is True:
-        return _slot("want_1h", SlotStatus.VERIFIED, True, "要")
-    if draft.g1.wanted is False or Counter(draft.asked)["want_1h"] >= 2:
-        return _slot("want_1h", SlotStatus.VERIFIED, False, "不需要")
-    return _slot("want_1h", SlotStatus.EMPTY, reason=Reason.MISSING)
+def _mode_slot(draft: Draft) -> Slot:
+    labels = {"two_hour_only": "只抢2小时", "one_hour_only": "只抢1小时", "both": "1小时和2小时都抢（独立队列）"}
+    if draft.booking_mode is None:
+        return _slot("booking_mode", SlotStatus.EMPTY, reason=Reason.MISSING)
+    return _slot("booking_mode", SlotStatus.PROPOSED, draft.booking_mode, labels[draft.booking_mode])
 
 
 def build_slots(draft: Draft, today: date) -> dict[str, Slot]:
-    slots = {"target_date": _date_slot(draft, today)}
+    slots = {"booking_mode": _mode_slot(draft), "target_date": _date_slot(draft, today)}
     slots.update(_group_slots(draft, TWO, "2h"))
-    slots["want_1h"] = _want_slot(draft)
     slots.update(_group_slots(draft, ONE, "1h"))
     if draft.duration_issue:
         duration, minutes = draft.duration_issue
@@ -126,25 +117,28 @@ def window_summary(draft: Draft) -> list[dict]:
 
 
 def strip(draft: Draft, slots: dict[str, Slot], asking: str | None) -> list[dict]:
-    both_off = draft.g1.wanted is False and draft.g2.wanted is False
-    one_off = not draft.effective(ONE) and not both_off
-    items = [
-        ("date", "日期", ("target_date",), slots["target_date"].display),
-        ("windows", "2小时时段", ("windows_2h", "more_2h", "overlap_2h"), text.show_windows(draft.g2.windows) if draft.effective(TWO) else ""),
-        ("courts", "场地", ("courts_2h",), text.show_courts(draft.courts_of(TWO)) if draft.effective(TWO) else ""),
-        ("one", "1小时备选", ("want_1h", "windows_1h", "more_1h", "overlap_1h", "courts_1h"),
-         "不需要" if one_off and draft.g1.wanted is False else ("" if one_off or both_off else text.show_windows(draft.g1.windows))),
-    ]
+    items = [("mode", "队列类型", ("booking_mode",), slots["booking_mode"].display),
+             ("date", "日期", ("target_date",), slots["target_date"].display)]
+    for minutes, tag, label in ((TWO, "2h", "2小时"), (ONE, "1h", "1小时")):
+        members = (f"windows_{tag}", f"overlap_{tag}", f"courts_{tag}")
+        if not draft.effective(minutes):
+            items.append((tag, label, members, "本次不选"))
+            continue
+        display = " · ".join(value for value in (slots[members[0]].display, slots[members[2]].display) if value)
+        items.append((tag, label, members, display))
     result = []
     for ident, name, members, display in items:
         blocked = any(slots[m].blocking for m in members)
         if asking in members:
             state = "current"
-        elif display and not blocked:
+        elif display and display != "本次不选" and not blocked:
             state = "done"
+        elif display == "本次不选":
+            state = "off"
         else:
             state = "empty"
-        result.append({"id": ident, "label": name, "state": state, "display": display if state != "current" else display or "正在确认"})
+        result.append({"id": ident, "label": name, "state": state,
+                       "display": display if state not in ("current", "empty") else display or "正在确认"})
     return result
 
 
@@ -154,15 +148,21 @@ def recap(slots: dict[str, Slot], asking: str | None) -> str:
     parts = []
     for name in PRIORITY[:cutoff]:
         slot = slots[name]
-        if slot.status not in _DONE or not slot.active or not slot.display or name.startswith(("want", "more", "overlap")):
+        if slot.status not in _DONE or not slot.active or not slot.display or name == "booking_mode" or name.startswith("overlap"):
             continue
-        prefix = {"windows_2h": "2小时 ", "courts_2h": "场地 ", "windows_1h": "1小时 ", "courts_1h": "1小时场地 "}.get(name, "")
+        prefix = {"windows_2h": "2小时 ", "courts_2h": "2小时场地 ",
+                  "windows_1h": "1小时 ", "courts_1h": "1小时场地 "}.get(name, "")
         parts.append(prefix + slot.display)
     return "已记录：" + "；".join(parts) + "。" if parts else ""
 
 
 def question(slots: dict[str, Slot], asking: str, draft: Draft, today: date) -> str:
     slot = slots[asking]
+    if asking == "booking_mode":
+        return ("先选本次要排哪种队列：\n"
+                "1 / A：只抢2小时\n"
+                "2 / B：只抢1小时\n"
+                "3 / C：1小时和2小时都抢，两组的时间与场地分别确认。")
     if draft.duration_issue and asking in ("windows_2h", "windows_1h"):
         duration, _ = draft.duration_issue
         minutes = ONE if asking.endswith("_1h") else TWO

@@ -62,7 +62,8 @@ async function testParsing(model){
  const generation=epoch,id=session.user.user_id;testingId.value=model.id;testingKind.value='parsing';error.value='';notice.value='';parsingResult.value=null;
  try{const result=await api.testParsing(model.id);if(!valid(generation,id))return;
   parsingResult.value={...result,modelName:model.name};
-  if(result.outcome==='parsed')notice.value='连接正常，追问优先级与队列复核测试通过。测试不会保存预约队列。';
+  if(result.outcome==='parsed'&&result.question_check?.answered===true)notice.value='连接正常，上下文问答与队列复核测试通过。测试不会保存预约队列。';
+  else if(result.outcome==='parsed')notice.value='队列复核通过，但服务端没有返回上下文问答结果；Agent 上下文答疑尚未验证。';
   else if(result.outcome==='needs_input')notice.value='模型能够连接，但这条合成语句没有整理出完整队列。';
   else error.value='模型能够连接，但未能完成队列整理测试。';
  }catch(failure){if(valid(generation,id))error.value=testErrorMessage(failure?.code);}
@@ -101,7 +102,8 @@ onBeforeUnmount(()=>{alive=false;epoch++;sequence++;});
     <h3>{{ parsingResult.modelName }} · 队列整理测试</h3>
     <ol v-if="parsingResult.proposal?.entries?.length" class="parsing-entries"><li v-for="entry in parsingResult.proposal.entries" :key="`${entry.duration_minutes}-${entry.start_time}-${entry.court_preference}`">{{ entry.duration_minutes===120?'2小时':'1小时' }} {{ entry.start_time }}-{{ entry.end_time }} {{ entry.court_preference }}</li></ol>
     <ul v-if="parsingResult.questions?.length"><li v-for="(question,index) in parsingResult.questions" :key="index">{{ question }}</li></ul>
-    <p class="muted">使用服务器合成语句，验证模型能选择下一项追问并按格式复核队列；不保存队列，也不代表可执行预约。</p>
+    <p v-if="parsingResult.question_check?.answered===true" class="muted">使用服务器合成问题验证上下文答疑，并复核候选队列；不保存队列或调用预约、订单和支付接口。</p>
+    <p v-else class="muted">当前服务端未返回上下文答疑检查结果；本次结果不能证明 Agent 已通过完整能力测试。</p>
    </section>
    <button v-if="!adding&&!editing" class="secondary-button add-model" type="button" :disabled="busy" @click="adding=true">添加AI模型</button>
    <ModelEditorForm v-if="adding||editing" :model="editing" :initial-preset="preset" :busy="busy||discovering" :discover-busy="discovering" :discovered-models="discoveredModels" :discovery-error="discoveryError" @submit="saveModel" @cancel="cancelEdit" @discover="discoverModels" @clear-discovery="clearDiscovery" />

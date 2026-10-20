@@ -9,14 +9,24 @@ const ENTRIES=[entry('1号场','14:00','16:00'),entry('4号场','14:00','16:00')
 const proposal=(over={})=>({kind:'manual_queue_draft',target_date:'2026-10-20',target_label:'10月20日 周二',entries:ENTRIES,entry_count:4,base_version:0,existing_count:0,replaces_existing:false,
  schedule:{state:'scheduled',text:'10月18日 周日 07:30 开票时自动执行。'},execution_note:'执行时从上往下依次尝试，抢到第一个就停，所以顺序就是优先级。',warnings:[],review:{state:'reviewed',attempts:1},
  provider:{name:'Test provider',model:'test-model'},can_book:false,can_pay:false,can_create_job:false,can_query_upstream:false,...over});
-const strip=(over={})=>[{id:'date',label:'日期',state:'done',display:'10月20日 周二'},{id:'windows',label:'2小时时段',state:'current',display:''},{id:'courts',label:'场地',state:'empty',display:''},{id:'one',label:'1小时备选',state:'empty',display:''}];
-const conversation=(over={})=>({phase:'collecting',asking:'windows_2h',heading:'2小时时段',reason:'missing',turns_used:0,turns_max:20,attempts:{},slots:[],strip:strip(),escalation:null,notices:[],...over});
+const slotList=()=>[
+ {field:'booking_mode',status:'proposed',display:'只抢2小时',active:true},
+ {field:'target_date',status:'proposed',display:'10月20日 周二',active:true},
+ {field:'windows_2h',status:'empty',display:'',active:true},
+ {field:'overlap_2h',status:'verified',display:'',active:false},
+ {field:'courts_2h',status:'empty',display:'',active:true},
+ {field:'windows_1h',status:'verified',display:'',active:false},
+ {field:'overlap_1h',status:'verified',display:'',active:false},
+ {field:'courts_1h',status:'verified',display:'',active:false},
+];
+const strip=()=>[{id:'mode',label:'队列类型',state:'done',display:'只抢2小时'},{id:'date',label:'日期',state:'done',display:'10月20日 周二'},{id:'2h',label:'2小时',state:'current',display:'正在确认'},{id:'1h',label:'1小时',state:'off',display:'本次不选'}];
+const conversation=(over={})=>({phase:'collecting',asking:'windows_2h',heading:'2小时时段',reason:'missing',turns_used:0,turns_max:20,attempts:{},slots:slotList(),strip:strip(),escalation:null,notices:[],...over});
 const ready=(over={},prop={})=>({status:'ready',questions:[],proposal:proposal(prop),conversation:conversation({phase:'ready',asking:null,heading:null,...over})});
 const ask=(text,over={})=>({status:'needs_input',questions:[text],proposal:null,conversation:conversation(over)});
 
 function fixture({result=ready(),credentialId='credential-a',scopeLabel='羽毛球',saveQueue,queue}={}){
  const planApi={saveQueue:saveQueue||vi.fn(async()=>({queue:{plan_id:'q',version:1,candidates:[]}})),queue:queue||vi.fn(async()=>({queue:null}))};
- const proposalApi={generate:vi.fn(async()=>structuredClone(result)),restore:vi.fn(async()=>({conversation:null})),close:vi.fn(async()=>({}))};
+ const proposalApi={generate:vi.fn(async()=>structuredClone(result)),restore:vi.fn(async()=>({conversation:null,conversations:[]})),resume:vi.fn(async()=>({conversation:null})),close:vi.fn(async()=>({}))};
  const session=reactive({status:'authenticated',user:{user_id:'owner'},csrfToken:'csrf-a'});
  return {planApi,proposalApi,session,credentialId,scopeLabel,credentialApi:null,credentialRefreshKey:0};
 }
@@ -27,13 +37,15 @@ async function mountAssistant(config=fixture()){
 }
 const send=async(wrapper,text)=>{await wrapper.get('[data-testid="proposal-message"]').setValue(text);await wrapper.get('[data-testid="generate-proposal"]').trigger('click');await flushPromises();};
 const reply=async(wrapper,text)=>{await wrapper.get('[data-testid="proposal-answer"]').setValue(text);await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();};
-const stripOf=wrapper=>Object.fromEntries(wrapper.findAll('.slot-strip li').map(li=>[li.get('span').text(),li.get('strong').text()]));
-
 describe('queue assistant: asking',()=>{
- it('opens with an example and no mode choice',async()=>{
+ it('opens with duration choices and optional structured selectors',async()=>{
   const {wrapper}=await mountAssistant();
-  expect(wrapper.text()).toContain('后天 14-16 和 18-20，1号和4号场');
+  expect(wrapper.text()).toContain('1 / A 只抢2小时');
+  expect(wrapper.text()).toContain('2 / B 只抢1小时');
+  expect(wrapper.text()).toContain('3 / C 两种都抢');
   expect(wrapper.find('.proposal-mode-picker').exists()).toBe(false);
+  expect(wrapper.get('[data-testid="proposal-field-mode"]').exists()).toBe(true);
+  expect(wrapper.get('[data-testid="proposal-field-windows-1h"]').exists()).toBe(true);
   expect(wrapper.text()).not.toContain('新建');expect(wrapper.text()).not.toContain('场馆');
  });
 
@@ -44,13 +56,68 @@ describe('queue assistant: asking',()=>{
   expect(wrapper.text()).toContain('想订哪一天？');
  });
 
- it('shows the server heading and the server-driven progress strip',async()=>{
-  const {wrapper}=await mountAssistant(fixture({result:ask('2小时要哪个时间段？')}));
+ it('fills structured choices into the chat input without sending them',async()=>{
+  const {wrapper,proposalApi}=await mountAssistant();
+  await wrapper.get('.proposal-field-shortcuts > summary').trigger('click');
+  await wrapper.get('[data-testid="proposal-field-mode"]').setValue('只要2小时');
+  await wrapper.get('[data-testid="proposal-field-windows-2h"]').setValue('14-16');
+  const value=wrapper.get('[data-testid="proposal-message"]').element.value;
+  expect(value).toContain('队列类型：只要2小时');expect(value).toContain('2小时时段：14-16');
+  expect(proposalApi.generate).not.toHaveBeenCalled();
+ });
+
+ it('uses the duration quick choice as the first chat turn',async()=>{
+  const config=fixture({result:ask('想订哪一天？',{asking:'target_date',heading:'日期'})});
+  const {wrapper,proposalApi}=await mountAssistant(config);
+  await wrapper.get('.mode-quick-choices button').trigger('click');
+  expect(proposalApi.generate).toHaveBeenCalledWith({message:'1',credentialId:'credential-a',answers:[],askedFields:[],scopeLabel:'羽毛球'});
+ });
+
+ it('lists and resumes a prior conversation for the selected credential',async()=>{
+  const saved={conversation_id:'history-conversation-12345',business_date:'2026-10-18',message:'后天想订场',answers:[],asked_fields:[],scope_label:'羽毛球',response_history:[ask('先选择队列类型。',{asking:'booking_mode',heading:'选择队列类型'})]};
+  const config=fixture();
+  config.proposalApi.restore=vi.fn(async()=>({conversation:null,conversations:[{conversation_id:saved.conversation_id,title:'10月20日 · 只抢2小时',preview:'确认场地',status:'closed',updated_at_utc_ms:Date.UTC(2026,9,18)}]}));
+  config.proposalApi.resume=vi.fn(async()=>({conversation:saved}));
+  const {wrapper,proposalApi}=await mountAssistant(config);
+  expect(wrapper.text()).toContain('10月20日 · 只抢2小时');
+  await wrapper.get('.conversation-history-item').trigger('click');
+  expect(proposalApi.resume).toHaveBeenCalledWith(saved.conversation_id,'credential-a');
+  expect(wrapper.text()).toContain('后天想订场');
+  expect(wrapper.text()).not.toContain('这条对话暂时无法恢复');
+ });
+
+ it('restores a ready queue preview without reporting a false recovery error',async()=>{
+  const saved={conversation_id:'ready-conversation-12345',message:'3',answers:[],asked_fields:[],scope_label:'羽毛球',response_history:[ready()]};
+  const config=fixture();config.proposalApi.restore=vi.fn(async()=>({conversation:saved,conversations:[]}));
+  const {wrapper}=await mountAssistant(config);
+  expect(wrapper.get('[data-testid="queue-preview"]').exists()).toBe(true);
+  expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(false);
+  expect(wrapper.text()).not.toContain('已保存的对话暂时无法恢复');
+ });
+
+ it('locks the composer until the current conversation is archived before starting a new one',async()=>{
+  let finishClose;
+  const config=fixture({result:{...ready(),conversation_id:'conversation-to-archive-123'}});
+  config.proposalApi.close=vi.fn(()=>new Promise(resolve=>{finishClose=resolve;}));
+  const {wrapper}=await mountAssistant(config);
+  await send(wrapper,'我想订场');
+  await wrapper.get('[data-testid="restart-conversation"]').trigger('click');
+  await flushPromises();
+  expect(wrapper.get('[data-testid="proposal-message"]').element.disabled).toBe(true);
+  expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(true);
+  finishClose();
+  await flushPromises();
+  expect(wrapper.get('[data-testid="proposal-message"]').element.disabled).toBe(false);
+  expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('');
+ });
+
+ it('shows the server heading and an independent collapsed queue preview',async()=>{
+  const {wrapper}=await mountAssistant(fixture({result:ask('2小时要哪个时间段？',{asking:'courts_2h',heading:'2小时场地'})}));
   await send(wrapper,'后天');
-  expect(wrapper.get('.chat-bubble strong').text()).toBe('2小时时段');
-  expect(stripOf(wrapper)).toEqual({日期:'10月20日 周二','2小时时段':'正在确认',场地:'未填写','1小时备选':'未填写'});
-  expect(wrapper.findAll('.slot-strip li')).toHaveLength(4);
-  expect(wrapper.findAll('.slot-strip li')[1].classes()).toContain('is-current');
+  expect(wrapper.get('.chat-bubble strong').text()).toBe('2小时场地');
+  expect(wrapper.findAll('.slot-strip li')).toHaveLength(0);
+  expect(wrapper.get('.queue-preview-details summary').text()).toContain('队列预览');
+  expect(wrapper.text()).toContain('2小时队列');
  });
 
  it('echoes the field each earlier question was about so the server can count repeats',async()=>{
@@ -73,6 +140,7 @@ describe('queue assistant: asking',()=>{
   const config=fixture();config.proposalApi.restore=vi.fn(async()=>({conversation:saved}));
   const {wrapper,proposalApi}=await mountAssistant(config);
   expect(wrapper.text()).toContain('想订场');expect(wrapper.text()).toContain('后天');expect(wrapper.text()).toContain('2小时要哪个时间段？');expect(wrapper.text()).toContain('服务端保存的轨迹。');
+  expect(wrapper.text()).not.toContain('已保存的对话暂时无法恢复');
   await reply(wrapper,'14-16');
   expect(proposalApi.generate).toHaveBeenCalledWith(expect.objectContaining({conversationId:'conversation-identifier-123',answers:['后天','14-16'],askedFields:['target_date','windows_2h']}));
  });
@@ -131,11 +199,12 @@ describe('queue assistant: preview and save',()=>{
  });
 
  it('saves through the manual-queue endpoint with the version it was built on',async()=>{
-  const config=fixture({result:ready({},{base_version:3,existing_count:2,replaces_existing:true})});
+  const config=fixture({result:{...ready({},{base_version:3,existing_count:2,replaces_existing:true}),conversation_id:'saved-conversation-123'}});
   const {wrapper,planApi}=await mountAssistant(config);await send(wrapper,'后天 14-16 和 18-20，1号4号场');
   expect(wrapper.get('[data-testid="replace-warning"]').text()).toContain('已经有 2 项候选');
   await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
   expect(planApi.saveQueue).toHaveBeenCalledWith('2026-10-20',3,ENTRIES,'credential-a');
+  expect(config.proposalApi.close).toHaveBeenCalledWith('saved-conversation-123','credential-a','saved');
   expect(wrapper.text()).toContain('队列已保存 · 10月20日 周二 · 共 4 项候选');
   expect(wrapper.emitted('saved')[0][0].target_date).toBe('2026-10-20');expect(wrapper.emitted('refresh-request')).toHaveLength(1);
   expect(wrapper.find('[data-testid="queue-preview"]').exists()).toBe(false);

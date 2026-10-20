@@ -7,7 +7,8 @@ from backend.ai.nlu.dates import WEEKDAY_NAMES
 from backend.ai.nlu.windows import ISSUE_TEXT, clock, label
 
 HOURS = {120: "2小时", 60: "1小时"}
-SLOT_LABEL = {"target_date": "日期", "windows_2h": "2小时时段", "courts_2h": "2小时场地", "want_1h": "1小时备选"}
+SLOT_LABEL = {"booking_mode": "队列类型", "target_date": "日期", "windows_2h": "2小时时段", "courts_2h": "2小时场地",
+              "windows_1h": "1小时时段", "courts_1h": "1小时场地"}
 EXECUTION_NOTE = "执行时从上往下依次尝试，抢到第一个就停，所以顺序就是优先级。"
 
 
@@ -61,12 +62,8 @@ def ask(slot_id: str, *, detail: str | None, repeated: bool, today: date, pairs=
         if minutes == 120:
             return (f"{HOURS[minutes]}要哪个时间段？写开始到结束就行，例如“14-16”，可以写多个：“14-16、18-20”。"
                     if not repeated else f"还没读到{HOURS[minutes]}的时间段。请写成“14-16”这样，也可以写多个。")
-        return (f"1小时备选要哪个时间段？例如“14-15”，可以写多个：“14-15、18-19”。"
+        return (f"1小时队列要哪个时间段？例如“14-15”，可以写多个：“14-15、18-19”。"
                 if not repeated else "还没读到1小时的时间段。请写成“14-15”这样，也可以写多个。")
-    if slot_id in ("more_2h", "more_1h"):
-        minutes = 120 if slot_id.endswith("2h") else 60
-        extra = "15-17" if minutes == 120 else "15-16"
-        return (f"{HOURS[minutes]}还要再加候选时间吗？前面的时间抢不到时，会按顺序试这些。要就直接写，例如“{extra}”；不要就回“不用”。")
     if slot_id in ("overlap_2h", "overlap_1h"):
         shown = "；".join(f"{label(*a)} 与 {label(*b)}" for a, b in (pairs or []))
         return (f"这些时间段有重叠：{shown}。重叠的只是备选，会按顺序试，不会冲突。"
@@ -75,11 +72,6 @@ def ask(slot_id: str, *, detail: str | None, repeated: bool, today: date, pairs=
         minutes = 120 if slot_id.endswith("2h") else 60
         if detail:
             return f"{detail}\n请重新说场地，例如“1号和4号”。"
-        who = ("每个时间段都用同一组场地。" if minutes == 120
-               else "和2小时队列分开选择；每个1小时时段都用同一组场地。")
+        who = "每个2小时时段都用同一组场地。" if minutes == 120 else "和2小时队列分开确认；每个1小时时段都用同一组场地。"
         return f"{HOURS[minutes]}要订哪几号场？{who}例如“1号和4号”（1～10号）。"
-    if slot_id == "want_1h":
-        if detail == "both_disabled":
-            return "你说1小时和2小时都不需要，所以目前没有可保存的候选。若还想预约，请明确选择一种，例如“只要2小时”；如果都不需要，可以取消本次整理。"
-        return "还要加1小时的备选吗？2小时抢不到时才会试它。要就回“要”，不要就回“不用”。"
     return "请再补充一下。"

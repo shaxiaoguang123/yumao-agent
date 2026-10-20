@@ -15,6 +15,7 @@ from backend.api.plans import plans_bp
 from backend.api.planning import planning_bp
 from backend.ai.planning import PlanningService
 from backend.ai.conversation_store import PlanningConversationStore
+from backend.ai.queue_graph import QueuePlanningGraph
 from backend.ai.intent_planning import IntentPlanningService
 from backend.api.availability_simulation import availability_simulation_bp
 from backend.api.availability_history import availability_history_bp
@@ -227,6 +228,7 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
     app.extensions["planning_service"] = PlanningService(
         app.extensions["plan_service"], app.extensions["ai_provider_service"],
     )
+    app.extensions["queue_planning_graph"] = QueuePlanningGraph()
     app.extensions["planning_conversation_store"] = PlanningConversationStore(
         settings.database_path, settings.sqlite_busy_timeout_ms,
     )

@@ -79,9 +79,8 @@ class AIModelTests(unittest.TestCase):
         self.service.set_preferences('user-a',selected['id'],None)
         def reply(config,messages):
             self.transport.calls.append((config,messages))
-            if '追问排序器' in messages[0]['content']:
-                payload=json.loads(messages[-1]['content'])
-                return json.dumps({'field':payload['blocking_fields'][0]['field']})
+            if '判断用户最新一句是纯问题' in messages[0]['content']:
+                return json.dumps({'kind':'question','reply':'场地和时段会按队列类型分别核对。'},ensure_ascii=False)
             return json.dumps({'warnings':[]})
         self.transport.chat=reply
         endpoint='/api/ai/models/'+tested['id']+'/test-parsing'
@@ -89,12 +88,13 @@ class AIModelTests(unittest.TestCase):
         self.assertEqual(response.status_code,200)
         body=response.get_json()
         self.assertEqual(body['outcome'],'parsed')
+        self.assertEqual(body['question_check'],{'answered':True})
         self.assertTrue(body['proposal']['entries'])
-        self.assertEqual(self.transport.calls[-1][0].provider_id,tested['id'])
+        self.assertEqual([call[0].provider_id for call in self.transport.calls],[tested['id'],tested['id']])
         self.assertEqual(self.service.list_models('user-a')['selected_model_id'],selected['id'])
         self.assertEqual(self.b.post(endpoint,json={},headers=self._headers(self.csrf_b)).status_code,404)
         self.assertEqual(len(self.transport.calls),2)
-        self.assertIn('追问排序器',self.transport.calls[0][1][0]['content'])
+        self.assertIn('判断用户最新一句是纯问题',self.transport.calls[0][1][0]['content'])
         with connect_database(self.path,5000) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM booking_plan_revisions').fetchone()[0],0)
         self.assertEqual(self.app.test_client().post(endpoint,json={},headers=self._headers()).status_code,401)

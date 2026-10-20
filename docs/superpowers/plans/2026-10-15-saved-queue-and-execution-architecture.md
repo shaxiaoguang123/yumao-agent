@@ -1,6 +1,6 @@
 # Saved Queue and Execution Queue Architecture
 
-Status: design only. This revision records the requested schedule and current protocol evidence; it has not implemented a booking worker, scheduler, reservation submission, CAPTCHA bypass, or payment.
+Status: implementation exists, but live execution is not enabled or verified. `backend/execution/` contains the per-credential scheduler, candidate reconciliation, reservation/payment protocol, and order verification. `BOOKING_EXECUTION_ENABLED` defaults to false; the worker is a separately launched process. Automated execution tests use synthetic upstream replies, and live account checks are limited to read-only validation and availability. This document remains the safety and acceptance checklist for any live execution rollout.
 
 ## User-confirmed schedule contract
 
@@ -149,4 +149,4 @@ The worker may decrypt the Token only around an approved request callback. For t
 4. **Reservation adapter:** only after reviewed protocol evidence and the saved-queue authorization boundary are clear, add a narrowly scoped reservation request; require authoritative reconciliation and keep payment disabled until its amount and retry gates are implemented.
 5. **Payment:** implement the requested stage only after order identity, amount, payment-password wire format, per-credential price ceiling, and retry/reconciliation behavior are proven.
 
-No execution layer is implemented in this branch. The present UI and APIs continue to save and read intent only.
+The execution layer is implemented separately from saved queue revisions. It pins a queue revision, creates a candidate snapshot, refreshes availability before execution, and records run stages. The runtime must keep booking execution disabled until the request/response contract, physical venue mapping, order reconciliation, and payment behavior have been accepted. No real reservation or payment was performed during the current Agent verification.

@@ -2,7 +2,7 @@
 
 Everything that decides *what happens next* is a pure function of the user's own
 words (see queue_draft.fold), so the flow cannot loop because a model repeated
-itself. A slot that does not apply (no 1-hour fallback wanted) is inactive and never blocks.
+itself. A duration excluded by the chosen queue mode is inactive and never blocks.
 """
 from __future__ import annotations
 
@@ -33,11 +33,12 @@ class Reason(str, Enum):
     INVALID = "invalid"
 
 
-# Order is the order questions are asked.
+# Order is the order questions are asked. The duration choice is mandatory and
+# each active duration group is completed before the next one begins.
 PRIORITY = (
-    "target_date",
-    "windows_2h", "more_2h", "overlap_2h", "courts_2h",
-    "want_1h", "windows_1h", "more_1h", "overlap_1h", "courts_1h",
+    "booking_mode", "target_date",
+    "windows_2h", "overlap_2h", "courts_2h",
+    "windows_1h", "overlap_1h", "courts_1h",
 )
 MAX_ANSWERS = 20
 MAX_ASKS_PER_FIELD = 3

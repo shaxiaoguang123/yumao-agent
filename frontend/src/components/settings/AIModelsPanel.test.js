@@ -97,6 +97,12 @@ describe('AI models settings',()=>{
  it('only calls parsing on explicit click and renders needs-input results',async()=>{
   const api=fixture({testParsing:vi.fn(async()=>({ok:false,outcome:'needs_input',questions:['请补充场馆'],proposal:null}))});const {wrapper}=await mountPanel(api);expect(api.testParsing).not.toHaveBeenCalled();await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(api.testParsing).toHaveBeenCalledWith('model-1');expect(wrapper.text()).toContain('模型能够连接，但这条合成语句没有整理出完整队列');expect(wrapper.text()).toContain('请补充场馆');
  });
+ it('reports full Agent capability only when the server returns a passing context check',async()=>{
+  const api=fixture({testParsing:vi.fn(async()=>({ok:true,outcome:'parsed',question_check:{answered:true},proposal:{entries:[{duration_minutes:120,start_time:'14:00',end_time:'16:00',court_preference:'1号场'}]}}))});const {wrapper}=await mountPanel(api);await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('上下文问答与队列复核测试通过');expect(wrapper.text()).toContain('验证上下文答疑');
+ });
+ it('does not claim context testing when an older server omits the result',async()=>{
+  const api=fixture({testParsing:vi.fn(async()=>({ok:true,outcome:'parsed',proposal:{entries:[]}}))});const {wrapper}=await mountPanel(api);await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('Agent 上下文答疑尚未验证');expect(wrapper.text()).not.toContain('上下文问答与队列复核测试通过');expect(wrapper.text()).toContain('不能证明 Agent 已通过完整能力测试');
+ });
  it.each([
   ['provider_access_denied','没有访问权限'],['provider_model_or_endpoint_not_found','模型或接口地址不存在'],['provider_rate_limited','服务商请求过于频繁'],['provider_response_invalid','不符合兼容接口要求'],['invalid_model_proposal','没有按要求的格式返回复核结果'],['ai_call_in_progress','已有模型调用正在进行'],['ai_call_rate_limited','模型调用过于频繁'],
  ])('uses actual backend category %s for parsing failure',async(code,text)=>{

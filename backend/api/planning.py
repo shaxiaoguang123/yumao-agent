@@ -45,9 +45,25 @@ def _queue_trace_event(result: dict, state: dict, now_utc_ms: int) -> dict:
         title, detail = "请求不属于整理范围", "助手不会代为查询、预约、付款或创建任务。"
     return {
         "submitted_title": "提交补充回答" if state["answers"] else "提交预约需求",
-        "submitted_detail": "继续核对必需信息。" if state["answers"] else "开始整理日期、2小时时段和场地。",
+        "submitted_detail": "继续核对必需信息。" if state["answers"] else "开始确认队列类型、日期、时段和场地。",
         "result_title": title, "result_detail": detail, "at_utc_ms": now_utc_ms,
     }
+
+
+def _queue_signature(entries: object) -> list[tuple]:
+    if type(entries) is not list or not entries:
+        return []
+    result = []
+    for entry in entries:
+        if type(entry) is not dict:
+            return []
+        courts = entry.get("court_preferences")
+        starts = entry.get("preferred_start_times")
+        court = entry.get("court_preference") or (courts[0] if type(courts) is list and courts else None)
+        start = entry.get("start_time") or (starts[0] if type(starts) is list and starts else None)
+        result.append((entry.get("duration_minutes"), start, court,
+                       entry.get("scope_label") or entry.get("query_scope_label")))
+    return result
 
 
 @planning_bp.post("/proposals")
@@ -67,6 +83,7 @@ def proposals():
     now_utc_ms = time.time_ns() // 1_000_000
     store = current_app.extensions["planning_conversation_store"]
     conversation_id = body.get("conversation_id")
+    expected_conversation_version = 0
     answers = body.get("answers") or []
     state = {
         "message": body["message"].strip() if type(body["message"]) is str else body["message"],
@@ -80,6 +97,7 @@ def proposals():
         previous = store.get(conversation_id, user_id, credential_id, kind="intent")
         if previous is None:
             raise PlanError("planning_conversation_not_found", 404)
+        expected_conversation_version = previous["version"]
         store.validate_next(previous, state)
         business_date = date.fromisoformat(previous["business_date"])
     else:
@@ -93,7 +111,10 @@ def proposals():
             reference_date=business_date,
         )
     result["conversation_id"] = conversation_id
-    store.save(conversation_id, user_id, credential_id, business_date.isoformat(), state, result, now_utc_ms, kind="intent")
+    result["conversation_version"] = store.save(
+        conversation_id, user_id, credential_id, business_date.isoformat(), state, result,
+        now_utc_ms, kind="intent", expected_version=expected_conversation_version,
+    )
     return jsonify(result)
 
 
@@ -112,8 +133,10 @@ def queue_proposals():
     now_utc_ms = time.time_ns() // 1_000_000
     store = current_app.extensions["planning_conversation_store"]
     conversation_id = body.get("conversation_id")
+    expected_conversation_version = 0
     answers = body.get("answers") or []
     asked_fields = body.get("asked_fields")
+    previous_turn_kinds = ["answer"] * len(answers)
     if asked_fields is None:
         asked_fields = [None] * len(answers)
     state = {
@@ -128,20 +151,30 @@ def queue_proposals():
         previous = store.get(conversation_id, user_id, credential_id)
         if previous is None:
             raise PlanError("planning_conversation_not_found", 404)
+        expected_conversation_version = previous["version"]
+        replaying = len(answers) == len(previous["answers"])
+        previous_turn_kinds = previous.get("turn_kinds") or ["answer"] * (len(previous["answers"]) + 1)
+        state["turn_kinds"] = previous_turn_kinds if replaying else [*previous_turn_kinds, "answer"]
         store.validate_next(previous, state)
         business_date = date.fromisoformat(previous["business_date"])
     else:
         conversation_id = secrets.token_urlsafe(24)
         business_date = current_app.extensions["planning_service"].business_date_at(now_utc_ms)
     with current_app.extensions["ai_call_guard"].hold(user_id):
-        result = current_app.extensions["planning_service"].propose(
-            user_id, body["message"], now_utc_ms, credential_id=credential_id,
-            answers=body.get("answers"), asked_fields=body.get("asked_fields"), scope_label=body.get("scope_label"),
-            reference_date=business_date,
+        result = current_app.extensions["queue_planning_graph"].invoke(
+            current_app.extensions["planning_service"],
+            {"user_id": user_id, "message": body["message"], "now_utc_ms": now_utc_ms,
+             "credential_id": credential_id, "answers": body.get("answers"),
+             "asked_fields": body.get("asked_fields"), "scope_label": body.get("scope_label"),
+             "reference_date": business_date, "previous_turn_kinds": previous_turn_kinds},
         )
     result["conversation_id"] = conversation_id
-    store.save(conversation_id, user_id, credential_id, business_date.isoformat(), state,
-               {**result, "trace_event": _queue_trace_event(result, state, now_utc_ms)}, now_utc_ms)
+    state["turn_kinds"] = result["conversation"]["turn_kinds"]
+    result["conversation_version"] = store.save(
+        conversation_id, user_id, credential_id, business_date.isoformat(), state,
+        {**result, "trace_event": _queue_trace_event(result, state, now_utc_ms)}, now_utc_ms,
+        expected_version=expected_conversation_version,
+    )
     return jsonify(result)
 
 
@@ -152,19 +185,78 @@ def active_queue_conversation():
     user_id = g.session_context.user.user_id
     if not credential_id or current_app.extensions["credential_service"].get_for_user(user_id, credential_id) is None:
         raise PlanError("credential_not_found", 404)
-    return jsonify({"conversation": current_app.extensions["planning_conversation_store"].latest(user_id, credential_id)})
+    store = current_app.extensions["planning_conversation_store"]
+    return jsonify({"conversation": store.latest(user_id, credential_id),
+                    "conversations": store.list_recent(user_id, credential_id)})
+
+
+@planning_bp.get("/queue-conversations/<conversation_id>")
+@require_session
+def queue_conversation(conversation_id):
+    if not 20 <= len(conversation_id) <= 128:
+        raise PlanError("invalid_planning_request", 400)
+    user_id = g.session_context.user.user_id
+    credential_id = request.args.get("credential_id", "")
+    if not credential_id or current_app.extensions["credential_service"].get_for_user(user_id, credential_id) is None:
+        raise PlanError("credential_not_found", 404)
+    saved = current_app.extensions["planning_conversation_store"].get(conversation_id, user_id, credential_id)
+    if saved is None:
+        raise PlanError("planning_conversation_not_found", 404)
+    return jsonify({"conversation": saved})
+
+
+@planning_bp.post("/queue-conversations/<conversation_id>/resume")
+@require_session
+@require_csrf
+def resume_queue_conversation(conversation_id):
+    _body(set(), set())
+    if not 20 <= len(conversation_id) <= 128:
+        raise PlanError("invalid_planning_request", 400)
+    user_id = g.session_context.user.user_id
+    credential_id = request.args.get("credential_id", "")
+    if not credential_id or current_app.extensions["credential_service"].get_for_user(user_id, credential_id) is None:
+        raise PlanError("credential_not_found", 404)
+    store = current_app.extensions["planning_conversation_store"]
+    if not store.activate(conversation_id, user_id, credential_id, time.time_ns() // 1_000_000):
+        raise PlanError("planning_conversation_not_found", 404)
+    return jsonify({"conversation": store.get(conversation_id, user_id, credential_id)})
 
 
 @planning_bp.post("/queue-conversations/<conversation_id>/close")
 @require_session
 @require_csrf
 def close_queue_conversation(conversation_id):
-    body = _body(set(), set())
-    del body
+    body = _body(set(), {"outcome"})
+    outcome = body.get("outcome", "cancelled")
+    if outcome not in {"saved", "cancelled"}:
+        raise PlanError("invalid_planning_request", 400)
     if not 20 <= len(conversation_id) <= 128:
         raise PlanError("invalid_planning_request", 400)
-    current_app.extensions["planning_conversation_store"].close(
-        conversation_id, g.session_context.user.user_id, request.args.get("credential_id", ""),
+    user_id = g.session_context.user.user_id
+    credential_id = request.args.get("credential_id", "")
+    store = current_app.extensions["planning_conversation_store"]
+    if outcome == "saved":
+        if not credential_id or current_app.extensions["credential_service"].get_for_user(user_id, credential_id) is None:
+            raise PlanError("credential_not_found", 404)
+        saved_conversation = store.get(conversation_id, user_id, credential_id)
+        history = saved_conversation.get("response_history", []) if saved_conversation else []
+        latest = history[-1] if history else {}
+        proposal = latest.get("proposal") or {}
+        valid_proposal = (
+            latest.get("status") == "ready" and proposal.get("kind") == "manual_queue_draft"
+            and type(proposal.get("target_date")) is str and type(proposal.get("base_version")) is int
+            and type(proposal.get("entry_count")) is int and proposal["entry_count"] > 0
+        )
+        queue = current_app.extensions["plan_service"].get_manual_queue(
+            user_id, proposal["target_date"], credential_id,
+        ) if valid_proposal else None
+        if (queue is None or queue.get("deleted") or queue.get("version", 0) < proposal.get("base_version", 0)
+                or len(queue.get("candidates") or []) != proposal.get("entry_count")
+                or _queue_signature(queue.get("candidates")) != _queue_signature(proposal.get("entries"))):
+            raise PlanError("planning_queue_not_saved", 409)
+    store.close(
+        conversation_id, user_id, credential_id, time.time_ns() // 1_000_000,
+        workflow_state=outcome,
     )
     return "", 204
 
@@ -177,6 +269,6 @@ def close_intent_conversation(conversation_id):
     if not 20 <= len(conversation_id) <= 128:
         raise PlanError("invalid_planning_request", 400)
     current_app.extensions["planning_conversation_store"].close(
-        conversation_id, g.session_context.user.user_id, None, kind="intent",
+        conversation_id, g.session_context.user.user_id, None, time.time_ns() // 1_000_000, kind="intent",
     )
     return "", 204

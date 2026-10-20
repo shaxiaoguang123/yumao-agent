@@ -71,7 +71,10 @@ try {
   await a.page.reload();await a.page.getByTestId('plan-tab-agent').click();
   await a.page.locator('.agent-credential-gate[data-state="ready"]').waitFor();
   await a.page.getByTestId('proposal-answer').waitFor();
-  check('active agent conversation and clarification survive a browser refresh',await a.page.getByRole('log').innerText()===transcriptBeforeReload);
+  const transcriptAfterReload=await a.page.getByRole('log').innerText();
+  const activeCredential=(await (await a.ctx.request.get(origin+'/api/credentials')).json()).credentials[0].credential_id;
+  const restored=(await (await a.ctx.request.get(`${origin}/api/planning/queue-conversations?credential_id=${encodeURIComponent(activeCredential)}`)).json()).conversation;
+  check('active agent conversation and clarification survive a browser refresh',transcriptBeforeReload.includes('后天')&&transcriptBeforeReload.includes('先选本次要排哪种队列')&&transcriptAfterReload.includes('后天')&&transcriptAfterReload.includes('先选本次要排哪种队列')&&restored?.message==='后天'&&restored.response_history.length===1);
   await a.page.getByTestId('restart-conversation').click();await a.page.getByTestId('proposal-message').waitFor();
 
   await a.page.getByRole('link',{name:'模型设置',exact:true}).click();
@@ -82,7 +85,7 @@ try {
   await a.page.getByLabel('当前使用模型').selectOption({label:'合成规划模型 · synthetic-planner'});await a.page.getByLabel('默认模型').selectOption({label:'合成规划模型 · synthetic-planner'});await a.page.getByRole('button',{name:'保存模型选择'}).click();await a.page.getByText('当前模型与默认模型已更新。').waitFor();
   const selectedModel=a.page.locator('.model-row').filter({hasText:'合成规划模型'});
   await selectedModel.getByRole('button',{name:'测试连接',exact:true}).click();await a.page.getByText('模型连接成功。').waitFor();check('explicit connection test reaches the fake provider',true);
-  await selectedModel.getByTestId('test-model-parsing').click();await a.page.getByText('连接正常，追问优先级与队列复核测试通过。测试不会保存预约队列。').waitFor();check('queue capability test never writes a booking plan',storage().plans===0&&storage().revisions===0);
+  await selectedModel.getByTestId('test-model-parsing').click();await a.page.getByText('连接正常，上下文问答与队列复核测试通过。测试不会保存预约队列。').waitFor();check('queue capability test never writes a booking plan',storage().plans===0&&storage().revisions===0);
   await a.page.getByRole('button',{name:'添加AI模型',exact:true}).click();await a.page.getByLabel('显示名称').fill('备用合成模型');await a.page.getByLabel('兼容接口地址').fill('https://alternate.example/v1');await a.page.getByLabel('模型名称',{exact:false}).fill('synthetic-alternate');await a.page.getByLabel('认证方式').selectOption('none');await a.page.getByRole('button',{name:'保存模型',exact:true}).click();await a.page.getByRole('heading',{name:'备用合成模型',exact:true}).waitFor();check('multiple model configs persist',storage().models===4);await screenshot(a.page,'models-desktop');
 
   await a.page.getByRole('link',{name:'预约计划',exact:true}).click();await waitScope(a.page);
@@ -96,7 +99,7 @@ try {
   await a.page.getByTestId('proposal-message').fill('改成下周六18-20');
   check('pending original-message edit blocks saving',await a.page.getByTestId('confirm-save-proposal').isDisabled());
   await a.page.getByRole('button',{name:'保留原描述',exact:true}).click();
-  await screenshot(a.page,'proposal-desktop');await a.page.getByTestId('confirm-save-proposal').click();await a.page.getByText(/队列已保存/).waitFor();
+  await screenshot(a.page,'proposal-desktop');await a.page.getByTestId('confirm-save-proposal').click();await a.page.locator('.chat-bubble.bubble-saved').waitFor();
   check('explicit confirmation writes one queue revision',storage().plans===1&&storage().revisions===1);
 
   await a.page.reload();await a.page.getByTestId('plan-tab-current').click();await a.page.locator('.ticket-queue-card').waitFor();
@@ -104,7 +107,7 @@ try {
   check('reload reads the saved manual queue',await a.page.locator('.ticket-queue-card').count()===1);
   await waitScope(a.page);await generate(a.page,replacement);await a.page.getByTestId('replace-warning').waitFor();
   check('replacing an existing queue requires a preview first',storage().revisions===1);
-  await a.page.getByTestId('confirm-save-proposal').click();await a.page.getByText(/队列已保存/).waitFor();check('confirmed replacement appends revision 2',storage().revisions===2);
+  await a.page.getByTestId('confirm-save-proposal').click();await a.page.locator('.chat-bubble.bubble-saved').waitFor();check('confirmed replacement appends revision 2',storage().revisions===2);
   await a.page.getByTestId('plan-tab-current').click();await a.page.getByRole('button',{name:`${targetDate}版本历史`,exact:true}).click();await a.page.locator('.queue-history details').nth(1).waitFor();check('both queue revisions remain available',await a.page.locator('.queue-history details').count()===2);await screenshot(a.page,'history-desktop');await a.page.getByRole('button',{name:'关闭历史',exact:true}).click();
 
   await generate(a.page,description+'模拟失败');await a.page.getByTestId('queue-preview').waitFor();await a.page.getByText('队列没有经过模型复核（模型暂时不可用）。',{exact:true}).first().waitFor();check('optional review failure preserves the deterministic draft without saving',storage().revisions===2);
@@ -124,23 +127,22 @@ try {
   await generate(b.page,'下周六14-16打3小时，1号场，不要一小时，不用候选。');
   await b.page.getByRole('log').getByText(/当天累计时长还是单个时段/).waitFor();
   check('three-hour intent is clarified before any queue can be saved',await b.page.getByTestId('queue-preview').count()===0&&storage().revisions===3);
-  await generate(b.page,'下周六14-16选1号场，不要一小时。');
-  await b.page.getByRole('log').getByText(/2小时还要再加候选时间/).waitFor();
-  await b.page.getByTestId('proposal-answer').fill('再加18-20选4号场');await b.page.getByTestId('continue-proposal').click();
-  await b.page.getByRole('log').getByText(/2小时还要再加候选时间/).last().waitFor();
-  await b.page.getByTestId('proposal-answer').fill('不用');await b.page.getByTestId('continue-proposal').click();
+  await generate(b.page,'下周六14-16选1号场，18-20选4号场，不要一小时，不用候选。');
   await b.page.getByRole('log').getByText(/不能直接交叉组合/).waitFor();
   check('different courts across windows require confirmation before cross-product',await b.page.getByTestId('queue-preview').count()===0&&storage().revisions===3);
   await b.page.getByTestId('proposal-answer').fill('1号和4号');await b.page.getByTestId('continue-proposal').click();await b.page.getByTestId('queue-preview').waitFor();
   check('explicit common-court confirmation unlocks the cross product',await b.page.locator('[data-testid="queue-entries"] li').count()===4&&storage().revisions===3);
-  await generate(b.page,'下周六14-16，1号场，不要额外候选。');
-  await b.page.getByRole('log').getByText(/还要加1小时的备选吗/).waitFor();
-  await b.page.getByTestId('proposal-answer').fill('我要，15-16，不用候选');await b.page.getByTestId('continue-proposal').click();
-  await b.page.getByRole('log').getByText(/1小时要订哪几号场/).waitFor();
-  check('yes for the one-hour queue is not cancelled by declining more windows',await b.page.getByTestId('queue-preview').count()===0);
-  await b.page.getByTestId('proposal-answer').fill('3号场');await b.page.getByTestId('continue-proposal').click();await b.page.getByTestId('queue-preview').waitFor();
-  check('the one-hour candidate keeps its independent court',await b.page.locator('[data-testid="queue-entries"] li').count()===2&&storage().revisions===3);
-  await generate(b.page,'下周六14-16选1号场，18-20选4号场，不要一小时，不用候选');await b.page.getByRole('log').getByText(/不能直接交叉组合/).waitFor();check('window-specific courts require clarification',await b.page.getByTestId('queue-preview').count()===0);
+  await generate(b.page,'两种都抢，下周六，2小时14-16选1号场，1小时15-16选3号场。');
+  await b.page.getByTestId('queue-preview').waitFor();
+  const independentEntries=await b.page.locator('[data-testid="queue-entries"] li').allTextContents();
+  check('one-hour and two-hour queues keep independent times and courts',independentEntries.length===2&&/2小时.*14:00-16:00.*1号场/.test(independentEntries[0])&&/1小时.*15:00-16:00.*3号场/.test(independentEntries[1])&&storage().revisions===3);
+  await screenshot(b.page,'independent-duration-queues');
+  await b.page.getByTestId('restart-conversation').click();
+  await b.page.locator('.conversation-history > summary').click();
+  await b.page.locator('.conversation-history-item').first().waitFor();
+  await b.page.locator('.conversation-history-item').first().click();
+  await b.page.locator('.proposal-result[data-testid="queue-preview"]').waitFor();
+  check('ready queue conversation resumes from history without an error',await b.page.locator('[data-testid="queue-entries"] li').count()===2&&await b.page.getByText(/这条对话暂时无法恢复|已保存的对话暂时无法恢复/).count()===0&&storage().revisions===3);
   const phone=await context('phone-B',390,844);await login(phone.page,'plan_user_b');await waitScope(phone.page);await generate(phone.page,description);await phone.page.getByTestId('queue-preview').waitFor();check('390px queue preview has no horizontal overflow',await phone.page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth));await screenshot(phone.page,'proposal-phone');
   const upstream=JSON.parse(await readFile(path.join(output,'upstream-attempts.json'),'utf8'));const models=JSON.parse(await readFile(path.join(output,'model-attempts.json'),'utf8'));check('no real provider/booking/payment requests',upstream.http_attempts===0&&upstream.external_socket_attempts===0,upstream);check('fake model review and connection test exercised',models.calls>=6&&models.tests>=1,models);
   await a.ctx.close();await phone.ctx.close();await b.ctx.close();
