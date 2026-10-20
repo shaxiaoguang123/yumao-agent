@@ -149,6 +149,22 @@ class BookingQueueConversationTests(unittest.TestCase):
         self.assertEqual(state.phase, Phase.READY)
         self.assertEqual(len(draft.g2.windows), 2)
 
+    def test_unclear_overlap_answers_never_count_as_confirmation(self):
+        turns = ["只要2小时 后天14-16、15-17 1号场"]
+        asked = []
+        for answer in ("不确定", "还是不清楚"):
+            turns.append(answer)
+            asked.append("overlap_2h")
+            state, built, _ = run(turns, asked)
+            self.assertEqual((state.phase, state.asking), (Phase.REPAIRING, "overlap_2h"))
+            self.assertEqual(built["overlap_2h"].status, SlotStatus.AMBIGUOUS)
+
+        turns.append("我不知道")
+        asked.append("overlap_2h")
+        state, built, _ = run(turns, asked)
+        self.assertEqual((state.phase, state.escalation), (Phase.ESCALATED, "stalled"))
+        self.assertEqual(built["overlap_2h"].status, SlotStatus.AMBIGUOUS)
+
     def test_candidate_limit_is_enforced(self):
         text = "只要2小时 后天 9-11、11-13、13-15、15-17、17-19、19-21 1到10号场"
         state, built, draft = run([text])

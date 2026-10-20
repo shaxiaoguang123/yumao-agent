@@ -35,7 +35,7 @@ def _date_slot(draft: Draft, today: date) -> Slot:
 
 
 def _group_slots(draft: Draft, minutes: int, tag: str) -> dict[str, Slot]:
-    group, asks = draft.groups[minutes], Counter(draft.asked)
+    group = draft.groups[minutes]
     if not draft.effective(minutes):
         return {f"{name}_{tag}": _off(f"{name}_{tag}") for name in ("windows", "overlap", "courts")}
     windows, courts = f"windows_{tag}", f"courts_{tag}"
@@ -49,7 +49,7 @@ def _group_slots(draft: Draft, minutes: int, tag: str) -> dict[str, Slot]:
         windows_slot = _slot(windows, SlotStatus.EMPTY, reason=Reason.MISSING)
     settled = windows_slot.status in _DONE
     pairs = [p for p in overlapping_pairs(group.windows) if frozenset(p) not in group.acked]
-    if pairs and asks[f"overlap_{tag}"] < 2:
+    if pairs:
         overlap = _slot(f"overlap_{tag}", SlotStatus.AMBIGUOUS, pairs, active=settled)
     else:
         overlap = _slot(f"overlap_{tag}", SlotStatus.VERIFIED, active=settled and len(group.windows) > 1)
