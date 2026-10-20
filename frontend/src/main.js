@@ -1,6 +1,7 @@
 import { createApp } from 'vue';
 import App from './App.vue';
 import { createAdminInvitationApi } from './api/adminInvitations.js';
+import { createAdminUsersApi } from './api/adminUsers.js';
 import { createCredentialApi } from './api/credentials.js';
 import { createPlanApi } from './api/plans.js';
 import { createAIModelsApi } from './api/aiModels.js';
@@ -14,15 +15,18 @@ import { createSessionStore } from './stores/session.js';
 
 const sessionStore = createSessionStore();
 const adminInvitationApi = createAdminInvitationApi(sessionStore);
+const adminUsersApi = createAdminUsersApi(sessionStore);
 const credentialApi = createCredentialApi(sessionStore);
-const router = createAppRouter(sessionStore);
+const aiModelsApi = createAIModelsApi(sessionStore);
+const router = createAppRouter(sessionStore, undefined, { credentialApi });
 
 createApp(App)
   .provide('sessionStore', sessionStore)
   .provide('adminInvitationApi', adminInvitationApi)
+  .provide('adminUsersApi', adminUsersApi)
   .provide('credentialApi', credentialApi)
   .provide('planApi', createPlanApi(sessionStore))
-  .provide('aiModelsApi', createAIModelsApi(sessionStore))
+  .provide('aiModelsApi', aiModelsApi)
   .provide('planningProposalApi', createPlanningProposalApi(sessionStore))
   .provide('intentPlanningProposalApi', createIntentPlanningProposalApi(sessionStore))
   .provide('availabilitySimulationApi', createAvailabilitySimulationApi(sessionStore))

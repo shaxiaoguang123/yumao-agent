@@ -10,7 +10,7 @@ import ProposalComposer from './ProposalComposer.vue';
 import { providerErrorMessage } from '../../api/providerErrors.js';
 
 const props=defineProps({plans:{type:Array,default:()=>[]},planApi:{type:Object,required:true},proposalApi:{type:Object,required:true},credentialApi:{type:Object,default:null},credentialRefreshKey:{type:Number,default:0},session:{type:Object,required:true},credentialId:{type:String,default:''}});
-const emit=defineEmits(['saved','refresh-request','mode-started','mode-reset']);
+const emit=defineEmits(['saved','refresh-request','mode-started','mode-reset','provider-unavailable']);
 const message=shallowRef(''),targetId=shallowRef(''),mode=shallowRef('edit'),proposal=shallowRef(null),status=shallowRef('idle');
 const questions=ref([]),error=shallowRef(''),savedNotice=shallowRef(''),latest=shallowRef(null),latestError=shallowRef('');
 const generatedFor=shallowRef(null),busySaving=shallowRef(false),needsRegeneration=shallowRef(false);
@@ -199,6 +199,7 @@ async function generate({forceLatest=false,latestPlan=null,supplement=false}={})
   if(!valid(generation,id,csrf)||sequence!==requestId)return;
   pendingTurn.value='';traceEvent('模型请求未完成','请查看错误提示并修正配置或重试；没有保存预约意向。');
   status.value='error';error.value=err?.code==='provider_not_configured'?'尚未配置 AI 模型，请先完成设置。':err?.code==='provider_api_key_required'?'当前模型缺少 API Key，请前往模型设置补充密钥。':err?.code==='plan_version_conflict'?'计划版本已变化。你的描述仍保留，请读取最新版本并重新生成。':`生成建议失败：${providerErrorMessage(err?.code)}`;
+  if(err?.code?.startsWith('provider_')&&err.code!=='provider_rate_limited')emit('provider-unavailable',err.code);
   if(err?.code==='plan_version_conflict')needsRegeneration.value=true;
  }finally{if(valid(generation,id,csrf)&&sequence===requestId&&status.value==='generating')status.value='idle';}
 }

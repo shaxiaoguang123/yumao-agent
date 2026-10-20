@@ -168,6 +168,17 @@ describe('auth router guard', () => {
 });
 
 describe('plans route permission',()=>{
- it('protects plans and opens it only with authenticated Session',async()=>{const create=await loadRouterFactory();const store={status:'unauthenticated',user:null,initialRefreshComplete:true};const router=create(store,createMemoryHistory());await router.push('/plans');expect(router.currentRoute.value.name).toBe('login');store.status='authenticated';store.user={user_id:'a',role:'user'};await router.push('/plans');expect(router.currentRoute.value.name).toBe('plans');});
+ const readyCredentials = { list: vi.fn(async () => ({ credentials: [{
+  enabled: true,
+  account_binding_state: 'confirmed',
+  requires_revalidation: false,
+  last_confirmed_validation_state: 'confirmed_valid',
+  expiry_state: 'valid',
+  has_payment_password: true,
+ }] })) };
+ it('protects plans and checks readiness after authenticated Session',async()=>{const create=await loadRouterFactory();const store={status:'unauthenticated',user:null,initialRefreshComplete:true};const router=create(store,createMemoryHistory(),{credentialApi:readyCredentials});await router.push('/plans');expect(router.currentRoute.value.name).toBe('login');store.status='authenticated';store.user={user_id:'a',role:'user'};await router.push('/plans');expect(router.currentRoute.value.name).toBe('plans');expect(readyCredentials.list).toHaveBeenCalledOnce();});
  it('protects AI model settings at the requested path',async()=>{const create=await loadRouterFactory();const store={status:'unauthenticated',user:null,initialRefreshComplete:true};const router=create(store,createMemoryHistory());await router.push('/settings/ai-models');expect(router.currentRoute.value.name).toBe('login');store.status='authenticated';store.user={user_id:'a',role:'user'};await router.push('/settings/ai-models');expect(router.currentRoute.value.name).toBe('ai-models');});
+ it('redirects plans to setup when there is no verified credential',async()=>{const create=await loadRouterFactory();const store={status:'authenticated',user:{user_id:'a',role:'user'},initialRefreshComplete:true};const credentialApi={list:vi.fn(async()=>({credentials:[]}))};const router=create(store,createMemoryHistory(),{credentialApi});await router.push('/plans');expect(router.currentRoute.value.name).toBe('credentials');expect(router.currentRoute.value.query).toEqual({returnTo:'plans',setup:'token'});});
+ it('requires a payment password on a verified credential',async()=>{const create=await loadRouterFactory();const store={status:'authenticated',user:{user_id:'a',role:'user'},initialRefreshComplete:true};const credentialApi={list:vi.fn(async()=>({credentials:[{enabled:true,account_binding_state:'confirmed',requires_revalidation:false,last_confirmed_validation_state:'confirmed_valid',expiry_state:'valid',has_payment_password:false}]}))};const router=create(store,createMemoryHistory(),{credentialApi});await router.push('/plans');expect(router.currentRoute.value.name).toBe('credentials');expect(router.currentRoute.value.query.setup).toBe('payment_password');});
+ it('does not misclassify a failed check as a missing credential',async()=>{const create=await loadRouterFactory();const store={status:'authenticated',user:{user_id:'a',role:'user'},initialRefreshComplete:true};const credentialApi={list:vi.fn(async()=>{throw new Error('network');})};const router=create(store,createMemoryHistory(),{credentialApi});await router.push('/plans');expect(router.currentRoute.value.name).toBe('credentials');expect(router.currentRoute.value.query.setup).toBe('check_failed');await router.push('/credentials');expect(router.currentRoute.value.name).toBe('credentials');expect(credentialApi.list).toHaveBeenCalledOnce();});
 });

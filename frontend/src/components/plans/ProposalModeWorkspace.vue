@@ -15,7 +15,7 @@ defineProps({
   credentialId: { type: String, default: '' },
   scopeLabel: { type: String, default: '' },
 });
-const emit = defineEmits(['saved', 'refresh-request', 'manual-request']);
+const emit = defineEmits(['saved', 'refresh-request', 'manual-request', 'provider-unavailable']);
 const mode = shallowRef('queue');
 const started = shallowRef(false);
 function setMode(value) {
@@ -43,6 +43,7 @@ function onSaved(value) { started.value = false; emit('saved', value); }
       @mode-reset="resetModeLock"
       @refresh-request="emit('refresh-request')"
       @manual-request="emit('manual-request', $event)"
+      @provider-unavailable="emit('provider-unavailable', $event)"
     >
       <template #header-actions><slot name="header-actions" /></template>
     </ProposalAssistant>
@@ -59,6 +60,7 @@ function onSaved(value) { started.value = false; emit('saved', value); }
       @mode-started="markStarted"
       @mode-reset="resetModeLock"
       @refresh-request="emit('refresh-request')"
+      @provider-unavailable="emit('provider-unavailable', $event)"
     >
       <template #header-actions><slot name="header-actions" /></template>
     </IntentPlanAssistant>

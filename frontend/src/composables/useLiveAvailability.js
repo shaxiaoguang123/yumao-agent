@@ -20,6 +20,11 @@ const ERROR_MESSAGES = {
   credential_changed: '凭据版本已变化，请重新读取类别列表。',
 };
 
+const DISABLED_MESSAGES = {
+  feature_disabled: '服务端尚未启用真实只读场地查询。预约凭据仍已保存；此状态不会发起上游请求。',
+  request_cipher_missing: '服务端尚未配置官方查询加密参数。预约凭据仍已保存；请先完成服务端配置。',
+};
+
 function validateGrid(value, targetDate, selectedLabel) {
   if (value?.grid_version !== 'official-bookingByTime-live-observation-v1'
       || value?.data_state !== 'live_observed_unverified'
@@ -54,6 +59,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
   let readInterval = 0, nextReadAt = 0, refreshTimer = null, running = false, pending = false, reloadPending = false, scopeRenewals = 0, rateRetries = 0;
   const optionsLoading = ref(true);
   const optionsError = ref('');
+  const disabledMessage = ref('');
   const credentials = ref([]);
   const credentialsError = ref('');
   const selectedCredentialId = ref('');
@@ -113,6 +119,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
     const requestEpoch = ++epoch;
     optionsLoading.value = true;
     optionsError.value = '';
+    disabledMessage.value = '';
     credentialsError.value = '';
     clearPrivateState();
     if (!isAuthenticated()) {
@@ -124,6 +131,10 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
       const result = await api.options();
       if (!alive || requestEpoch !== epoch) return;
       enabled.value = result?.enabled === true;
+      if (!enabled.value) {
+        disabledMessage.value = DISABLED_MESSAGES[result?.disabled_reason]
+          || DISABLED_MESSAGES.feature_disabled;
+      }
       readInterval = Number.isSafeInteger(result?.min_read_interval_ms) && result.min_read_interval_ms > 0 ? result.min_read_interval_ms : 0;
       if (!enabled.value) return;
       const credentialResult = await credentialApi.list();
@@ -331,7 +342,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
   });
 
   return {
-    enabled, autoLoading, refreshAvailability, optionsLoading, optionsError, credentials, credentialsError,
+    enabled, autoLoading, refreshAvailability, optionsLoading, optionsError, disabledMessage, credentials, credentialsError,
     eligibleCredentials, selectedCredentialId, categories, selectedScopeReference,
     selectedCategory, categoriesLoading, gridLoading, grid, gridExpired,
     error, message, initialize, refreshCredentials, loadCategories, queryGrid,

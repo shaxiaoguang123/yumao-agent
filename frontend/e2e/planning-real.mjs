@@ -64,8 +64,7 @@ try {
   browser=await chromium.launch({headless:true});
   const a=await context('A');await login(a.page,'plan_user_a');await waitScope(a.page);
   await generate(a.page,description);await a.page.getByTestId('queue-preview').waitFor();
-  await a.page.getByText('队列没有经过模型复核（尚未配置模型）。',{exact:true}).first().waitFor();
-  check('missing optional model still previews a scoped queue without saving',storage().plans===0&&await a.page.getByTestId('confirm-save-proposal').isEnabled());
+  check('configured synthetic model previews a scoped queue without saving',storage().plans===0&&await a.page.getByTestId('confirm-save-proposal').isEnabled());
 
   await generate(a.page,'后天');await a.page.getByTestId('proposal-answer').waitFor();
   const transcriptBeforeReload=await a.page.getByRole('log').innerText();
@@ -81,9 +80,10 @@ try {
   await a.page.getByRole('button',{name:'保存模型',exact:true}).click();await a.page.getByText('API Key 已配置（不会显示密钥）',{exact:false}).waitFor();
   check('model config stores encrypted secret without echo',storage().plaintext_keys===0);
   await a.page.getByLabel('当前使用模型').selectOption({label:'合成规划模型 · synthetic-planner'});await a.page.getByLabel('默认模型').selectOption({label:'合成规划模型 · synthetic-planner'});await a.page.getByRole('button',{name:'保存模型选择'}).click();await a.page.getByText('当前模型与默认模型已更新。').waitFor();
-  await a.page.getByRole('button',{name:'测试连接',exact:true}).click();await a.page.getByText('模型连接成功。').waitFor();check('explicit connection test reaches the fake provider',true);
-  await a.page.getByTestId('test-model-parsing').click();await a.page.getByText('连接正常，追问优先级与队列复核测试通过。测试不会保存预约队列。').waitFor();check('queue capability test never writes a booking plan',storage().plans===0&&storage().revisions===0);
-  await a.page.getByRole('button',{name:'添加AI模型',exact:true}).click();await a.page.getByLabel('显示名称').fill('备用合成模型');await a.page.getByLabel('兼容接口地址').fill('https://alternate.example/v1');await a.page.getByLabel('模型名称',{exact:false}).fill('synthetic-alternate');await a.page.getByLabel('认证方式').selectOption('none');await a.page.getByRole('button',{name:'保存模型',exact:true}).click();await a.page.getByRole('heading',{name:'备用合成模型',exact:true}).waitFor();check('multiple model configs persist',storage().models===2);await screenshot(a.page,'models-desktop');
+  const selectedModel=a.page.locator('.model-row').filter({hasText:'合成规划模型'});
+  await selectedModel.getByRole('button',{name:'测试连接',exact:true}).click();await a.page.getByText('模型连接成功。').waitFor();check('explicit connection test reaches the fake provider',true);
+  await selectedModel.getByTestId('test-model-parsing').click();await a.page.getByText('连接正常，追问优先级与队列复核测试通过。测试不会保存预约队列。').waitFor();check('queue capability test never writes a booking plan',storage().plans===0&&storage().revisions===0);
+  await a.page.getByRole('button',{name:'添加AI模型',exact:true}).click();await a.page.getByLabel('显示名称').fill('备用合成模型');await a.page.getByLabel('兼容接口地址').fill('https://alternate.example/v1');await a.page.getByLabel('模型名称',{exact:false}).fill('synthetic-alternate');await a.page.getByLabel('认证方式').selectOption('none');await a.page.getByRole('button',{name:'保存模型',exact:true}).click();await a.page.getByRole('heading',{name:'备用合成模型',exact:true}).waitFor();check('multiple model configs persist',storage().models===4);await screenshot(a.page,'models-desktop');
 
   await a.page.getByRole('link',{name:'预约计划',exact:true}).click();await waitScope(a.page);
   await generate(a.page,'下周六14-16，不要一小时，不用候选。');
@@ -118,7 +118,7 @@ try {
   await a.page.getByTestId('regenerate').click();await a.page.getByTestId('queue-preview').waitFor();check('regeneration reads the latest queue version without a write',storage().revisions===3&&await a.page.getByTestId('confirm-save-proposal').isEnabled());await screenshot(a.page,'conflict-desktop');
 
   await generate(a.page,description+'不要自动付款');await a.page.getByTestId('queue-preview').waitFor();check('default payment authorization adds no extra preview gate',await a.page.getByTestId('confirm-save-proposal').isEnabled()&&storage().revisions===3);
-  const b=await context('B');await login(b.page,'plan_user_b');await b.page.getByTestId('plan-tab-current').click();check('B cannot see A queues',await b.page.locator('.ticket-queue-card').count()===0);await b.page.getByRole('link',{name:'设置 · AI模型',exact:true}).click();await b.page.getByText('还没有配置可用模型',{exact:false}).waitFor();check('B cannot see A models',await b.page.getByRole('heading',{name:'合成规划模型',exact:true}).count()===0);await b.page.getByRole('link',{name:'预约计划',exact:true}).click();
+  const b=await context('B');await login(b.page,'plan_user_b');await b.page.getByTestId('plan-tab-current').click();check('B cannot see A queues',await b.page.locator('.ticket-queue-card').count()===0);await b.page.getByRole('link',{name:'设置 · AI模型',exact:true}).click();await b.page.getByRole('heading',{name:'B 合成模型',exact:true}).waitFor();check('B sees only its own model',await b.page.getByRole('heading',{name:'合成规划模型',exact:true}).count()===0);await b.page.getByRole('link',{name:'预约计划',exact:true}).click();
   await generate(b.page,'下周六14-16选1号场，18-19选4号场，不用候选。');await b.page.getByTestId('queue-preview').waitFor();
   check('mixed duration slots keep their own courts',await b.page.locator('[data-testid="queue-entries"] li').count()===2&&storage().revisions===3);
   await generate(b.page,'下周六14-16打3小时，1号场，不要一小时，不用候选。');
@@ -142,7 +142,7 @@ try {
   check('the one-hour candidate keeps its independent court',await b.page.locator('[data-testid="queue-entries"] li').count()===2&&storage().revisions===3);
   await generate(b.page,'下周六14-16选1号场，18-20选4号场，不要一小时，不用候选');await b.page.getByRole('log').getByText(/不能直接交叉组合/).waitFor();check('window-specific courts require clarification',await b.page.getByTestId('queue-preview').count()===0);
   const phone=await context('phone-B',390,844);await login(phone.page,'plan_user_b');await waitScope(phone.page);await generate(phone.page,description);await phone.page.getByTestId('queue-preview').waitFor();check('390px queue preview has no horizontal overflow',await phone.page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth));await screenshot(phone.page,'proposal-phone');
-  const upstream=JSON.parse(await readFile(path.join(output,'upstream-attempts.json'),'utf8'));const models=JSON.parse(await readFile(path.join(output,'model-attempts.json'),'utf8'));check('no real provider/booking/payment requests',upstream.http_attempts===0&&upstream.external_socket_attempts===0,upstream);check('fake model review and connection test exercised',models.calls>=6&&models.tests===1,models);
+  const upstream=JSON.parse(await readFile(path.join(output,'upstream-attempts.json'),'utf8'));const models=JSON.parse(await readFile(path.join(output,'model-attempts.json'),'utf8'));check('no real provider/booking/payment requests',upstream.http_attempts===0&&upstream.external_socket_attempts===0,upstream);check('fake model review and connection test exercised',models.calls>=6&&models.tests>=1,models);
   await a.ctx.close();await phone.ctx.close();await b.ctx.close();
 } finally {
   if(browser)await browser.close();await stop(vite);await stop(backend);await writeFile(path.join(output,'results.json'),JSON.stringify(report,null,2));

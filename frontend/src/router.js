@@ -1,14 +1,16 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import AccountView from './views/AccountView.vue';
 import AdminInvitationsView from './views/AdminInvitationsView.vue';
+import AdminUsersView from './views/AdminUsersView.vue';
 import CredentialView from './views/CredentialView.vue';
 import HomeView from './views/HomeView.vue';
 import InviteRegisterView from './views/InviteRegisterView.vue';
 import LoginView from './views/LoginView.vue';
 import PlansView from './views/PlansView.vue';
 import AIModelsView from './views/AIModelsView.vue';
+import { planSetupRequirement } from './utils/credentialReadiness.js';
 
-export function createAppRouter(sessionStore, history = createWebHistory()) {
+export function createAppRouter(sessionStore, history = createWebHistory(), { credentialApi } = {}) {
   const router = createRouter({
     history,
     routes: [
@@ -33,12 +35,18 @@ export function createAppRouter(sessionStore, history = createWebHistory()) {
         meta: { requiresAuth: true },
       },
       {
+        path: '/admin',
+        name: 'admin-users',
+        component: AdminUsersView,
+        meta: { requiresAuth: true, requiresAdmin: true },
+      },
+      {
         path: '/admin/invitations',
         name: 'admin-invitations',
         component: AdminInvitationsView,
         meta: { requiresAuth: true, requiresAdmin: true },
       },
-      { path: '/plans', name:'plans', component:PlansView, meta:{requiresAuth:true} },
+      { path: '/plans', name:'plans', component:PlansView, meta:{requiresAuth:true,requiresPlanSetup:true} },
       { path: '/settings/ai-models', name:'ai-models', component:AIModelsView, meta:{requiresAuth:true} },
       { path: '/:pathMatch(.*)*', redirect: { name: 'home' } },
     ],
@@ -71,6 +79,21 @@ export function createAppRouter(sessionStore, history = createWebHistory()) {
       && sessionStore.status === 'authenticated'
     ) {
       return { name: 'home', replace: true };
+    }
+    if (to.meta.requiresPlanSetup && sessionStore.status === 'authenticated') {
+      if (!credentialApi) {
+        return { name: 'credentials', query: { returnTo: 'plans', setup: 'check_failed' }, replace: true };
+      }
+      try {
+        const result = await credentialApi.list();
+        const setup = planSetupRequirement(result?.credentials);
+        if (setup) {
+          return { name: 'credentials', query: { returnTo: 'plans', setup }, replace: true };
+        }
+      } catch {
+        if (sessionStore.status === 'unauthenticated') return { name: 'login', replace: true };
+        return { name: 'credentials', query: { returnTo: 'plans', setup: 'check_failed' }, replace: true };
+      }
     }
     return true;
   });

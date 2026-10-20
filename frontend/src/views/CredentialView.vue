@@ -1,12 +1,15 @@
 <script setup>
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue';
-import { onBeforeRouteLeave } from 'vue-router';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 
 import PageHeader from '../components/PageHeader.vue';
 import AppIcon from '../components/AppIcon.vue';
 import CredentialCard from '../components/CredentialCard.vue';
 import { needsAttention } from '../utils/credentialSummary.js';
+import { planSetupRequirement } from '../utils/credentialReadiness.js';
 const api = inject('credentialApi');
+const route = useRoute();
+const router = useRouter();
 const credentials = ref([]);
 const listStatus = ref('loading');
 const loading = computed(() => listStatus.value === 'loading');
@@ -29,6 +32,18 @@ const visibleCredentials = computed(() => credentials.value.filter(item => (
  item.label.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase())
  && (filter.value === 'all' || (filter.value === 'enabled' && item.enabled) || (filter.value === 'disabled' && !item.enabled) || (filter.value === 'attention' && needsAttention(item)))
 )));
+const planSetupNotice = computed(() => {
+  if (route.query.returnTo !== 'plans') return '';
+  if (route.query.setup === 'token') return '预约计划需要至少一个已验证且有效的 Token，并设置支付密码。请先完成凭据设置。';
+  if (route.query.setup === 'payment_password') return '已找到有效 Token，但还没有支付密码。设置完成后会返回预约计划。';
+  if (route.query.setup === 'check_failed') return '暂时无法确认预约准备状态；这不代表 Token 无效。请重试读取凭据。';
+  return '';
+});
+
+async function returnToPlansIfReady() {
+  if (route.query.returnTo !== 'plans' || planSetupRequirement(credentials.value)) return;
+  await router.replace({ name: 'plans' });
+}
 // A hidden card must not retain a rotation candidate that can reappear later.
 watch([search, filter], () => {
   if (rotationCredentialId.value && !visibleCredentials.value.some(item => item.credential_id === rotationCredentialId.value)) {
@@ -114,6 +129,7 @@ async function loadCredentials() {
     if (!Array.isArray(result?.credentials)) throw new Error('invalid_response');
     credentials.value = result.credentials;
     listStatus.value = 'ready';
+    await returnToPlansIfReady();
   } catch (error) {
     if (requestId !== listRequestId) return;
     loadingError.value = safeMessage(error);
@@ -294,6 +310,11 @@ onUnmounted(() => {
   <section class="credential-page" aria-labelledby="credential-title">
     <PageHeader title-id="credential-title" eyebrow="账户安全 · 凭据管理" title="预约凭据" />
 
+    <p v-if="planSetupNotice" class="credential-message error-message" role="alert">
+      {{ planSetupNotice }}
+      <button v-if="route.query.setup === 'check_failed'" class="text-button" type="button" @click="loadCredentials">重试
+      </button>
+    </p>
     <p v-if="errorMessage" class="credential-message error-message" role="alert">
       {{ errorMessage }}
     </p>

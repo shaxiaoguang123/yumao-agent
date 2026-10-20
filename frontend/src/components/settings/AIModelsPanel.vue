@@ -1,18 +1,24 @@
 <script setup>
 import { computed, inject, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import AppIcon from '../AppIcon.vue';
 import ModelPresetPicker from './ModelPresetPicker.vue';
 import ModelEditorForm from './ModelEditorForm.vue';
 import { providerDiscoveryErrorMessage, providerErrorMessage } from '../../api/providerErrors.js';
+import { rememberAgentModelReady } from '../../utils/agentReadiness.js';
 
 const api=inject('aiModelsApi');
 const session=inject('sessionStore');
+const route=useRoute(),router=useRouter();
 const preset=shallowRef(null);
 function choosePreset(value){clearDiscovery();editing.value=null;preset.value=value;adding.value=true;}
 const state=ref(null),editing=shallowRef(null),adding=shallowRef(false);
 const loading=shallowRef(false),busy=shallowRef(false),discovering=shallowRef(false),error=shallowRef(''),notice=shallowRef(''),discoveryError=shallowRef(''),discoveredModels=shallowRef([]),testingId=shallowRef('');
 const selected=shallowRef(''),defaultId=shallowRef('');
 const userModels=computed(()=>state.value?.models||[]);
+const agentSetupMessage=computed(()=>route.query.returnTo==='agent'
+ ? `Agent 暂不可用：${providerErrorMessage(typeof route.query.reason==='string'?route.query.reason:'provider_not_configured')}`
+ : '');
 let alive=true,epoch=0,sequence=0,discoverySequence=0;
 const authorized=()=>session?.status==='authenticated'&&Boolean(session.user?.user_id);
 function valid(generation,id){return alive&&generation===epoch&&id===session?.user?.user_id&&authorized();}
@@ -48,8 +54,9 @@ async function savePreferences(){if(busy.value||!authorized())return;const gener
  try{await api.preferences(selected.value||null,defaultId.value||null);if(!valid(generation,id))return;notice.value='当前模型与默认模型已更新。';await load();}
  catch{if(valid(generation,id))error.value='偏好保存失败，请重新读取后重试。';}finally{if(valid(generation,id))busy.value=false;}}
 async function testModel(model){if(!authorized()||busy.value||testingId.value)return;const generation=epoch,id=session.user.user_id;testingId.value=model.id;testingKind.value='connection';parsingResult.value=null;error.value='';notice.value='';
- try{const result=await api.test(model.id);if(valid(generation,id)){if(result?.ok===true)notice.value='模型连接成功。';else error.value=testErrorMessage(result?.error);}}
+ try{const result=await api.test(model.id);if(valid(generation,id)){if(result?.ok===true){notice.value='模型连接成功。';if(model.id===state.value?.effective_model_id)rememberAgentModelReady(id,model.id);if(route.query.returnTo==='agent'&&model.id===state.value?.effective_model_id)await router.replace({name:'plans',query:{tab:'agent'}});}else error.value=testErrorMessage(result?.error);}}
  catch(failure){if(valid(generation,id))error.value=testErrorMessage(failure?.code);}finally{if(valid(generation,id))testingId.value='';}}
+function returnToAgent(){return router.replace({name:'plans',query:{tab:'agent'}});}
 async function testParsing(model){
  if(!authorized()||busy.value||testingId.value)return;
  const generation=epoch,id=session.user.user_id;testingId.value=model.id;testingKind.value='parsing';error.value='';notice.value='';parsingResult.value=null;
@@ -71,6 +78,7 @@ onBeforeUnmount(()=>{alive=false;epoch++;sequence++;});
  <div class="ai-models-layout">
   <section class="panel ai-model-settings" aria-labelledby="ai-models-heading">
    <div class="section-heading"><h2 id="ai-models-heading">AI模型</h2><button class="secondary-button model-refresh" type="button" :disabled="loading" @click="load" aria-label="重新读取模型配置" title="重新读取"><AppIcon name="refresh" /></button></div>
+   <p v-if="agentSetupMessage" class="model-feedback error agent-setup-message" role="alert">{{ agentSetupMessage }} <button class="text-button" type="button" :disabled="loading||Boolean(testingId)" @click="returnToAgent">我已完成调整，重新检查</button></p>
    <ModelPresetPicker :disabled="busy||Boolean(testingId)" @select="choosePreset" />
    <p v-if="error" class="model-feedback error" role="alert">{{ error }}</p><p v-if="notice" class="model-feedback success" role="status">{{ notice }}</p>
    <p v-if="loading && !state" class="muted" role="status">正在读取模型配置…</p>
@@ -102,5 +110,5 @@ onBeforeUnmount(()=>{alive=false;epoch++;sequence++;});
 </template>
 
 <style scoped>
-.parsing-preview{padding:16px;border:1px solid var(--line);border-radius:16px}.ai-model-settings{display:grid;gap:8px;padding:16px}.section-heading h2{font-size:20px}.model-refresh{margin-left:auto;min-width:36px;min-height:var(--control-height);display:grid;place-items:center;padding:8px}.model-empty{font-size:13px;margin:0!important;padding:8px 8px!important;border:0!important}.add-model{width:fit-content;min-height:var(--control-height);font-size:13px}.preference-save{min-height:var(--control-height);font-size:13px}.section-heading,.model-title,.model-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.section-heading{justify-content:space-between}.section-heading h2{margin:0}.model-empty{padding:16px;border:1px dashed var(--line);border-radius:16px;background:var(--page)}.model-empty p{margin:8px 0 0;color:var(--muted)}.preference-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.preference-save{justify-self:start}.model-list{display:grid}.model-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:8px 0;border-top:1px solid var(--line)}.model-main{min-width:0}.model-main p{margin:8px 0;overflow-wrap:anywhere}.model-main small{color:var(--muted)}.model-title h3{margin:0}.model-tag{border-radius:999px;padding:8px 8px;background:var(--brand-soft);color:var(--brand-dark);font-size:12px}.service-model{opacity:.8}.model-feedback{padding:8px 16px;margin:0;border-radius:8px}.model-feedback.error{background:var(--danger-soft);color:var(--danger)}.model-feedback.success{background:var(--brand-soft);color:var(--brand-dark)}@media(max-width:720px){.preference-grid{grid-template-columns:1fr}.model-row{align-items:stretch;flex-direction:column}.model-actions{justify-content:flex-start}}
+.parsing-preview{padding:16px;border:1px solid var(--line);border-radius:16px}.ai-model-settings{display:grid;gap:8px;padding:16px}.section-heading h2{font-size:20px}.model-refresh{margin-left:auto;min-width:36px;min-height:var(--control-height);display:grid;place-items:center;padding:8px}.model-empty{font-size:13px;margin:0!important;padding:8px 8px!important;border:0!important}.add-model{width:fit-content;min-height:var(--control-height);font-size:13px}.preference-save{min-height:var(--control-height);font-size:13px}.section-heading,.model-title,.model-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.section-heading{justify-content:space-between}.section-heading h2{margin:0}.model-empty{padding:16px;border:1px dashed var(--line);border-radius:16px;background:var(--page)}.model-empty p{margin:8px 0 0;color:var(--muted)}.preference-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.preference-save{justify-self:start}.model-list{display:grid}.model-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:8px 0;border-top:1px solid var(--line)}.model-main{min-width:0}.model-main p{margin:8px 0;overflow-wrap:anywhere}.model-main small{color:var(--muted)}.model-title h3{margin:0}.model-tag{border-radius:999px;padding:8px 8px;background:var(--brand-soft);color:var(--brand-dark);font-size:12px}.service-model{opacity:.8}.model-feedback{padding:8px 16px;margin:0;border-radius:8px}.model-feedback.error{background:var(--danger-soft);color:var(--danger)}.model-feedback.success{background:var(--brand-soft);color:var(--brand-dark)}.agent-setup-message{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.agent-setup-message button{flex:0 0 auto}@media(max-width:720px){.preference-grid{grid-template-columns:1fr}.model-row{align-items:stretch;flex-direction:column}.model-actions{justify-content:flex-start}}
 </style>

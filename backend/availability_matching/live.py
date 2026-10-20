@@ -124,7 +124,9 @@ class OfficialReadOnlyAvailabilityService:
         self._window = booking_window_policy
         self._key = item_aes_key_ascii
         self._iv = item_aes_iv_ascii
-        self._enabled = bool(enabled and item_aes_key_ascii and item_aes_iv_ascii)
+        self._feature_enabled = bool(enabled)
+        self._cipher_configured = bool(item_aes_key_ascii and item_aes_iv_ascii)
+        self._enabled = self._feature_enabled and self._cipher_configured
         self._timezone_name = timezone_name
         self._clock = clock_utc_ms or (lambda: time.time_ns() // 1_000_000)
         self._references = _ScopeReferenceRegistry()
@@ -133,6 +135,11 @@ class OfficialReadOnlyAvailabilityService:
     def options(self) -> dict:
         return {
             "enabled": self._enabled,
+            "disabled_reason": (
+                None if self._enabled else
+                "request_cipher_missing" if self._feature_enabled else
+                "feature_disabled"
+            ),
             "min_read_interval_ms": self._credentials.gate.minimum_interval_ms,
             "source": "official_read_only",
             "physical_venue_catalog_configured": False,

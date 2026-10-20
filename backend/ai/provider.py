@@ -223,8 +223,8 @@ class PinnedChatCompletionsTransport:
                 timer.cancel()
             conn.close()
 
-    def _request(self, config: ProviderConfig, messages: Sequence[Mapping[str, str]]) -> str:
-        body = json.dumps({"model": config.model, "messages": list(messages), "max_tokens": 3072}, ensure_ascii=False,
+    def _request(self, config: ProviderConfig, messages: Sequence[Mapping[str, str]], *, max_tokens: int = 3072) -> str:
+        body = json.dumps({"model": config.model, "messages": list(messages), "max_tokens": max_tokens}, ensure_ascii=False,
                           separators=(",", ":")).encode("utf-8")
         try:
             value = json.loads(self._exchange(config, "POST", "/chat/completions", body).decode("utf-8"))
@@ -251,4 +251,4 @@ class PinnedChatCompletionsTransport:
 
     def test(self, config: ProviderConfig) -> bool:
         # Minimal non-sensitive prompt; endpoint errors are collapsed by caller.
-        return isinstance(self._request(config, [{"role": "user", "content": "Reply with OK."}]), str)
+        return isinstance(self._request(config, [{"role": "user", "content": "Reply with OK."}], max_tokens=8), str)
