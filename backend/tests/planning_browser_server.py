@@ -19,6 +19,7 @@ from backend.ai.provider import ProviderFailure
 from backend.ai.planning import PlanningService
 from backend.ai.intent_planning import IntentPlanningService
 from backend.ai.service import AIProviderService
+from backend.auth.rate_limit import RateLimitDecision
 from backend.auth.passwords import hash_password
 from backend.credentials.keyring import CredentialKeyring
 from backend.credentials.contracts import AdapterValidationResult
@@ -69,6 +70,16 @@ class SyntheticPlanningTransport:
         if config.model == 'synthetic-warning':
             return json.dumps({'warnings': ['合成提示：请核对队列里的场地。']}, ensure_ascii=False)
         return json.dumps({'warnings': []})
+
+
+class SyntheticAICallLimits:
+    def __init__(self, delegate):
+        self.delegate = delegate
+
+    def check_and_record(self, event_type, buckets, now_utc_ms):
+        if event_type == 'ai_call':
+            return RateLimitDecision(True, 0)
+        return self.delegate.check_and_record(event_type, buckets, now_utc_ms)
 
 
 class SyntheticCredentialAdapter:
@@ -148,6 +159,8 @@ def main():
                       'UPSTREAM_ITEM_AES_KEY_ASCII':'0123456789abcdef', 'UPSTREAM_ITEM_AES_IV_ASCII':'abcdef0123456789',
                       'AVAILABILITY_SIMULATION_ENABLED':'true' if args.simulation else 'false',
                       'BOOKING_TIMEZONE':'Asia/Shanghai','BOOKING_CURRENCY_CODE':'CNY','BOOKING_CURRENCY_MINOR_UNIT_EXPONENT':'2'})
+    # This synthetic browser workflow exceeds the production call burst by design.
+    app.extensions['ai_call_guard'].rate_limits = SyntheticAICallLimits(app.extensions['rate_limit_service'])
     settings = app.extensions['app_settings']
     app.extensions['live_availability_service']._transport = SyntheticAvailabilityTransport()
     provider = AIProviderService(database_path=database,busy_timeout_ms=5000,
@@ -163,6 +176,11 @@ def main():
             user = 'synthetic-planning-'+suffix
             name = 'plan_user_'+suffix
             db.execute('INSERT INTO users(user_id,username,normalized_username,password_hash,role,status,created_at_utc_ms,updated_at_utc_ms) VALUES(?,?,?,?,?,?,?,?)', (user,name,name,password,'user','active',now,now))
+    for suffix, name in (('a', 'A 会话检查模型'), ('b', 'B 合成模型')):
+        provider.create(
+            f'synthetic-planning-{suffix}', name, 'https://model.example/v1',
+            f'synthetic-planner-{suffix}', 'none',
+        )
     credential_service = app.extensions['credential_service']
     credential_service.adapter = SyntheticCredentialAdapter()
     for index, suffix in enumerate(('a','b')):

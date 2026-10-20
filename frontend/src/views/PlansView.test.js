@@ -105,6 +105,15 @@ describe('reservation plan workspace',()=>{
   expect(router.currentRoute.value.query).toEqual({returnTo:'agent',reason:'provider_auth_failed'});
  });
 
+ it('redirects to model settings when no model is configured',async()=>{
+  const aiModelsApi={list:vi.fn(async()=>({effective_model_id:null,models:[],service_default:null})),test:vi.fn()};
+  const {wrapper,router}=await mountPlans(apiFixture(),{aiModelsApi});
+  await wrapper.get('[data-testid="plan-tab-agent"]').trigger('click');await flushPromises();
+  expect(aiModelsApi.test).not.toHaveBeenCalled();
+  expect(router.currentRoute.value.name).toBe('ai-models');
+  expect(router.currentRoute.value.query).toEqual({returnTo:'agent',reason:'provider_not_configured'});
+ });
+
  it('preserves a direct Agent deep link while the date window loads',async()=>{
   const {wrapper}=await mountPlans(apiFixture(),{},'/plans?tab=agent');
   await flushPromises();
