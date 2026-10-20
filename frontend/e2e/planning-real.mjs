@@ -99,7 +99,7 @@ try {
   await a.page.getByTestId('proposal-message').fill('改成下周六18-20');
   check('pending original-message edit blocks saving',await a.page.getByTestId('confirm-save-proposal').isDisabled());
   await a.page.getByRole('button',{name:'保留原描述',exact:true}).click();
-  await screenshot(a.page,'proposal-desktop');await a.page.getByTestId('confirm-save-proposal').click();await a.page.getByText(/队列已保存/).waitFor();
+  await screenshot(a.page,'proposal-desktop');await a.page.getByTestId('confirm-save-proposal').click();await a.page.locator('.chat-bubble.bubble-saved').waitFor();
   check('explicit confirmation writes one queue revision',storage().plans===1&&storage().revisions===1);
 
   await a.page.reload();await a.page.getByTestId('plan-tab-current').click();await a.page.locator('.ticket-queue-card').waitFor();
@@ -107,7 +107,7 @@ try {
   check('reload reads the saved manual queue',await a.page.locator('.ticket-queue-card').count()===1);
   await waitScope(a.page);await generate(a.page,replacement);await a.page.getByTestId('replace-warning').waitFor();
   check('replacing an existing queue requires a preview first',storage().revisions===1);
-  await a.page.getByTestId('confirm-save-proposal').click();await a.page.getByText(/队列已保存/).waitFor();check('confirmed replacement appends revision 2',storage().revisions===2);
+  await a.page.getByTestId('confirm-save-proposal').click();await a.page.locator('.chat-bubble.bubble-saved').waitFor();check('confirmed replacement appends revision 2',storage().revisions===2);
   await a.page.getByTestId('plan-tab-current').click();await a.page.getByRole('button',{name:`${targetDate}版本历史`,exact:true}).click();await a.page.locator('.queue-history details').nth(1).waitFor();check('both queue revisions remain available',await a.page.locator('.queue-history details').count()===2);await screenshot(a.page,'history-desktop');await a.page.getByRole('button',{name:'关闭历史',exact:true}).click();
 
   await generate(a.page,description+'模拟失败');await a.page.getByTestId('queue-preview').waitFor();await a.page.getByText('队列没有经过模型复核（模型暂时不可用）。',{exact:true}).first().waitFor();check('optional review failure preserves the deterministic draft without saving',storage().revisions===2);
