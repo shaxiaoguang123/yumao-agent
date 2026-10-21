@@ -73,7 +73,7 @@ class OfficialBookingByTimeHistoryAdapter:
         if (type(conflicts) is not list or len(conflicts) > _CONFLICT_LIMIT
                 or type(prices) is not list or len(prices) > _CONFLICT_LIMIT):
             _invalid()
-        by_cell: dict[tuple[int, int], set[tuple[str, int | None]]] = {}
+        by_cell: dict[tuple[int, int], tuple[str, int | None]] = {}
         for conflict in conflicts:
             if type(conflict) is not str:
                 _invalid()
@@ -89,18 +89,19 @@ class OfficialBookingByTimeHistoryAdapter:
                 category = int(parts[2])
                 state = "activity_occupied" if 0 <= category <= 6 else "unbookable" if category == 7 else "unknown"
                 observation = (state, category)
-            by_cell.setdefault((court_index, row_index), set()).add(observation)
+            # Official GetSite applies conflictList in order; the last marker wins.
+            by_cell[(court_index, row_index)] = observation
 
         rows = []
         for row_index, (label, row_status) in enumerate(time_rows):
             row_status_known = row_status is not None and label is not None
             cells = []
             for court_index in range(len(courts)):
-                observed_states = by_cell.get((court_index, row_index), set())
-                if not row_status_known or row_status != "0" or len(observed_states) > 1:
+                observation = by_cell.get((court_index, row_index))
+                if not row_status_known or row_status != "0":
                     state = "unknown"
-                elif observed_states:
-                    state = next(iter(observed_states))[0]
+                elif observation is not None:
+                    state = observation[0]
                 else:
                     # The official client initializes the grid as display-state 1.
                     # It is retained only as a historical observation, not availability.

@@ -134,7 +134,7 @@ class OfficialBookingByTimeObservationAdapter:
                 price_by_cell[coordinate] = None
                 duplicate_price_conflict_count += 1
 
-        cell_states: dict[tuple[int, int], set[tuple[str, int | None]]] = {}
+        cell_states: dict[tuple[int, int], tuple[str, int | None]] = {}
         duplicate_conflict_count = 0
         for raw in conflicts:
             if type(raw) is not str:
@@ -155,10 +155,11 @@ class OfficialBookingByTimeObservationAdapter:
                     observation = ("observed_unbookable", category)
                 else:
                     observation = ("observed_unknown", category)
-            observed = cell_states.setdefault((court_index, row_index), set())
-            if observation in observed:
+            coordinate = (court_index, row_index)
+            if coordinate in cell_states:
                 duplicate_conflict_count += 1
-            observed.add(observation)
+            # Official GetSite applies conflictList in order; the last marker wins.
+            cell_states[coordinate] = observation
 
         # Mirror the client's global booking-time display gate, independently of
         # conflict semantics. Missing fields fail closed for intent selection.
@@ -169,14 +170,12 @@ class OfficialBookingByTimeObservationAdapter:
             intent_end = next_label if label is not None and next_label is not None and label < next_label else None
             cells = []
             for court_index in range(len(courts)):
-                observed = cell_states.get((court_index, row_index), set())
+                observed = cell_states.get((court_index, row_index))
                 if status_code != "0" or label is None:
                     state = "observed_unknown"
                     reason = "official_client_hides_row_cells" if status_code == "1" else "unknown_time_row_state"
-                elif len(observed) > 1:
-                    state, reason = "observed_unknown", "conflicting_duplicate_conflicts"
-                elif observed:
-                    state, category = next(iter(observed))
+                elif observed is not None:
+                    state, category = observed
                     reason = "official_conflict_display_rule"
                     if state == "observed_unknown":
                         reason = "unknown_conflict_category"
@@ -187,7 +186,7 @@ class OfficialBookingByTimeObservationAdapter:
                     if selection_window != "open":
                         state = "observed_unbookable" if selection_window == "closed" else "observed_unknown"
                         reason = "official_client_booking_window_closed" if selection_window == "closed" else "official_client_booking_window_unknown"
-                activity = next(iter(observed))[1] if len(observed) == 1 else None
+                activity = observed[1] if observed is not None else None
                 cells.append({
                     "state": state,
                     "label": _activity_label(observed) if state == "observed_activity_occupied" else None,
@@ -281,8 +280,8 @@ def _client_selection_window(result: dict, target: str, zone: str, captured_at: 
         return "unknown"
 
 
-def _activity_label(observations: set[tuple[str, int | None]]) -> str | None:
-    if len(observations) != 1:
+def _activity_label(observation: tuple[str, int | None] | None) -> str | None:
+    if observation is None:
         return None
-    _state, category = next(iter(observations))
+    _state, category = observation
     return f"客户端活动类别 {category}（语义未核验）"
