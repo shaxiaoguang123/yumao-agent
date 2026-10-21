@@ -1,0 +1,26 @@
+[Unit]
+Description=Yumao Agent booking scheduler
+After=network-online.target yumao-agent-web.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yumao
+Group=yumao
+WorkingDirectory=/opt/yumao-agent/current
+EnvironmentFile=/etc/yumao-agent/yumao.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/yumao-agent/venv/bin/python -m backend.execution.worker
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/yumao-agent
+
+[Install]
+WantedBy=multi-user.target
