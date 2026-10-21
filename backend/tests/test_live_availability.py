@@ -94,12 +94,14 @@ class LiveObservationAdapterTests(unittest.TestCase):
         self.assertEqual(result['rows'][0]['cells'][1]['price_display'], '20')
         self.assertEqual(result['diagnostics']['duplicate_price_conflict_count'], 1)
 
-    def test_unknown_row_and_conflicting_duplicates_never_become_clear(self):
+    def test_later_conflict_overrides_earlier_display_state_and_unknown_rows_stay_unknown(self):
         body = envelope()
         body['resultData']['timeList'][1]['status'] = 'future-code'
         body['resultData']['conflictList'] += ['0-0-2', '1-1-99']
         result = self.adapt(body)
-        self.assertEqual(result['rows'][0]['cells'][0]['state'], 'observed_unknown')
+        self.assertEqual(result['rows'][0]['cells'][0]['state'], 'observed_activity_occupied')
+        self.assertEqual(result['rows'][0]['cells'][0]['activity_type'], 2)
+        self.assertEqual(result['diagnostics']['duplicate_conflict_count'], 2)
         self.assertEqual(result['rows'][1]['cells'][1]['state'], 'observed_unknown')
         body['resultData']['conflictList'] = []
         result = self.adapt(body)

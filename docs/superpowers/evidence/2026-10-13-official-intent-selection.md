@@ -5,7 +5,7 @@
 ## 直接确认的客户端规则
 
 - `resetSeat` / 日历 `confirm` 清理选择并调用 bookingByTime。页面选择日期后可自动读取，不需要再点击查询。
-- `timeList.status=0` 绘制格子，`1` 不绘制；未知值禁用。客户端初始状态1、选中2、已预订3；冲突类别映射 course0～course7。重复冲突有不同类别时，本项目继续保守显示未知，不按最后一条覆盖。
+- `timeList.status=0` 绘制格子，`1` 不绘制；未知值禁用。客户端初始状态1、选中2、已预订3；冲突类别映射 course0～course7。同坐标重复冲突按 `conflictList` 顺序覆盖，以最后一条还原官方显示；执行复核仍将任一显式冲突坐标视为不可选。
 - `initVenueArray` / `handleChoose` 有 `isNew`、日期与 bookingstarttime/bookingendtime 门控。服务端复现显示门控；缺少必要字段时不允许选择意向，不能用无冲突代替可用性证据。
 - 官方 CSS：未选择 `#fff`、已选择 `#f29f11`、已预订 `#0762c7`、不可预订 `#c8c8c8`；course0/6 其他活动 `#c6e0b4`，course1 体育课 `#ffe8a3`，course2 项目培训 `#b4c6e5`，course3 体训队 `#f8e1c5`，course4 艺术团 `#9bc2e4`，course5 工会活动 `#f4b084`。
 - 客户端 min/max 时段限制有响应字段及初始默认1/6。当前人工模式保留单场地首选和有序备选的计划语义，不表示同时预约多块场地。

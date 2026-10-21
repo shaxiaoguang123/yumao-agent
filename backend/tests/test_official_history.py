@@ -43,10 +43,10 @@ class OfficialBookingByTimeHistoryAdapterTests(unittest.TestCase):
         for forbidden in ("synthetic-node-secret", "synthetic-price-secret", "nodeid", "coordinatesList"):
             self.assertNotIn(forbidden, str(grid))
 
-    def test_conflicting_duplicate_coordinates_become_unknown_instead_of_last_write_wins(self):
+    def test_conflicting_duplicate_coordinates_follow_official_last_write_wins(self):
         grid = self.adapter.preview(response(conflictList=["1-0", "1-0-2"]))
         cell = grid["rows"][0]["cells"][1]
-        self.assertEqual(cell["state"], "historical_unknown")
+        self.assertEqual(cell["state"], "historical_activity_occupied")
         self.assertFalse(cell["selectable"])
 
     def test_client_hidden_time_row_does_not_claim_historical_selectability(self):
@@ -55,9 +55,9 @@ class OfficialBookingByTimeHistoryAdapterTests(unittest.TestCase):
         grid = self.adapter.preview(payload)
         self.assertTrue(all(cell['state'] == 'historical_unknown' for cell in grid['rows'][0]['cells']))
 
-    def test_distinct_activity_categories_at_one_coordinate_become_unknown(self):
-        grid = self.adapter.preview(response(conflictList=["0-0-0", "0-0-1"]))
-        self.assertEqual(grid["rows"][0]["cells"][0]["state"], "historical_unknown")
+    def test_later_unbookable_marker_overrides_an_activity_at_the_same_coordinate(self):
+        grid = self.adapter.preview(response(conflictList=["0-0-0", "0-0-7"]))
+        self.assertEqual(grid["rows"][0]["cells"][0]["state"], "historical_unbookable")
 
     def test_duplicate_identical_activity_categories_keep_the_observed_display_state(self):
         grid = self.adapter.preview(response(conflictList=["0-0-3", "0-0-3"]))
