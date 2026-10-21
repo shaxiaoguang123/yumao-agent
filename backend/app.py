@@ -6,6 +6,7 @@ from typing import Any
 
 import requests
 from flask import Flask
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from backend.api.admin import admin_bp
 from backend.api.auth import auth_bp
@@ -148,6 +149,8 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
     )
 
     app = Flask(__name__)
+    if settings.trust_proxy_headers:
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
     app.config.update(flask_overrides)
     app.config.update(
         DATABASE_PATH=settings.database_path,

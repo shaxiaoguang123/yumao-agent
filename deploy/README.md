@@ -24,4 +24,6 @@ the same database.
 
 The public hostname is a proxied CNAME to `<tunnel-id>.cfargotunnel.com`.
 Nginx listens only on `127.0.0.1:8080`; the host firewall therefore needs no
-public HTTP or HTTPS rule.
+public HTTP or HTTPS rule. Keep `TRUST_PROXY_HEADERS=true` only with this
+loopback-only Nginx setup; Nginx replaces forwarded client IP and scheme headers
+before requests reach Gunicorn.

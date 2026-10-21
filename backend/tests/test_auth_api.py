@@ -170,6 +170,27 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Secure", response.headers["Set-Cookie"])
 
+    def test_trusted_proxy_uses_sanitized_forwarded_client_ip_for_rate_limits(self) -> None:
+        app = _module("backend.app").create_app({
+            **self.config,
+            "TRUST_PROXY_HEADERS": "true",
+            "LOGIN_USERNAME_ATTEMPT_LIMIT": 20,
+            "LOGIN_IP_ATTEMPT_LIMIT": 1,
+        })
+        client = app.test_client()
+        first = client.post(
+            "/api/auth/login",
+            json={"username": "Alice", "password": "incorrect strong test password"},
+            headers=self._origin_headers({"X-Forwarded-For": "198.51.100.1"}),
+        )
+        second = client.post(
+            "/api/auth/login",
+            json={"username": "Bob", "password": "incorrect strong test password"},
+            headers=self._origin_headers({"X-Forwarded-For": "198.51.100.2"}),
+        )
+        self.assertEqual(first.status_code, 401)
+        self.assertEqual(second.status_code, 401)
+
     def test_registration_requires_body_invite_and_never_accepts_client_role(self) -> None:
         invitation = self._invitation()
         query_only = self.client.post(

@@ -20,6 +20,15 @@ def _settings_input() -> dict[str, str]:
 
 
 class AppSettingsTests(unittest.TestCase):
+    def test_proxy_header_trust_is_explicit_and_strict(self) -> None:
+        env = _settings_input()
+        self.assertFalse(load_settings(env).trust_proxy_headers)
+        env["TRUST_PROXY_HEADERS"] = "true"
+        self.assertTrue(load_settings(env).trust_proxy_headers)
+        env["TRUST_PROXY_HEADERS"] = "yes"
+        with self.assertRaisesRegex(ValueError, "TRUST_PROXY_HEADERS"):
+            load_settings(env)
+
     def test_service_provider_is_complete_and_keeps_one_auth_mode(self) -> None:
         env = _settings_input()
         env.update({"LLM_BASE_URL":"https://service.example/v1", "LLM_MODEL":"svc",
