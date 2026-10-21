@@ -1,0 +1,8 @@
+tunnel: replace-with-tunnel-uuid
+credentials-file: /etc/cloudflared/replace-with-tunnel-uuid.json
+ingress:
+  - hostname: yumao.shaxiaoguang.eu.cc
+    service: http://127.0.0.1:8080
+    originRequest:
+      httpHostHeader: yumao.shaxiaoguang.eu.cc
+  - service: http_status:404

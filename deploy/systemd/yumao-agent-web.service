@@ -1,0 +1,28 @@
+[Unit]
+Description=Yumao Agent web API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yumao
+Group=yumao
+WorkingDirectory=/opt/yumao-agent/current
+EnvironmentFile=/etc/yumao-agent/yumao.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/yumao-agent/venv/bin/gunicorn --workers 1 --threads 4 --timeout 90 --bind 127.0.0.1:8000 backend.app:create_app()
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+KillSignal=SIGQUIT
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/yumao-agent
+
+[Install]
+WantedBy=multi-user.target
