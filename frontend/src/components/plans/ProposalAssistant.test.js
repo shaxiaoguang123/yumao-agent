@@ -43,6 +43,7 @@ describe('queue assistant: asking',()=>{
   expect(wrapper.text()).toContain('1 / A 只抢2小时');
   expect(wrapper.text()).toContain('2 / B 只抢1小时');
   expect(wrapper.text()).toContain('3 / C 两种都抢');
+  expect(wrapper.text()).toContain('先选队列类型，再确认日期；2小时和1小时的时段、场地分开核对');
   expect(wrapper.find('.proposal-mode-picker').exists()).toBe(false);
   expect(wrapper.get('[data-testid="proposal-field-mode"]').exists()).toBe(true);
   expect(wrapper.get('[data-testid="proposal-field-windows-1h"]').exists()).toBe(true);
@@ -54,6 +55,53 @@ describe('queue assistant: asking',()=>{
   await send(wrapper,'我想订场');
   expect(proposalApi.generate).toHaveBeenCalledWith({message:'我想订场',credentialId:'credential-a',answers:[],askedFields:[],scopeLabel:'羽毛球'});
   expect(wrapper.text()).toContain('想订哪一天？');
+ });
+
+ it('shows the server workflow stages returned for the turn',async()=>{
+  const workflowTrace=[
+   {stage:'准备上下文',detail:'已加载3轮用户消息、2轮助手校验记录。'},
+   {stage:'模型理解',detail:'已按结构化协议解释本轮意图。模型：deepseek-flash。'},
+   {stage:'应用更新并校验',detail:'有效候选 4/32；当前阻塞 2小时场地。'},
+   {stage:'追问',detail:'等待用户补充courts_2h。'},
+  ];
+  const result=ask('请问两小时时段要选哪些场地？',{asking:'courts_2h',heading:'2小时场地',workflow_trace:workflowTrace});
+  const {wrapper}=await mountAssistant(fixture({result}));
+  await send(wrapper,'后天 14-16');
+  const trace=wrapper.findAll('.proposal-trace-list .trace-item').map(item=>item.text());
+  expect(trace.some(item=>item.includes('准备上下文')&&item.includes('3轮用户消息'))).toBe(true);
+  expect(trace.some(item=>item.includes('模型理解')&&item.includes('deepseek-flash'))).toBe(true);
+  expect(trace.some(item=>item.includes('应用更新并校验')&&item.includes('4/32'))).toBe(true);
+  expect(trace.some(item=>item.includes('追问')&&item.includes('courts_2h'))).toBe(true);
+ });
+
+ it('renders the model context answer together with the remaining question',async()=>{
+  const contextualReply='日期已记录10月26日，2小时队列和14-16时段通过校验；场地还没记录。';
+  const {wrapper}=await mountAssistant(fixture({result:ask('2小时选哪些场地？例如1号和4号。',{
+   asking:'courts_2h',heading:'2小时场地',contextual_reply:contextualReply,
+  })}));
+  await send(wrapper,'我已经确认了什么？');
+  expect(wrapper.get('.contextual-reply').text()).toBe(contextualReply);
+  expect(wrapper.text()).toContain('2小时选哪些场地？例如1号和4号。');
+ });
+
+ it('keeps earlier contextual answers visible after the next user reply',async()=>{
+  const earlierReply='日期已记录10月26日，2小时14-16通过校验；场地还没记录。';
+  const laterReply='2小时场地已记录为1号场；1小时队列仍独立确认。';
+  const config=fixture();
+  config.proposalApi.generate=vi.fn()
+   .mockResolvedValueOnce(ask('2小时选哪些场地？例如1号和4号。',{
+    asking:'courts_2h',heading:'2小时场地',contextual_reply:earlierReply,
+   }))
+   .mockResolvedValueOnce(ask('还要排1小时吗？例如14-15。',{
+    asking:'windows_1h',heading:'1小时时段',contextual_reply:laterReply,
+   }));
+  const {wrapper}=await mountAssistant(config);
+  await send(wrapper,'10月26日只抢2小时14-16');
+  await reply(wrapper,'1号场');
+  const replies=wrapper.findAll('.contextual-reply').map(item=>item.text());
+  expect(replies).toEqual([earlierReply,laterReply]);
+  expect(wrapper.text()).toContain('1号场');
+  expect(wrapper.text()).toContain('还要排1小时吗？例如14-15。');
  });
 
  it('fills structured choices into the chat input without sending them',async()=>{
@@ -103,8 +151,8 @@ describe('queue assistant: asking',()=>{
   await send(wrapper,'我想订场');
   await wrapper.get('[data-testid="restart-conversation"]').trigger('click');
   await flushPromises();
-  expect(wrapper.get('[data-testid="proposal-message"]').element.disabled).toBe(true);
-  expect(wrapper.get('[data-testid="generate-proposal"]').element.disabled).toBe(true);
+  expect(wrapper.get('[data-testid="proposal-answer"]').element.disabled).toBe(true);
+  expect(wrapper.get('[data-testid="continue-proposal"]').element.disabled).toBe(true);
   finishClose();
   await flushPromises();
   expect(wrapper.get('[data-testid="proposal-message"]').element.disabled).toBe(false);
@@ -135,11 +183,11 @@ describe('queue assistant: asking',()=>{
  it('restores the latest server conversation after remount and continues with its id',async()=>{
   const saved={conversation_id:'conversation-identifier-123',business_date:'2026-10-18',message:'想订场',answers:['后天'],asked_fields:['target_date'],scope_label:'羽毛球',response_history:[
    {...ask('想订哪一天？',{asking:'target_date',heading:'日期'}),trace_event:{submitted_title:'提交预约需求',result_title:'还缺一项信息',result_detail:'服务端保存的轨迹。',at_utc_ms:Date.UTC(2026,9,18,3,0)}},
-   ask('2小时要哪个时间段？',{asking:'windows_2h',heading:'2小时时段'}),
+   ask('2小时要哪个时间段？',{asking:'windows_2h',heading:'2小时时段',workflow_trace:[{stage:'模型理解',detail:'已加载历史并识别日期。'}]}),
   ]};
   const config=fixture();config.proposalApi.restore=vi.fn(async()=>({conversation:saved}));
   const {wrapper,proposalApi}=await mountAssistant(config);
-  expect(wrapper.text()).toContain('想订场');expect(wrapper.text()).toContain('后天');expect(wrapper.text()).toContain('2小时要哪个时间段？');expect(wrapper.text()).toContain('服务端保存的轨迹。');
+  expect(wrapper.text()).toContain('想订场');expect(wrapper.text()).toContain('后天');expect(wrapper.text()).toContain('2小时要哪个时间段？');expect(wrapper.text()).toContain('服务端保存的轨迹。');expect(wrapper.text()).toContain('已加载历史并识别日期。');
   expect(wrapper.text()).not.toContain('已保存的对话暂时无法恢复');
   await reply(wrapper,'14-16');
   expect(proposalApi.generate).toHaveBeenCalledWith(expect.objectContaining({conversationId:'conversation-identifier-123',answers:['后天','14-16'],askedFields:['target_date','windows_2h']}));
@@ -241,12 +289,32 @@ describe('queue assistant: preview and save',()=>{
  });
 
  it('treats a version conflict as stale and regenerates from the latest queue',async()=>{
-  const config=fixture({saveQueue:vi.fn().mockRejectedValueOnce({status:409,code:'plan_version_conflict'})});
+  const config=fixture({result:{...ready(),conversation_id:'stale-conversation-123456'},saveQueue:vi.fn().mockRejectedValueOnce({status:409,code:'plan_version_conflict'})});
   const {wrapper,planApi,proposalApi}=await mountAssistant(config);await send(wrapper,'后天 14-16');
   await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
   expect(wrapper.text()).toContain('刚被改过');expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);
   await wrapper.get('[data-testid="regenerate"]').trigger('click');await flushPromises();
-  expect(proposalApi.generate).toHaveBeenCalledTimes(2);expect(planApi.saveQueue).toHaveBeenCalledTimes(1);
+  expect(proposalApi.generate).toHaveBeenCalledTimes(2);expect(proposalApi.generate.mock.calls[1][0]).toMatchObject({regenerate:true,answers:[],askedFields:[]});expect(planApi.saveQueue).toHaveBeenCalledTimes(1);
+  expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(false);
+ });
+
+ it('preserves a multi-turn conversation when regenerating after a version conflict',async()=>{
+  const conversationId='multi-turn-conversation-12345';
+  const withId=result=>({...result,conversation_id:conversationId});
+  const config=fixture({saveQueue:vi.fn().mockRejectedValueOnce({status:409,code:'plan_version_conflict'})});
+  config.proposalApi.generate=vi.fn()
+   .mockResolvedValueOnce(withId(ask('想订哪一天？',{asking:'target_date',heading:'日期'})))
+   .mockResolvedValueOnce(withId(ask('两小时选哪些场地？',{asking:'courts_2h',heading:'2小时场地'})))
+   .mockResolvedValueOnce(withId(ready()))
+   .mockResolvedValueOnce(withId(ready({},{base_version:2})));
+  const {wrapper,proposalApi}=await mountAssistant(config);
+  await send(wrapper,'我想订场');await reply(wrapper,'后天');await reply(wrapper,'1号场');
+  await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
+  await wrapper.get('[data-testid="regenerate"]').trigger('click');await flushPromises();
+  expect(proposalApi.generate).toHaveBeenCalledTimes(4);
+  expect(proposalApi.generate.mock.calls[3][0]).toMatchObject({
+   conversationId,answers:['后天','1号场'],askedFields:['target_date','courts_2h'],regenerate:true,
+  });
   expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(false);
  });
 
@@ -336,7 +404,7 @@ describe('queue assistant: save safety regressions',()=>{
  });
 
  it('requires a loaded and unchanged query category before saving',async()=>{
-  const config=fixture({scopeLabel:''});const {wrapper,planApi}=await mountAssistant(config);await send(wrapper,'后天14-16');
+  const config=fixture({result:{...ready(),conversation_id:'scope-conversation-123456'},scopeLabel:''});const {wrapper,planApi}=await mountAssistant(config);await send(wrapper,'后天14-16');
   expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);
   await wrapper.setProps({scopeLabel:'羽毛球'});expect(wrapper.get('[data-testid="confirm-save-proposal"]').element.disabled).toBe(true);
   await wrapper.get('[data-testid="regenerate"]').trigger('click');await flushPromises();
@@ -351,5 +419,30 @@ describe('queue assistant: save safety regressions',()=>{
    const {wrapper}=await mountAssistant(config);await send(wrapper,'后天14-16');await wrapper.get('[data-testid="confirm-save-proposal"]').trigger('click');await flushPromises();
    expect(wrapper.emitted('saved')).toBeUndefined();expect(wrapper.text()).toContain('保存结果暂时无法确认');expect(wrapper.find('[data-testid="queue-preview"]').exists()).toBe(true);
   }
+ });
+});
+
+
+describe('contextual conversation after preview',()=>{
+ it('keeps the conversation and its preview editable instead of starting over',async()=>{
+  const config=fixture({result:{...ready(),conversation_id:'contextual-conversation-12345'}});
+  const {wrapper,proposalApi}=await mountAssistant(config);
+  await send(wrapper,'10月26日只抢2小时14-16，1号场');
+  expect(wrapper.find('[data-testid="proposal-answer"]').exists()).toBe(true);
+  expect(wrapper.get('[data-testid="confirm-save-proposal"]').attributes('disabled')).toBeUndefined();
+  await wrapper.get('[data-testid="proposal-answer"]').setValue('去掉1号场，再加4号场');
+  expect(wrapper.get('[data-testid="confirm-save-proposal"]').attributes('disabled')).toBeDefined();
+  await wrapper.get('[data-testid="continue-proposal"]').trigger('click');await flushPromises();
+  expect(proposalApi.generate).toHaveBeenLastCalledWith(expect.objectContaining({
+   conversationId:'contextual-conversation-12345',answers:['去掉1号场，再加4号场'],askedFields:[null],
+  }));
+  expect(wrapper.get('[data-testid="proposal-answer"]').element.value).toBe('');
+ });
+ it('allows a short answer after a question-only turn without repeating the old question',async()=>{
+  const config=fixture({result:{...ask('',{asking:'courts_2h',contextual_reply:'还缺场地。'}),questions:[],conversation_id:'contextual-conversation-12345'}});
+  const {wrapper}=await mountAssistant(config);
+  await send(wrapper,'我还缺什么？');
+  expect(wrapper.find('[data-testid="proposal-answer"]').exists()).toBe(true);
+  expect(wrapper.text()).toContain('还缺场地');
  });
 });

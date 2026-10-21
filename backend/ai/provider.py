@@ -119,8 +119,8 @@ class _PinnedHTTPSConnection(HTTPSConnection):
 class PinnedChatCompletionsTransport:
     """Direct TLS transport: vetted DNS set, pinned destination, no proxy or redirect."""
 
-    def __init__(self, *, connect_timeout: float = 4, read_timeout: float = 15,
-                 total_timeout: float = 30, max_response_bytes: int = 1_048_576,
+    def __init__(self, *, connect_timeout: float = 4, read_timeout: float = 45,
+                 total_timeout: float = 90, max_response_bytes: int = 1_048_576,
                  resolver: Callable[[str], list[str]] = _resolve_public):
         self.connect_timeout, self.read_timeout = connect_timeout, read_timeout
         self.total_timeout, self.max_response_bytes, self.resolver = total_timeout, max_response_bytes, resolver
@@ -194,7 +194,8 @@ class PinnedChatCompletionsTransport:
             if time.monotonic() > deadline:
                 raise ProviderFailure("provider_timeout", 504)
             if response.status < 200 or response.status >= 300:
-                category = {401:'provider_auth_failed',403:'provider_access_denied',
+                category = {401:'provider_auth_failed',402:'provider_payment_required',
+                            403:'provider_access_denied',
                             404:'provider_model_or_endpoint_not_found',429:'provider_rate_limited'}.get(response.status,'provider_request_failed')
                 if method == "GET" and suffix == "/models" and response.status == 404:
                     category = "provider_model_discovery_unavailable"
@@ -228,9 +229,12 @@ class PinnedChatCompletionsTransport:
                           separators=(",", ":")).encode("utf-8")
         try:
             value = json.loads(self._exchange(config, "POST", "/chat/completions", body).decode("utf-8"))
-            content = value["choices"][0]["message"]["content"]
+            choice = value["choices"][0]
+            content = choice["message"]["content"]
         except (ValueError, KeyError, IndexError, TypeError):
             raise ProviderFailure("provider_response_invalid") from None
+        if choice.get("finish_reason") == "length":
+            raise ProviderFailure("provider_output_truncated")
         if not isinstance(content, str):
             raise ProviderFailure("provider_response_invalid")
         return content
@@ -250,5 +254,10 @@ class PinnedChatCompletionsTransport:
         return self._request(config, messages)
 
     def test(self, config: ProviderConfig) -> bool:
-        # Minimal non-sensitive prompt; endpoint errors are collapsed by caller.
-        return isinstance(self._request(config, [{"role": "user", "content": "Reply with OK."}], max_tokens=8), str)
+        # A connection probe needs a valid envelope, not a complete generated answer.
+        try:
+            return isinstance(self._request(config, [{"role": "user", "content": "Reply with OK."}], max_tokens=8), str)
+        except ProviderFailure as exc:
+            if exc.code == "provider_output_truncated":
+                return True
+            raise

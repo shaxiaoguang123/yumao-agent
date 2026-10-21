@@ -41,6 +41,8 @@ def issue_detail(minutes: int, issue: str, text: str) -> str:
     if issue == "unsupported_duration":
         return (f"你提到“{text}”，但每个候选时段只支持1小时或2小时。这里的{text}是当天累计时长还是单个时段？"
                 "候选抢到一项就停止，不会把多项累计预约。请说明具体预约方式，再按每个候选时段写清楚时间。")
+    if issue == "ambiguous":
+        return f"{hours}时段还不明确，请写清开始和结束时间，例如 14-{14 + minutes // 60}。"
     return f"“{text}”分不清是上午还是晚上，请写成 24 小时制，例如 18-{18 + minutes // 60}。"
 
 
@@ -49,7 +51,7 @@ def ask(slot_id: str, *, detail: str | None, repeated: bool, today: date, pairs=
     day_text = f"{example_day.month}月{example_day.day}日"
     if slot_id == "target_date":
         if detail == "past":
-            return f"这个日期已经过了（今天是 {show_date(today)}）。请选一个今天之后的日期，例如“{day_text}”。"
+            return f"这个日期已经过了（今天是 {show_date(today)}）。请选今天或之后的日期，例如“{day_text}”。"
         if detail == "ambiguous":
             return f"这个日期有不止一种理解。请说完整，例如“{day_text}”或“下周六”。"
         return ("还没确认是哪一天。请直接说日期或星期，例如“" + day_text + "”或“下周六”。" if repeated

@@ -26,6 +26,7 @@ from backend.credentials.contracts import AdapterValidationResult
 from backend.credentials.upstream import BoundedHttpResponse
 from backend.db import connect_database
 from backend.migrate import migrate_database
+from backend.tests.plan_test_support import synthetic_queue_turn
 from backend.tests.support import credential_test_settings
 
 
@@ -49,10 +50,27 @@ class SyntheticPlanningTransport:
     def chat(self, config, messages):
         self.counts['calls'] += 1
         self._record()
-        payload = json.loads(messages[-1]['content'])
-        turns = payload.get('user_turns', [payload.get('user_request', '')])
-        if '模拟失败' in json.dumps(turns, ensure_ascii=False) or config.model == 'synthetic-failure':
+        queue_turn = messages[0]['content'].startswith('你是羽毛球预约队列 Agent')
+        review_turn = messages[0]['content'].startswith('你是预约队列复核员')
+        payload = json.loads(messages[1]['content'] if queue_turn else messages[-1]['content'])
+        turns = []
+        if queue_turn:
+            for message in messages[2:]:
+                content = message['content']
+                if message['role'] == 'user' and content.startswith('[历史用户轮次 '):
+                    turns.append(content.split('\n', 1)[1])
+                elif message['role'] == 'user' and content.startswith('[本轮用户原文]\n'):
+                    turns.append(content.split('\n', 1)[1])
+            payload['user_turns'] = turns
+        else:
+            turns = payload.get('user_turns', [payload.get('user_request', '')])
+        if config.model == 'synthetic-failure' or (
+                review_turn and '模拟失败' in json.dumps(turns, ensure_ascii=False)):
             raise ProviderFailure('provider_unavailable', 502)
+        if queue_turn:
+            if config.model == 'synthetic-invalid-json':
+                return 'not structured JSON'
+            return json.dumps(synthetic_queue_turn(payload), ensure_ascii=False)
         if messages[0]['content'].startswith('你是预约意向草稿助手'):
             intent = dict(payload['current_intent'])
             request = payload['user_request']

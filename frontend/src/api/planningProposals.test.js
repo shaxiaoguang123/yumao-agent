@@ -31,6 +31,11 @@ describe('planning proposal API',()=>{
   await proposals.generate({message:'原话',credentialId:'cred-1',answers:['3','14-16'],askedFields:['booking_mode','windows_2h']});
   expect(client.request.mock.calls[0][1].body).toEqual({message:'原话',credential_id:'cred-1',answers:['3','14-16'],asked_fields:['booking_mode','windows_2h']});
  });
+ it('marks an explicit regeneration while preserving the conversation id and answers',async()=>{
+  const {client,api:proposals}=api();
+  await proposals.generate({message:'原话',credentialId:'cred-1',conversationId:'conversation-identifier-123',answers:['3'],askedFields:['booking_mode'],regenerate:true});
+  expect(client.request.mock.calls[0][1].body).toEqual({message:'原话',credential_id:'cred-1',conversation_id:'conversation-identifier-123',answers:['3'],asked_fields:['booking_mode'],regenerate:true});
+ });
  it('keeps null entries so asked fields stay aligned with the answers',async()=>{
   const {client,api:proposals}=api();
   await proposals.generate({message:'原话',credentialId:'cred-1',answers:['好'],askedFields:[null]});

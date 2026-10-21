@@ -31,6 +31,11 @@ class FakeTransport:
 
 
 class AIModelTests(unittest.TestCase):
+    def test_default_chat_deadlines_allow_slower_structured_generation(self):
+        transport = PinnedChatCompletionsTransport()
+        self.assertEqual(transport.read_timeout, 45)
+        self.assertEqual(transport.total_timeout, 90)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ai-models-")
         self.addCleanup(self.temp.cleanup)
@@ -74,13 +79,68 @@ class AIModelTests(unittest.TestCase):
 
     def test_explicit_parsing_tests_validate_without_saving_and_isolate_model(self):
         import json
+        from datetime import date, timedelta
         selected=self._create(name='Selected').get_json()['model']
         tested=self._create(name='Tested').get_json()['model']
         self.service.set_preferences('user-a',selected['id'],None)
         def reply(config,messages):
             self.transport.calls.append((config,messages))
-            if '判断用户最新一句是纯问题' in messages[0]['content']:
-                return json.dumps({'kind':'question','reply':'场地和时段会按队列类型分别核对。'},ensure_ascii=False)
+            if '羽毛球预约队列 Agent' in messages[0]['content']:
+                payload=json.loads(messages[1]['content'])
+                latest=payload['latest_user_message']
+                choices={'1':'two_hour_only','2':'one_hour_only','3':'both',
+                         'A':'two_hour_only','B':'one_hour_only','C':'both'}
+                if latest in choices:
+                    result={'kind':'answer','updates':[
+                        {'field':'booking_mode','operation':'set','value':choices[latest],'evidence':latest},
+                    ],'unresolved':[],'reply':'','next_field':'courts_2h',
+                        'next_question':'2小时选哪些场地？例如1号和4号。'}
+                elif '1小时还是2小时' in latest:
+                    slots={slot['field']:slot for slot in payload['current_slots']}
+                    result={'kind':'question','updates':[],'unresolved':[],
+                            'reply':f"我记录了{slots['target_date']['display']}，2小时14:00-16:00；还缺场地。",
+                            'next_field':'courts_2h','next_question':'2小时选哪些场地？例如1号和4号。'}
+                elif latest=='1号场':
+                    result={'kind':'answer','updates':[
+                        {'field':'courts_2h','operation':'replace','value':[1],'evidence':'1号场'},
+                    ],'unresolved':[],'reply':'已记录1号场。','next_field':None,'next_question':''}
+                elif '把2小时' in latest and '18-20' in latest and '4号场' in latest:
+                    result={'kind':'answer','updates':[
+                        {'field':'windows_2h','operation':'replace','value':[{'start':'18:00','end':'20:00'}],
+                         'evidence':'改为18-20'},
+                        {'field':'courts_2h','operation':'replace','value':[4],'evidence':'4号场'},
+                    ],'unresolved':[],'reply':'已将2小时候选改为18-20和4号场。',
+                        'next_field':None,'next_question':''}
+                elif '11号场' in latest or '22-24' in latest or '14-17' in latest:
+                    target=(date.fromisoformat(payload['conversation_start_date'])+timedelta(days=2)).isoformat()
+                    day=date.fromisoformat(target)
+                    target_text=f'{day.month}月{day.day}日'
+                    if '11号场' in latest:
+                        window, court = {'start':'14:00','end':'16:00'}, 11
+                        window_evidence, court_evidence = '14-16', '11号场'
+                    elif '22-24' in latest:
+                        window, court = {'start':'22:00','end':'24:00'}, 1
+                        window_evidence, court_evidence = '22-24', '1号场'
+                    else:
+                        window, court = {'start':'14:00','end':'17:00'}, 1
+                        window_evidence, court_evidence = '14-17', '1号场'
+                    result={'kind':'answer','updates':[
+                        {'field':'booking_mode','operation':'set','value':'two_hour_only','evidence':'只抢2小时'},
+                        {'field':'target_date','operation':'set','value':target,'evidence':target_text},
+                        {'field':'windows_2h','operation':'replace','value':[window],'evidence':window_evidence},
+                        {'field':'courts_2h','operation':'replace','value':[court],'evidence':court_evidence},
+                    ],'unresolved':[],'reply':'','next_field':'courts_2h','next_question':'请检查这个候选值。'}
+                else:
+                    target=(date.fromisoformat(payload['conversation_start_date'])+timedelta(days=2)).isoformat()
+                    target_day=date.fromisoformat(target)
+                    target_text=f'{target_day.month}月{target_day.day}日'
+                    result={'kind':'answer','updates':[
+                        {'field':'target_date','operation':'set','value':target,'evidence':target_text},
+                        {'field':'windows_2h','operation':'replace','value':[{'start':'14:00','end':'16:00'}],
+                         'evidence':'14-16'},
+                    ],'unresolved':[],'reply':'','next_field':'booking_mode',
+                        'next_question':'先选队列类型：1/A只抢2小时；2/B只抢1小时；3/C两种都抢。'}
+                return json.dumps(result,ensure_ascii=False)
             return json.dumps({'warnings':[]})
         self.transport.chat=reply
         endpoint='/api/ai/models/'+tested['id']+'/test-parsing'
@@ -88,17 +148,76 @@ class AIModelTests(unittest.TestCase):
         self.assertEqual(response.status_code,200)
         body=response.get_json()
         self.assertEqual(body['outcome'],'parsed')
-        self.assertEqual(body['question_check'],{'answered':True})
-        self.assertTrue(body['proposal']['entries'])
-        self.assertEqual([call[0].provider_id for call in self.transport.calls],[tested['id'],tested['id']])
+        self.assertTrue(body['ok'])
+        self.assertTrue(body['question_check']['short_choice'])
+        self.assertTrue(body['question_check']['mode_choices'])
+        self.assertTrue(body['question_check']['answered'])
+        self.assertTrue(body['question_check']['context_used'])
+        self.assertTrue(body['question_check']['step_preserved'])
+        self.assertTrue(body['question_check']['queue_ready'])
+        self.assertTrue(body['question_check']['correction_applied'])
+        self.assertTrue(body['question_check']['reviewed'])
+        self.assertEqual(body['proposal']['entries'], [{
+            'court_preference': '4号场', 'start_time': '18:00', 'end_time': '20:00',
+            'duration_minutes': 120, 'scope_label': '羽毛球',
+        }])
+        self.assertEqual([call[0].provider_id for call in self.transport.calls],[tested['id']]*12)
         self.assertEqual(self.service.list_models('user-a')['selected_model_id'],selected['id'])
         self.assertEqual(self.b.post(endpoint,json={},headers=self._headers(self.csrf_b)).status_code,404)
-        self.assertEqual(len(self.transport.calls),2)
-        self.assertIn('判断用户最新一句是纯问题',self.transport.calls[0][1][0]['content'])
+        self.assertEqual(len(self.transport.calls),12)
+        self.assertIn('羽毛球预约队列 Agent',self.transport.calls[0][1][0]['content'])
         with connect_database(self.path,5000) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM booking_plans').fetchone()[0],0)
             self.assertEqual(db.execute('SELECT count(*) FROM booking_plan_revisions').fetchone()[0],0)
+            self.assertEqual(db.execute('SELECT count(*) FROM planning_conversations').fetchone()[0],0)
         self.assertEqual(self.app.test_client().post(endpoint,json={},headers=self._headers()).status_code,401)
         self.assertEqual(self.a.post(endpoint,json={},headers=self._headers()).status_code,403)
+
+    def test_parsing_test_does_not_pass_on_a_generic_context_reply(self):
+        import json
+        from datetime import date, timedelta
+        tested=self._create(name='Context model').get_json()['model']
+        def reply(config,messages):
+            self.transport.calls.append((config,messages))
+            if '羽毛球预约队列 Agent' not in messages[0]['content']:
+                return json.dumps({'warnings':[]})
+            payload=json.loads(messages[1]['content'])
+            latest=payload['latest_user_message']
+            choices={'1':'two_hour_only','2':'one_hour_only','3':'both',
+                     'A':'two_hour_only','B':'one_hour_only','C':'both'}
+            if latest in choices:
+                result={'kind':'answer','updates':[
+                    {'field':'booking_mode','operation':'set','value':choices[latest],'evidence':latest},
+                ],'unresolved':[],'reply':'','next_field':'courts_2h',
+                    'next_question':'2小时选哪些场地？例如1号和4号。'}
+            elif '1小时还是2小时' in latest:
+                result={'kind':'question','updates':[],'unresolved':[],
+                        'reply':'我可以帮你整理。','next_field':'courts_2h',
+                        'next_question':'2小时选哪些场地？例如1号和4号。'}
+            else:
+                target=(date.fromisoformat(payload['conversation_start_date'])+timedelta(days=2)).isoformat()
+                day=date.fromisoformat(target)
+                result={'kind':'answer','updates':[
+                    {'field':'target_date','operation':'set','value':target,'evidence':f'{day.month}月{day.day}日'},
+                    {'field':'windows_2h','operation':'replace','value':[{'start':'14:00','end':'16:00'}],'evidence':'14-16'},
+                ],'unresolved':[],'reply':'','next_field':'booking_mode',
+                    'next_question':'先选队列类型：1/A只抢2小时；2/B只抢1小时；3/C两种都抢。'}
+            return json.dumps(result,ensure_ascii=False)
+        self.transport.chat=reply
+        endpoint='/api/ai/models/'+tested['id']+'/test-parsing'
+        response=self.a.post(endpoint,json={},headers=self._headers(self.csrf_a))
+        body=response.get_json()
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(body['outcome'],'context_failed')
+        self.assertFalse(body['ok'])
+        self.assertTrue(body['question_check']['answered'])
+        self.assertTrue(body['question_check']['short_choice'])
+        self.assertTrue(body['question_check']['mode_choices'])
+        self.assertFalse(body['question_check']['context_used'])
+        self.assertEqual(len(self.transport.calls),5)
+        with connect_database(self.path,5000) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM booking_plans').fetchone()[0],0)
+            self.assertEqual(db.execute('SELECT count(*) FROM planning_conversations').fetchone()[0],0)
 
     def test_parsing_capability_failures_remain_safe(self):
         import json
@@ -109,10 +228,15 @@ class AIModelTests(unittest.TestCase):
             response=self.a.post(endpoint,json={},headers=self._headers(self.csrf_a))
             self.assertEqual((response.status_code,response.get_json()['error']),(502,'invalid_model_proposal'))
             self.assertNotIn('raw supplier',response.get_data(as_text=True))
-        for code in ('provider_auth_failed','provider_access_denied','provider_model_or_endpoint_not_found','provider_rate_limited','provider_timeout','provider_unavailable'):
+        for code in ('provider_auth_failed','provider_access_denied','provider_model_or_endpoint_not_found','provider_rate_limited','provider_timeout','provider_unavailable','provider_output_truncated'):
             def failure(*_args): raise ProviderFailure(code,502)
             self.transport.chat=failure
-            self.assertEqual(self.a.post(endpoint,json={},headers=self._headers(self.csrf_a)).get_json()['error'],code)
+            response=self.a.post(endpoint,json={},headers=self._headers(self.csrf_a))
+            body=response.get_json()
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(body['outcome'],'provider_failed')
+            self.assertEqual(body['provider_error'],code)
+            self.assertEqual(body['failed_stage'],'queue_mode_prompt')
         with connect_database(self.path,5000) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM booking_plan_revisions').fetchone()[0],0)
 
@@ -291,6 +415,22 @@ class AIModelTests(unittest.TestCase):
                 limited.chat(ProviderConfig("m","m","https://vendor.example/v1","model","none"),[{"role":"user","content":"x"}])
         self.assertEqual(oversized.exception.code,"provider_response_too_large")
 
+    def test_truncated_provider_output_is_not_a_complete_model_decision(self):
+        import json
+        transport=PinnedChatCompletionsTransport()
+        config=ProviderConfig("m","m","https://vendor.example/v1","model","none")
+        for content in ('', '{"warnings":[]}'):
+            raw=json.dumps({"choices":[{"finish_reason":"length","message":{"content":content}}]}).encode()
+            with self.subTest(content=content), patch.object(transport,'_exchange',return_value=raw):
+                with self.assertRaises(ProviderFailure) as caught:
+                    transport.chat(config,[{"role":"user","content":"x"}])
+                self.assertEqual(caught.exception.code,'provider_output_truncated')
+                self.assertTrue(transport.test(config))
+        with patch.object(transport,'_exchange',side_effect=ProviderFailure('provider_auth_failed')):
+            with self.assertRaises(ProviderFailure) as caught:
+                transport.test(config)
+            self.assertEqual(caught.exception.code,'provider_auth_failed')
+
     def test_pinned_transport_reads_models_with_get_and_bearer_auth(self):
         import json
         class FakeSocket:
@@ -318,7 +458,7 @@ class AIModelTests(unittest.TestCase):
         self.assertEqual(RecordingConnection.last.request_kwargs["headers"]["Authorization"],"Bearer discovery-key")
         self.assertIsNone(RecordingConnection.last.request_kwargs["body"])
 
-    def test_model_discovery_reports_safe_provider_http_failure_categories(self):
+    def test_provider_http_failures_report_safe_categories(self):
         import socket
         class FakeSocket:
             def settimeout(self, _value): pass
@@ -337,7 +477,8 @@ class AIModelTests(unittest.TestCase):
             def close(self): self.sock=None
         transport=PinnedChatCompletionsTransport(resolver=lambda _host:["93.184.216.34"])
         config=ProviderConfig("m","m","https://vendor.example/v1","model","none")
-        for status,expected in ((401,"provider_auth_failed"),(403,"provider_access_denied"),
+        for status,expected in ((401,"provider_auth_failed"),(402,"provider_payment_required"),
+                                (403,"provider_access_denied"),
                                 (404,"provider_model_discovery_unavailable"),(429,"provider_rate_limited"),
                                 (503,"provider_server_error")):
             with self.subTest(status=status), patch("backend.ai.provider._PinnedHTTPSConnection",Connection):
@@ -346,6 +487,13 @@ class AIModelTests(unittest.TestCase):
                     transport.list_models(config)
             self.assertEqual(caught.exception.code,expected)
             self.assertNotIn("private provider response",str(caught.exception))
+
+        with patch("backend.ai.provider._PinnedHTTPSConnection",Connection):
+            Connection.status=402
+            with self.assertRaises(ProviderFailure) as chat:
+                transport.chat(config,[{"role":"user","content":"Reply with OK."}])
+        self.assertEqual(chat.exception.code,"provider_payment_required")
+        self.assertNotIn("private provider response",str(chat.exception))
 
         with patch("backend.ai.provider.socket.getaddrinfo",side_effect=socket.gaierror("private resolver text")):
             with self.assertRaises(ProviderFailure) as dns:

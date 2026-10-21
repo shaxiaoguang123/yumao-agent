@@ -9,9 +9,10 @@ function fixture(overrides={}){return {list:vi.fn(async()=>({models:[model],serv
 async function mountPanel(api=fixture(),query={}) {const {default:component}=await import('./AIModelsPanel.vue');const session=reactive({status:'authenticated',user:{user_id:'owner'},csrfToken:'csrf-a'});const empty={template:'<div />'};const router=createRouter({history:createMemoryHistory(),routes:[{path:'/settings/ai-models',name:'ai-models',component:empty},{path:'/plans',name:'plans',component:empty}]});await router.push({name:'ai-models',query});await router.isReady();const wrapper=mount(component,{global:{plugins:[router],provide:{aiModelsApi:api,sessionStore:session}}});await flushPromises();return {wrapper,api,session,router};}
 
 describe('AI models settings',()=>{
- it('shows an empty configuration as a setup prompt while preserving the service model option',async()=>{
+ it('describes the service default accurately when no personal model is configured',async()=>{
   const {wrapper}=await mountPanel(fixture({list:vi.fn(async()=>({models:[],service_default:{...model,id:'service_default'},selected_model_id:null,default_model_id:null,effective_model_id:'service_default'}))}));
-  expect(wrapper.text()).toContain('还没有配置可用模型');expect(wrapper.text()).toContain('服务提供');expect(wrapper.findAll('option').some(option=>option.text().includes('服务默认'))).toBe(true);
+  expect(wrapper.text()).toContain('已接入服务默认模型');expect(wrapper.text()).not.toContain('还没有配置可用模型');expect(wrapper.text()).toContain('服务提供');expect(wrapper.findAll('option').some(option=>option.text().includes('服务默认'))).toBe(true);
+  expect(wrapper.text()).toContain('会连续调用模型进行多轮对话、候选纠正、复核和时间/场地边界验证，可能产生服务商用量');
  });
  it('prefills verified provider presets without sending a model request and clears a typed key on provider change',async()=>{
   const {wrapper,api}=await mountPanel();await wrapper.get('[data-testid="preset-deepseek"]').trigger('click');
@@ -74,6 +75,8 @@ describe('AI models settings',()=>{
  });
  it.each([
   ['provider_auth_failed','认证失败或当前密钥没有访问权限'],
+  ['provider_payment_required','服务商账户余额不足或需要处理计费状态'],
+  ['provider_output_truncated','模型回复达到输出上限'],
   ['access_denied','认证失败或当前密钥没有访问权限'],
   ['model_or_endpoint_not_found','模型或接口地址不存在'],
   ['rate_limited','服务商请求过于频繁'],
@@ -95,13 +98,28 @@ describe('AI models settings',()=>{
   session.user={user_id:'other'};await flushPromises();expect(wrapper.find('form').exists()).toBe(false);expect(wrapper.get('.preference-save').element.disabled).toBe(false);resolveCreate({});await flushPromises();expect(wrapper.text()).not.toContain('模型保存失败');
  });
  it('only calls parsing on explicit click and renders needs-input results',async()=>{
-  const api=fixture({testParsing:vi.fn(async()=>({ok:false,outcome:'needs_input',questions:['请补充场馆'],proposal:null}))});const {wrapper}=await mountPanel(api);expect(api.testParsing).not.toHaveBeenCalled();await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(api.testParsing).toHaveBeenCalledWith('model-1');expect(wrapper.text()).toContain('模型能够连接，但这条合成语句没有整理出完整队列');expect(wrapper.text()).toContain('请补充场馆');
+  const api=fixture({testParsing:vi.fn(async()=>({ok:false,outcome:'needs_input',questions:['请补充场地'],proposal:null}))});const {wrapper}=await mountPanel(api);expect(api.testParsing).not.toHaveBeenCalled();await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(api.testParsing).toHaveBeenCalledWith('model-1');expect(wrapper.text()).toContain('多轮整理没有生成完整的候选预览');expect(wrapper.text()).toContain('请补充场地');
+ });
+ it('explains when the model fails the queue-type short-choice test',async()=>{
+  const api=fixture({testParsing:vi.fn(async()=>({ok:false,outcome:'short_choice_failed',question_check:{short_choice:false,mode_choices:false,answered:false,context_used:false,step_preserved:false,queue_ready:false,reviewed:false}}))});const {wrapper}=await mountPanel(api);await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('没有正确询问或识别 1/A、2/B、3/C');
+ });
+ it('shows when the model failed to stage information before asking for queue type',async()=>{
+  const api=fixture({testParsing:vi.fn(async()=>({ok:false,outcome:'initial_facts_not_staged',question_check:{initial_date_staged:true,initial_two_hour_time_staged:false},questions:['先选本次要排哪种队列']}))});const {wrapper}=await mountPanel(api);await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('没有暂存用户已经给出的日期或时段');expect(wrapper.text()).toContain('先记录初始日期通过');expect(wrapper.text()).toContain('先暂存初始2小时时段未通过');
+ });
+ it('explains when the model confuses independent duration choices',async()=>{
+  const api=fixture({testParsing:vi.fn(async()=>({ok:false,outcome:'mode_choice_failed',question_check:{short_choice:true,mode_choices:false,answered:false,context_used:false,step_preserved:false,queue_ready:false,reviewed:false}}))});const {wrapper}=await mountPanel(api);await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('没有正确区分只抢1小时、只抢2小时和两种都抢');
  });
  it('reports full Agent capability only when the server returns a passing context check',async()=>{
-  const api=fixture({testParsing:vi.fn(async()=>({ok:true,outcome:'parsed',question_check:{answered:true},proposal:{entries:[{duration_minutes:120,start_time:'14:00',end_time:'16:00',court_preference:'1号场'}]}}))});const {wrapper}=await mountPanel(api);await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('上下文问答与队列复核测试通过');expect(wrapper.text()).toContain('验证上下文答疑');
+  const api=fixture({testParsing:vi.fn(async()=>({ok:true,outcome:'parsed',question_check:{mode_prompted:true,initial_date_staged:true,initial_two_hour_time_staged:true,short_choice:true,mode_choices:true,answered:true,duration_used:true,context_used:true,step_preserved:true,queue_ready:true,correction_applied:true,reviewed:true,invalid_court_blocked:true,outside_hours_blocked:true,unsupported_duration_blocked:true,reply:'已记录10月26日与14-16。'},proposal:{entries:[{duration_minutes:120,start_time:'18:00',end_time:'20:00',court_preference:'4号场'}]}}))});const {wrapper}=await mountPanel(api);await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('队列选择、事实暂存、上下文答疑、纠正和业务边界检查均通过');expect(wrapper.text()).toContain('上下文答复：已记录10月26日与14-16。');
+ });
+ it('does not claim a context test passed when the model reply is generic',async()=>{
+  const api=fixture({testParsing:vi.fn(async()=>({ok:false,outcome:'context_failed',question_check:{short_choice:true,mode_choices:true,answered:true,context_used:false,step_preserved:true,queue_ready:false,reviewed:false,reply:'已经记录好了。'}}))});const {wrapper}=await mountPanel(api);await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('多轮上下文检查或候选队列复核未通过');expect(wrapper.text()).toContain('上下文答复：已经记录好了。');expect(wrapper.text()).not.toContain('队列编号选择、上下文答疑和候选复核均通过');
  });
  it('does not claim context testing when an older server omits the result',async()=>{
   const api=fixture({testParsing:vi.fn(async()=>({ok:true,outcome:'parsed',proposal:{entries:[]}}))});const {wrapper}=await mountPanel(api);await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('Agent 上下文答疑尚未验证');expect(wrapper.text()).not.toContain('上下文问答与队列复核测试通过');expect(wrapper.text()).toContain('不能证明 Agent 已通过完整能力测试');
+ });
+ it('shows provider error category and the exact capability-test stage',async()=>{
+  const api=fixture({testParsing:vi.fn(async()=>({ok:false,outcome:'provider_failed',provider_error:'provider_timeout',failed_stage:'contextual_question',question_check:{mode_prompted:true,initial_date_staged:true,initial_two_hour_time_staged:true,selected_two_hour:true,retained_date:true,retained_two_hour_time:true,short_choice:true,mode_choices:true,answered:null,context_used:null,step_preserved:null,queue_ready:null,reviewed:null}}))});const {wrapper}=await mountPanel(api);await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('连接超时，请检查服务地址和网络后重试。（停在上下文答疑）');expect(wrapper.text()).toContain('测试停止阶段：上下文答疑');expect(wrapper.text()).toContain('先记录初始日期通过');expect(wrapper.text()).toContain('先暂存初始2小时时段通过');expect(wrapper.text()).toContain('队列类型短答通过');expect(wrapper.text()).toContain('时长队列独立性通过');expect(wrapper.text()).not.toContain('上下文问题答复');expect(wrapper.text()).not.toContain('候选内容正确');
  });
  it.each([
   ['provider_access_denied','没有访问权限'],['provider_model_or_endpoint_not_found','模型或接口地址不存在'],['provider_rate_limited','服务商请求过于频繁'],['provider_response_invalid','不符合兼容接口要求'],['invalid_model_proposal','没有按要求的格式返回复核结果'],['ai_call_in_progress','已有模型调用正在进行'],['ai_call_rate_limited','模型调用过于频繁'],

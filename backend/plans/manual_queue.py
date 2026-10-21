@@ -1,5 +1,6 @@
 """Editable semantic candidates; scheduled execution uses a separate immutable snapshot."""
-from datetime import date
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 import unicodedata
 from backend.plans.models import PlanInterpretationContext
 from backend.plans.validation import IntentValidationError, parse_manual_intent, parse_target_date
@@ -57,3 +58,15 @@ def parse_queue(payload, context: PlanInterpretationContext, today: date, *, all
     candidates.sort(key=lambda item: PRIORITY.index(item['duration_minutes']))
     return {'kind': QUEUE_KIND, 'queue_contract_version': 2, 'target_date': target.isoformat(),
             'context': context.to_dict(), 'duration_priority': list(PRIORITY), 'candidates': candidates}
+
+
+def automatic_queue_schedule(target: date, now_utc_ms: int, timezone_name: str) -> dict:
+    """Saving a valid queue and eligibility for a future automatic opening are separate."""
+    zone = ZoneInfo(timezone_name)
+    opening_date = target - timedelta(days=2)
+    opening = datetime.combine(opening_date, time(7, 30), zone)
+    opening_ms = int(opening.timestamp() * 1000)
+    today = datetime.fromtimestamp(now_utc_ms / 1000, zone).date()
+    eligible = now_utc_ms < opening_ms
+    state = "scheduled" if eligible else "passed" if opening_date == today else "not_automatic"
+    return {"state": state, "eligible": eligible, "opening_date": opening_date.isoformat(), "opening_at_utc_ms": opening_ms}

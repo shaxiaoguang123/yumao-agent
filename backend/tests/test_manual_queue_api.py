@@ -84,17 +84,18 @@ class ManualQueueTests(unittest.TestCase):
         self.assertNotIn('deleted',revived)
         self.network.assert_not_called()
 
-    def test_past_queue_can_be_viewed_edited_and_deleted_but_not_opened_for_selection(self):
+    def test_past_queue_can_be_viewed_and_deleted_but_cannot_be_saved_or_selected(self):
         with patch('backend.api.plans._now_utc_ms',return_value=1791500000000):
             q=self.save_queue([entry()],date='2026-10-12').get_json()['queue']
         url='/api/plans/manual-queues/2026-10-12'
-        q=self.a.get(url).get_json()['queue']
-        self.assertEqual(q['plan_status'],'expired')
-        self.assertFalse(q['can_open_selection'])
-        self.assertEqual(q['execution_state'],'not_started')
-        updated=self.save_queue([entry('2号场')],base=1,date='2026-10-12')
-        self.assertEqual(updated.status_code,200)
-        self.assertEqual(updated.get_json()['queue']['version'],2)
-        self.assertEqual(self.save_queue([entry()],date='2026-10-11').status_code,400)
-        self.assertEqual(self.a.delete(url,json={'base_version':2},headers=self.headers['a']).status_code,200)
+        after_expiry=plan_tests.NOW+3*24*60*60*1000
+        with patch('backend.api.plans._now_utc_ms',return_value=after_expiry):
+            q=self.a.get(url).get_json()['queue']
+            self.assertEqual(q['plan_status'],'expired')
+            self.assertFalse(q['can_open_selection'])
+            self.assertEqual(q['execution_state'],'not_started')
+            updated=self.save_queue([entry('2号场')],base=1,date='2026-10-12')
+            self.assertEqual(updated.status_code,400)
+            self.assertEqual(self.save_queue([entry()],date='2026-10-11').status_code,400)
+            self.assertEqual(self.a.delete(url,json={'base_version':1},headers=self.headers['a']).status_code,200)
         self.network.assert_not_called()

@@ -37,7 +37,7 @@ function validateGrid(value, targetDate, selectedLabel) {
       || value?.can_create_job !== false
       || value?.source?.data_state !== 'live_observed_unverified'
       || value?.source?.trust_state !== 'display_only_unverified'
-      || value?.source?.price_state !== 'omitted_unit_unverified'
+      || value?.source?.price_state !== 'displayed_unit_unverified'
       || value?.can_bind !== false
       || !Number.isSafeInteger(value?.source?.captured_at_utc_ms)
       || !Number.isSafeInteger(value?.source?.ui_stale_after_utc_ms)
@@ -48,6 +48,8 @@ function validateGrid(value, targetDate, selectedLabel) {
   return value.rows.every((row) => Array.isArray(row.cells)
     && row.cells.length === value.courts.length
     && row.cells.every((cell) => SAFE_STATES.has(cell.state) && cell.selectable === false
+      && (cell.price_display === null
+        || (typeof cell.price_display === 'string' && /^[0-9]{1,12}$/.test(cell.price_display)))
       && (cell.intent_selectable !== true || (cell.state === 'observed_clear_unmarked' && value.client_selection_window === 'open'
         && value.can_select_intent === true && typeof row.intent_start_time==='string' && typeof row.intent_end_time==='string'
         && row.intent_start_time < row.intent_end_time))));

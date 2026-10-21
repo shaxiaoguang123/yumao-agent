@@ -1,11 +1,30 @@
 import unittest
 from datetime import date
 
-from backend.ai.nlu import courts, cues, dates, times
+from backend.ai.queue_cues import booking_mode
+from backend.ai.nlu import courts, dates, times
 from backend.ai.nlu.text import prep, to_int
 from backend.ai.nlu.windows import label, resolve_start, scan_windows
 
 TODAY = date(2026, 10, 10)  # a Saturday
+
+
+class BookingModeCueTests(unittest.TestCase):
+    def test_duration_details_do_not_select_a_queue_mode(self):
+        for text in ('14-16', '14-16，1号场', '打2小时'):
+            with self.subTest(text=text):
+                self.assertIsNone(booking_mode(text, None))
+
+    def test_explicit_mode_phrases_and_codes_are_distinguished(self):
+        for text, mode in (
+            ('只抢2小时', 'two_hour_only'), ('不要一小时', 'two_hour_only'),
+            ('只抢1小时', 'one_hour_only'), ('两种都抢', 'both'),
+            ('1', 'two_hour_only'), ('A', 'two_hour_only'), ('1/A', 'two_hour_only'),
+            ('我选2/B', 'one_hour_only'), ('3/C', 'both'), ('3，一小时优先', 'both'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(booking_mode(text, 'booking_mode'), mode)
+        self.assertIsNone(booking_mode('1号场', 'booking_mode'))
 
 
 def scan(text):
@@ -101,28 +120,6 @@ class TimeTests(unittest.TestCase):
 
 
 
-class ExecutionTests(unittest.TestCase):
-    def test_commands_are_unsupported(self):
-        for text in ("帮我直接预约并付款", "立即下单", "帮我付款", "马上订场"):
-            self.assertTrue(cues.classify_execution([text])[0], text)
-
-    def test_negation_and_plain_requests_are_fine(self):
-        for text in ("不要自动付款，周六18:00打2小时", "帮我预约下周六18:00打两个小时", "别直接付款"):
-            self.assertEqual(cues.classify_execution([text]), (False, []), text)
-
-    def test_scheduled_wishes_are_recorded_not_refused(self):
-        has_command, notes = cues.classify_execution(["周六18:00打2小时，到点自动预约"])
-        self.assertFalse(has_command)
-        self.assertEqual(notes, [cues.SCHEDULE_NOTE])
-
-    def test_an_earlier_negation_does_not_hide_a_later_command(self):
-        self.assertTrue(cues.classify_execution(["1号场，不用候选 然后立即下单"])[0])
-        self.assertFalse(cues.classify_execution(["别直接付款"])[0])
-
-    def test_every_turn_is_checked_independently(self):
-        self.assertTrue(cues.classify_execution(["下周六18:00打2小时", "然后直接付款"])[0])
-
-
 def windows(text):
     return [(m.kind, label(m.start, m.end) if m.start is not None and m.end is not None else None, m.issue) for m in scan_windows(text).mentions]
 
@@ -132,6 +129,11 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(windows("14-16、18-20"), [("range", "14-16", None), ("range", "18-20", None)])
         self.assertEqual(windows("14:00-16:00,18:00-20:00"), [("range", "14-16", None), ("range", "18-20", None)])
         self.assertEqual(windows("14到16点"), [("range", "14-16", None)])
+
+    def test_range_after_a_normalized_field_label_and_clock_suffix(self):
+        self.assertEqual(windows("两小时时段：14-16、13-15、17-19"), [
+            ("range", "14-16", None), ("range", "13-15", None), ("range", "17-19", None)])
+        self.assertEqual(windows("时间：14:00-16:00"), [("range", "14-16", None)])
 
     def test_period_words_and_inherited_period(self):
         self.assertEqual(windows("下午2点到4点"), [("range", "14-16", None)])
@@ -185,6 +187,14 @@ class CourtListTests(unittest.TestCase):
         self.assertEqual(self.numbers("14-16 1号4号场"), [(1, 4)])
         self.assertEqual(self.numbers("14-16 1 4号场"), [(1, 4)])
         self.assertEqual(self.numbers("1、4、6号场"), [(1, 4, 6)])
+
+    def test_contextual_short_court_answers_accept_a_range(self):
+        self.assertEqual(courts.scan_bare_courts("一小时场地改为1到4号")[0].numbers, (1, 2, 3, 4))
+        self.assertEqual(courts.scan_bare_courts("1到4号")[0].numbers, (1, 2, 3, 4))
+        self.assertEqual(courts.scan_bare_courts("保留1-8")[0].numbers, tuple(range(1, 9)))
+        self.assertEqual(courts.scan_bare_courts("2小时场地保留1-8号")[0].numbers, tuple(range(1, 9)))
+        self.assertEqual(courts.scan_bare_courts("保留1号场地到8号场地")[0].numbers, tuple(range(1, 9)))
+        self.assertEqual(courts.scan_bare_courts("2小时场地保留1号场地到8号场地")[0].numbers, tuple(range(1, 9)))
 
     def test_prep_only_separates_digits(self):
         self.assertEqual(prep("14-16 1号"), "14-16,1号")

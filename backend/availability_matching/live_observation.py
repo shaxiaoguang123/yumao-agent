@@ -10,9 +10,11 @@ from backend.availability_matching.models import AvailabilityError
 
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", re.ASCII)
 _INDEX = re.compile(r"[0-9]{1,3}", re.ASCII)
+_PRICE = re.compile(r"[0-9]{1,12}", re.ASCII)
 _MAX_COURTS = 32
 _MAX_ROWS = 48
 _MAX_CONFLICTS = 4096
+_MAX_PRICES = 4096
 
 LIVE_OBSERVATION_NOTICE = (
     "这是官方客户端状态观察；可按显示规则选择人工意向，不是已核验库存。"
@@ -75,11 +77,12 @@ class OfficialBookingByTimeObservationAdapter:
             _invalid()
         row_count = _number(result.get("stepnumber"), low=1, high=_MAX_ROWS)
         courts_raw, times_raw = result.get("nodeList"), result.get("timeList")
-        conflicts = result.get("conflictList")
+        conflicts, prices_raw = result.get("conflictList"), result.get("priceList")
         if (row_count is None or type(courts_raw) is not list
                 or not 1 <= len(courts_raw) <= _MAX_COURTS
                 or type(times_raw) is not list or len(times_raw) != row_count
-                or type(conflicts) is not list or len(conflicts) > _MAX_CONFLICTS):
+                or type(conflicts) is not list or len(conflicts) > _MAX_CONFLICTS
+                or type(prices_raw) is not list or len(prices_raw) > _MAX_PRICES):
             _invalid()
 
         courts: list[dict[str, str]] = []
@@ -112,6 +115,24 @@ class OfficialBookingByTimeObservationAdapter:
             raw_status = item.get("status")
             status = raw_status if type(raw_status) is str and raw_status in {"0", "1"} else None
             time_rows.append((label, status))
+
+        price_by_cell: dict[tuple[int, int], str | None] = {}
+        duplicate_price_conflict_count = 0
+        for item in prices_raw:
+            if type(item) is not dict or set(item) != {"x", "y", "price"}:
+                _invalid()
+            row_index = _number(item.get("x"), low=0, high=row_count - 1)
+            court_index = _number(item.get("y"), low=0, high=len(courts) - 1)
+            price = item.get("price")
+            if row_index is None or court_index is None or type(price) is not str or not _PRICE.fullmatch(price):
+                _invalid()
+            coordinate = (row_index, court_index)
+            previous = price_by_cell.get(coordinate)
+            if coordinate not in price_by_cell:
+                price_by_cell[coordinate] = price
+            elif previous is not None and previous != price:
+                price_by_cell[coordinate] = None
+                duplicate_price_conflict_count += 1
 
         cell_states: dict[tuple[int, int], set[tuple[str, int | None]]] = {}
         duplicate_conflict_count = 0
@@ -170,6 +191,7 @@ class OfficialBookingByTimeObservationAdapter:
                 cells.append({
                     "state": state,
                     "label": _activity_label(observed) if state == "observed_activity_occupied" else None,
+                    "price_display": price_by_cell.get((row_index, court_index)),
                     "selectable": False,
                     "intent_selectable": state == "observed_clear_unmarked" and intent_end is not None,
                     "activity_type": activity if state == "observed_activity_occupied" else None,
@@ -207,7 +229,10 @@ class OfficialBookingByTimeObservationAdapter:
                 "max_courts_observed": max_courts,
                 "semantics": "official_client_ui_limit_unverified",
             },
-            "diagnostics": {"duplicate_conflict_count": duplicate_conflict_count},
+            "diagnostics": {
+                "duplicate_conflict_count": duplicate_conflict_count,
+                "duplicate_price_conflict_count": duplicate_price_conflict_count,
+            },
             "client_selection_window": selection_window,
             "source": {
                 "source": "official-bookingByTime-live-read",
@@ -220,7 +245,7 @@ class OfficialBookingByTimeObservationAdapter:
                 "court_ownership_state": "unverified",
                 "availability_semantics_state": "unverified",
                 "time_atom_state": "unknown",
-                "price_state": "omitted_unit_unverified",
+                "price_state": "displayed_unit_unverified",
                 "client_version_state": "unknown",
             },
             "can_select": False,

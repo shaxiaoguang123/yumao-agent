@@ -15,6 +15,7 @@ from backend.credentials.keyring import CredentialKeyring
 from backend.db import connect_database
 
 
+MAX_MODEL_MESSAGE_BYTES = 32 * 1024
 _MODEL_ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}\Z")
 
 
@@ -294,7 +295,7 @@ class AIProviderService:
                 raise AIModelError("invalid_messages",400)
             try: content_size=len(item["content"].encode("utf-8"))
             except UnicodeEncodeError: raise AIModelError("invalid_messages",400) from None
-            if content_size > 32768: raise AIModelError("invalid_messages",400)
+            if content_size > MAX_MODEL_MESSAGE_BYTES: raise AIModelError("invalid_messages",400)
             cleaned.append({"role":item["role"],"content":item["content"]})
         return cleaned
 

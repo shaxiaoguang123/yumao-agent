@@ -90,7 +90,7 @@ function submit() {
           rows="2"
           maxlength="4000"
           :disabled="busy || locked || blocked"
-          :placeholder="mode === 'edit' ? '回答上方的问题就行，例如“4号场”' : '回答上方的问题就行，例如“14-16”或“1号和4号”'"
+          :placeholder="status === 'ready' ? '继续修改或提问，例如“把场地换成4号场”' : mode === 'edit' ? '回答上方的问题就行，例如“4号场”' : '回答上方的问题就行，例如“14-16”或“1号和4号”'"
           @input="emit('update:answer', $event.target.value)"
           @keydown.enter.exact.prevent="submit"
           @keydown.ctrl.enter.prevent="submit"
@@ -149,7 +149,7 @@ function submit() {
           </div>
         </details>
         <p v-if="blocked" class="composer-hint is-blocked">先完成预约凭据验证和支付密码设置，再发送需求。</p>
-        <p v-else class="composer-hint">{{ mode === 'edit' ? '只描述需要修改的内容；其他字段会保留 · Enter 发送，Shift+Enter 换行' : '先说日期，再说 2 小时的时间段和场地；缺什么我会问 · Enter 发送，Shift+Enter 换行' }}</p>
+        <p v-else class="composer-hint">{{ mode === 'edit' ? '只描述需要修改的内容；其他字段会保留 · Enter 发送，Shift+Enter 换行' : '先选队列类型，再确认日期；2小时和1小时的时段、场地分开核对 · Enter 发送，Shift+Enter 换行' }}</p>
       </div>
     </form>
   </section>

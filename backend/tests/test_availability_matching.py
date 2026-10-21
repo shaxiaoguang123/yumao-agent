@@ -196,6 +196,7 @@ class SimulationApiTests(unittest.TestCase):
         for user,client in (('a',self.a),('b',self.b)):
             cookie,csrf=self.app.extensions['session_service'].create(user,session_now);client.set_cookie('yumao_session',cookie)
             self.headers[user]={'Origin':ORIGIN,'X-CSRF-Token':csrf}
+        self.enterContext(patch('backend.api.availability_simulation.time.time_ns',return_value=NOW*1_000_000))
         self.saved=self.app.extensions['plan_service'].create_plan('a',plan()['intent'],NOW)
         self.endpoint='/api/availability/simulation/plans/'+self.saved['plan_id']
         self.network=self.enterContext(patch('requests.sessions.Session.request',side_effect=AssertionError('real HTTP forbidden')))

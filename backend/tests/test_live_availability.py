@@ -30,7 +30,10 @@ def envelope():
                      {'nodeid': 'fixture-court-two', 'sitename': '测试二号场'}],
         'timeList': [{'time': '18:00', 'status': '0'}, {'time': '19:00', 'status': '0'}],
         'conflictList': ['0-0', '0-0', '1-0-3', '0-1-7'],
-        'priceList': [{'x': '0', 'y': '0', 'price': 'fixture-unverified-price'}],
+        'priceList': [
+            {'x': '0', 'y': '0', 'price': '20'}, {'x': '0', 'y': '1', 'price': '20'},
+            {'x': '1', 'y': '0', 'price': '30'}, {'x': '1', 'y': '1', 'price': '30'},
+        ],
         'isNew': True, 'bookingstartdate': '2026-10-13', 'bookingenddate': '2026-10-15',
         'bookingstarttime': '00:00', 'bookingendtime': '23:59',
         'mintimeselect': '1', 'maxtimeselect': '4', 'maxAppointmentNodeNum': '2',
@@ -63,7 +66,7 @@ class LiveObservationAdapterTests(unittest.TestCase):
             body, target_date='2026-10-15', timezone_name='Asia/Shanghai',
             query_scope_label='羽毛球', captured_at_utc_ms=OBSERVED_NOW)
 
-    def test_projection_is_read_only_and_omits_private_ids_and_prices(self):
+    def test_projection_is_read_only_displays_prices_and_omits_private_ids(self):
         result = self.adapt(envelope())
         self.assertEqual(result['data_state'], 'live_observed_unverified')
         self.assertEqual(result['diagnostics']['duplicate_conflict_count'], 1)
@@ -74,7 +77,22 @@ class LiveObservationAdapterTests(unittest.TestCase):
         self.assertFalse(result['can_match'])
         self.assertFalse(result['can_select'])
         self.assertNotIn('fixture-court-private', json.dumps(result))
-        self.assertNotIn('fixture-unverified-price', json.dumps(result))
+        self.assertEqual([[cell['price_display'] for cell in row['cells']] for row in result['rows']],
+                         [['20', '20'], ['30', '30']])
+        self.assertEqual(result['source']['price_state'], 'displayed_unit_unverified')
+        self.assertTrue(all('x' not in cell and 'y' not in cell
+                            for row in result['rows'] for cell in row['cells']))
+
+    def test_conflicting_duplicate_prices_are_hidden_without_guessing(self):
+        body = envelope()
+        body['resultData']['priceList'] += [
+            {'x': '0', 'y': '0', 'price': '20'},
+            {'x': '0', 'y': '0', 'price': '21'},
+        ]
+        result = self.adapt(body)
+        self.assertIsNone(result['rows'][0]['cells'][0]['price_display'])
+        self.assertEqual(result['rows'][0]['cells'][1]['price_display'], '20')
+        self.assertEqual(result['diagnostics']['duplicate_price_conflict_count'], 1)
 
     def test_unknown_row_and_conflicting_duplicates_never_become_clear(self):
         body = envelope()
@@ -114,7 +132,10 @@ class LiveObservationAdapterTests(unittest.TestCase):
     def test_invalid_structure_and_out_of_range_conflicts_are_rejected(self):
         for mutate in (lambda data: data.update(stepnumber=3),
                        lambda data: data.update(conflictList=['99-0']),
-                       lambda data: data.update(nodeList=[])):
+                       lambda data: data.update(nodeList=[]),
+                       lambda data: data.update(priceList=[{'x': '2', 'y': '0', 'price': '20'}]),
+                       lambda data: data.update(priceList=[{'x': '0', 'y': '0', 'price': '20.00'}]),
+                       lambda data: data.update(priceList=[{'x': '0', 'y': '0', 'price': '20', 'unit': 'CNY'}])):
             body = envelope()
             mutate(body['resultData'])
             with self.assertRaises(AvailabilityError):
