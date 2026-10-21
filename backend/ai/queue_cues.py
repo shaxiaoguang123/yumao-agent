@@ -30,6 +30,7 @@ KEEP_STRONG = ("都保留", "都留", "全留", "全部保留", "都要", "都�
 KEEP_WEAK = ("保留", "留着", "不动", "可以", "行", "好", "没事", "没问题", "不用", "不必", "嗯", "对")
 
 REMOVE = ("去掉", "删掉", "删除", "不要", "不用", "取消", "排除", "去除", "拿掉", "删", "不选", "不考虑", "不包括", "除了")
+APPEND = ("加上", "添加", "增加", "补上", "再加")
 REPLACE = ("改成", "改为", "换成", "换为", "改")
 ONLY_CUES = ("只要", "只留", "只保留", "只订", "只选", "仅要", "仅保留", "仅订", "仅", "就要", "就订", "就选")
 _SEPARATORS = "、,，和及与跟或 "
@@ -43,13 +44,30 @@ def contains_any(text: str, words: tuple[str, ...]) -> bool:
 def booking_mode(text: str, field_name: str | None, first: bool = False) -> str | None:
     """Read an explicit duration choice; a lone 2h/1h window is not a choice."""
     normalized = unicodedata.normalize("NFKC", text).strip().casefold()
-    if field_name == "booking_mode" or first:
-        choice = re.sub(r"[\s.,、:：()（）)）]+", "", normalized)
-        if re.fullmatch(r"(?:1|a)(?:[.、)）])?", choice):
+    if field_name == "want_1h":
+        answer = re.sub(r"[\s，。.!！?？]+", "", normalized)
+        if answer in {"不用", "不用了", "不需要", "不要", "不想要", "不加", "不必", "无需", "否", "no", "不了"}:
             return "two_hour_only"
-        if re.fullmatch(r"(?:2|b)(?:[.、)）])?", choice):
-            return "one_hour_only"
-        if re.fullmatch(r"(?:3|c)(?:[.、)）])?", choice):
+        if answer in {"要", "要的", "需要", "想要", "加", "可以", "好", "好的", "是", "是的", "同意", "对", "嗯", "yes", "ok", "okay"}:
+            return "both"
+    if field_name == "booking_mode" or first:
+        short = re.sub(r"[\s，。.!！?？]+$", "", normalized)
+        if short in {"都要", "都选", "两个都要", "两种都要", "两组都要", "都可以"}:
+            return "both"
+        positional = re.match(r"^(?:(?:我)?(?:就选|选择|选|就要|要|就))?(第[一二三123](?:个|项)|最后(?:一个|一项|那个))(?:吧)?(?=$|[，,、。.!！?？:：;；])", short)
+        if positional:
+            label = positional[1]
+            return ("both" if label.startswith("最后") or re.search("[三3]", label) else
+                    "one_hour_only" if re.search("[二2]", label) else "two_hour_only")
+        choice = re.sub(r"\s+", "", normalized)
+        choice = re.sub(r"^(?:我)?(?:选择|选)", "", choice)
+        match = re.match(r"^(1/a|a/1|2/b|b/2|3/c|c/3|[123abc])(?=$|[，,、。.!！?？:：;；])", choice)
+        if match:
+            code = match.group(1).replace("/", "")
+            if code in {"1", "a", "1a", "a1"}:
+                return "two_hour_only"
+            if code in {"2", "b", "2b", "b2"}:
+                return "one_hour_only"
             return "both"
     has_one, has_two = bool(ONE_HOUR.search(normalized)), bool(TWO_HOUR.search(normalized))
     if _BOTH_GROUPS.search(normalized) and (has_one and has_two or re.search(r"两种|两组|两个?时长", normalized)):
@@ -75,6 +93,9 @@ def mode_before(text: str, pos: int, floor: int) -> str | None:
     for word in sorted(REMOVE, key=len, reverse=True):
         if before.endswith(word):
             return "remove"
+    for word in APPEND:
+        if before.endswith(word):
+            return "append"
     for word in REPLACE:
         if before.endswith(word):
             return "replace"

@@ -55,7 +55,7 @@ const transcript = computed(() => {
     items.push({ id: 'current-questions', role: 'assistant', kind: 'questions', heading: props.heading,
       questions: props.questions, contextualReply: props.contextualReply, choices: props.asking === 'booking_mode' ? props.modeChoices : [] });
   }
-  if (!props.questions.length && props.contextualReply && props.status === 'ready') {
+  if (!props.questions.length && props.contextualReply && ['ready', 'needs_input'].includes(props.status)) {
     items.push({ id: 'current-reply', role: 'assistant', kind: 'questions', questions: [], contextualReply: props.contextualReply });
   }
   if (props.pendingTurn && props.status === 'generating') {

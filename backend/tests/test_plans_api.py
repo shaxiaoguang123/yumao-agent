@@ -31,6 +31,7 @@ class PlansApiTests(unittest.TestCase):
             cookie,csrf=self.app.extensions['session_service'].create(user,session_now)
             client.set_cookie('yumao_session',cookie)
             self.headers[user]={'Origin':ORIGIN,'X-CSRF-Token':csrf}
+        self.enterContext(patch('backend.api.plans._now_utc_ms',return_value=NOW))
         self.network=self.enterContext(patch('requests.sessions.Session.request',side_effect=AssertionError('upstream forbidden')))
 
     def create(self):

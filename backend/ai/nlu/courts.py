@@ -14,7 +14,10 @@ _PATTERN = re.compile(
 )
 _NEGATION = re.compile(r"(?:不要|不选|不用|别|去掉|取消|删掉|删除|排除|不考虑|不包括|除了)$")
 ALL_COURTS = re.compile(r"(?:所有|全部|每个|每一个)(?:的)?(?:球)?场")
-_BARE_LIST = re.compile(rf"(?P<prefix>场地[:：]?|只保留|只留|只要|改成|改为|换成|换为|不要|不选|选|要)?(?P<body>{NUM}号?(?:[、,，和及与跟或]{NUM}号?)*)[。.!！]?")
+_BARE_PREFIX = r"(?:(?:(?:一|两|1|2)小时)?场地[:：]?(?:改成|改为|换成|换为|只保留|只留|保留|留下|留)?|只保留|只留|保留|留下|留|只要|改成|改为|换成|换为|不要|不选|选|要)?"
+_BARE_SUFFIX = r"(?:号(?:场地|球场|场)?)?"
+_BARE_ITEM = rf"{NUM}{_BARE_SUFFIX}(?:[到至~\-]{NUM}{_BARE_SUFFIX})?"
+_BARE_LIST = re.compile(rf"(?P<prefix>{_BARE_PREFIX})(?P<body>{_BARE_ITEM}(?:[、,，和及与跟或]{_BARE_ITEM})*)[。.!！]?")
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,10 +49,17 @@ def scan_bare_courts(text: str) -> list[CourtMention]:
     match = _BARE_LIST.fullmatch(source)
     if not match:
         return []
-    numbers = tuple(to_int(token) for token in re.findall(NUM, match['body']))
-    if any(number is None for number in numbers):
-        return []
-    return [CourtMention(match['body'], numbers, bool(_NEGATION.fullmatch(match['prefix'] or '')), match.start('body'))]
+    numbers = []
+    for item in re.split(r"[、,，和及与跟或]", match["body"]):
+        ranged = re.fullmatch(
+            rf"(?P<lo>{NUM}){_BARE_SUFFIX}(?:[到至~\-](?P<hi>{NUM}){_BARE_SUFFIX})?", item
+        )
+        lo, hi = to_int(ranged["lo"]), to_int(ranged["hi"]) if ranged and ranged["hi"] else None
+        if lo is None or (ranged["hi"] and (hi is None or not lo <= hi <= 99)):
+            return []
+        numbers.extend(range(lo, hi + 1) if hi is not None else (lo,))
+    return [CourtMention(match["body"], tuple(numbers), bool(_NEGATION.fullmatch(match["prefix"] or "")),
+                         match.start("body"))]
 
 
 def mask_courts(text: str) -> str:

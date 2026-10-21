@@ -24,8 +24,8 @@ const canStart=computed(()=>!props.credentialApi||credentialReady.value);
 const targetChanged=computed(()=>Boolean(generatedFor.value)&&generatedFor.value.message!==message.value.trim());
 const scopeChanged=computed(()=>Boolean(generatedFor.value)&&generatedFor.value.scopeLabel!==props.scopeLabel);
 const entries=computed(()=>proposal.value?.entries||[]);
-const canSave=computed(()=>status.value==='ready'&&proposal.value?.can_book===false&&entries.value.length>0&&canStart.value&&Boolean(generatedFor.value)&&Boolean(props.scopeLabel)&&!targetChanged.value&&!scopeChanged.value&&!resetNotice.value&&!editingOriginal.value&&!stale.value&&!busySaving.value&&!busyConversation.value);
-const followUpActive=computed(()=>questionList.value.length>0&&!proposal.value&&status.value!=='unsupported');
+const canSave=computed(()=>status.value==='ready'&&proposal.value?.can_book===false&&entries.value.length>0&&canStart.value&&Boolean(generatedFor.value)&&Boolean(props.scopeLabel)&&!targetChanged.value&&!scopeChanged.value&&!resetNotice.value&&!editingOriginal.value&&!stale.value&&!busySaving.value&&!busyConversation.value&&!answer.value.trim());
+const followUpActive=computed(()=>status.value!=='unsupported'&&(questionList.value.length>0||Boolean(conversationId.value)&&['ready','needs_input','error','generating'].includes(status.value)));
 const notices=computed(()=>status.value==='idle'?[]:view.value?.notices||[]);
 const warnings=computed(()=>proposal.value?.warnings||[]);
 const scheduleClass=computed(()=>proposal.value?.schedule?.state==='scheduled'?'is-ok':'is-warn');
@@ -39,6 +39,13 @@ function clearConversation(){answers.value=[];questionHistory.value=[];replyHist
 function traceEvent(title,detail){
  const time=new Intl.DateTimeFormat('zh-CN',{hour:'2-digit',minute:'2-digit'}).format(new Date());
  trace.value=[...trace.value,{id:`${Date.now()}-${trace.value.length}`,title,detail,time}];
+}
+function appendWorkflowTrace(result){
+ const workflow=result?.conversation?.workflow_trace||result?.workflow_trace;
+ if(!Array.isArray(workflow))return;
+ workflow.forEach(item=>{
+  if(typeof item?.stage==='string'&&typeof item?.detail==='string')traceEvent(item.stage,item.detail);
+ });
 }
 function resetForSession(values,previous){
  epoch++;requestId++;restoreSequence++;conversationId.value='';conversations.value=[];machine.value=initialState();proposal.value=null;generatedFor.value=null;clearConversation();error.value='';savedNotice.value='';trace.value=[];pendingTurn.value='';pendingMessage.value='';resetNotice.value=false;editingOriginal.value=false;credentialReady.value=!props.credentialApi;
@@ -74,10 +81,17 @@ function hydrateConversation(saved){
   roundHeadings.value=history.slice(0,answersSaved.length).map(item=>item.conversation?.heading||'');
   trace.value=history.flatMap((item,index)=>{
    const event=item.trace_event||{},time=Number.isSafeInteger(event.at_utc_ms)?new Intl.DateTimeFormat('zh-CN',{hour:'2-digit',minute:'2-digit'}).format(new Date(event.at_utc_ms)):'';
-   return [
+   const restored=[
     {id:`restored-${index}-user`,title:event.submitted_title||(index?'提交补充回答':'提交预约需求'),detail:event.submitted_detail||'已从服务端恢复。',time},
     {id:`restored-${index}-assistant`,title:event.result_title||'对话结果已恢复',detail:event.result_detail||'已从服务端恢复。',time},
    ];
+   const workflow=item.conversation?.workflow_trace||item.workflow_trace||[];
+   workflow.forEach((stage,step)=>{
+    if(typeof stage?.stage==='string'&&typeof stage?.detail==='string')restored.push({id:`restored-${index}-workflow-${step}`,title:stage.stage,detail:stage.detail,time});
+   });
+   const turnTrace=item.conversation?.turn_trace;
+   if(turnTrace?.summary)restored.push({id:`restored-${index}-interpretation`,title:'本轮理解与校验',detail:turnTrace.summary,time});
+   return restored;
   });
   const last=history.at(-1);proposal.value=last.proposal||null;
   contextualReply.value=last.conversation?.contextual_reply||'';
@@ -146,37 +160,38 @@ function applyAnswer(resultStatus,conversation,handedOver){
  else if(resultStatus==='unsupported')dispatch('ANSWER_UNSUPPORTED',{conversation});
  else{dispatch('FAIL',{code:'invalid_response'});error.value='助手返回了无法识别的结果，请重试。';}
 }
-async function generate({supplement=false}={}){
- if(busyConversation.value||!authorized()||!canStart.value||!isLegal(machine.value.name,'SEND')||!message.value.trim()||(supplement&&!answer.value.trim()))return;
+async function generate({supplement=false,regenerate=false}={}){
+ if(busyConversation.value||!authorized()||!canStart.value||!isLegal(machine.value.name,'SEND')||!message.value.trim()||(supplement&&!answer.value.trim())||(regenerate&&!conversationId.value))return;
  if(!props.credentialId){error.value='先在右上角选择预约凭据。';return;}
- const nextQuestions=supplement?[...questionHistory.value,[...questionList.value]]:[...questionHistory.value];
- const nextReplies=supplement?[...replyHistory.value,contextualReply.value]:[...replyHistory.value];
- const nextHeadings=supplement?[...roundHeadings.value,view.value?.heading||'']:[...roundHeadings.value];
- const nextAnswers=supplement?[...answers.value,answer.value.trim()]:[...answers.value];
- const nextAsked=supplement?[...askedFields.value,view.value?.asking??null]:[...askedFields.value];
+ const nextQuestions=supplement?[...questionHistory.value,[...questionList.value]]:regenerate?[...questionHistory.value]:[];
+ const nextReplies=supplement?[...replyHistory.value,contextualReply.value]:regenerate?[...replyHistory.value]:[];
+ const nextHeadings=supplement?[...roundHeadings.value,view.value?.heading||'']:regenerate?[...roundHeadings.value]:[];
+ const nextAnswers=supplement?[...answers.value,answer.value.trim()]:regenerate?[...answers.value]:[];
+ const nextAsked=supplement?[...askedFields.value,view.value?.asking??null]:regenerate?[...askedFields.value]:[];
  if(supplement&&nextAnswers.length>MAX_ANSWERS){error.value='这次补充的次数已用完。可以重新开始，或改用“选择预约”页手动选场。';return;}
  const generation=epoch,id=props.session.user.user_id,csrf=props.session.csrfToken,sequence=++requestId,userMessage=message.value.trim(),credentialId=props.credentialId,scopeLabel=props.scopeLabel;
  emit('mode-started');
  dispatch('SEND');error.value='';savedNotice.value='';proposal.value=null;generatedFor.value=null;
  pendingTurn.value=supplement?answer.value.trim():'';
- if(!supplement||trace.value.length===0)trace.value=[];
- traceEvent(supplement?'提交补充回答':'提交预约需求',supplement?'继续核对当前必填步骤。':'先确认队列类型，再按顺序核对日期、2小时和1小时队列。');
+ if((!supplement&&!regenerate)||trace.value.length===0)trace.value=[];
+ traceEvent(supplement?'提交补充回答':regenerate?'重新整理候选队列':'提交预约需求',supplement?'继续核对当前必填步骤。':regenerate?'保留已确认的对话和预约字段，重新校验并生成预览。':'先确认队列类型，再按顺序核对日期、2小时和1小时队列。');
  try{
-  const result=await props.proposalApi.generate({message:userMessage,credentialId,answers:nextAnswers,askedFields:nextAsked,scopeLabel,...(conversationId.value?{conversationId:conversationId.value}:{})});
+  const result=await props.proposalApi.generate({message:userMessage,credentialId,answers:nextAnswers,askedFields:nextAsked,scopeLabel,...(conversationId.value?{conversationId:conversationId.value}:{}),...(regenerate?{regenerate:true}:{})});
   if(!valid(generation,id,csrf)||sequence!==requestId)return;
   if(typeof result.conversation_id==='string')conversationId.value=result.conversation_id;
   answers.value=nextAnswers;questionHistory.value=nextQuestions;replyHistory.value=nextReplies;askedFields.value=nextAsked;roundHeadings.value=nextHeadings;
   if(supplement)answer.value='';
   pendingTurn.value='';
   const conversation=result.conversation??null,handedOver=Boolean(conversation?.escalation);
+  appendWorkflowTrace(result);
   contextualReply.value=conversation?.contextual_reply||'';
   proposal.value=result.proposal;
   questions.value=handedOver?[]:result.status==='needs_input'?(result.questions||[]).slice(0,1):(result.questions||[]);
   applyAnswer(result.status,conversation,handedOver);
   generatedFor.value={message:userMessage,credentialId,scopeLabel};
-  if(contextualReply.value)traceEvent('回答了当前问题','按已知规则回答，并继续保持当前预约核对顺序。');
+  if(conversation?.turn_trace?.summary)traceEvent('本轮理解与校验',conversation.turn_trace.summary);
   if(handedOver)traceEvent('建议改用手动选场','这一项多次没能确认，或补充次数已用完；已确认的日期可以带到“选择预约”页。');
-  else if(result.status==='needs_input')traceEvent(`待确认：${conversation?.heading||'预约信息'}`,`这一步完成前不会进入后续队列字段。当前没有保存任何队列。`);
+  else if(result.status==='needs_input')traceEvent(`待确认：${conversation?.heading||'预约信息'}`,`当前没有保存任何队列。`);
   else if(result.status==='ready')traceEvent('候选队列已整理好',`共 ${result.proposal.entry_count} 项，按执行顺序排好；等待你核对并确认保存。`);
   else traceEvent('请求不属于整理范围','助手不会代为查询、预约、付款或创建任务。');
   void refreshConversationHistory();
@@ -257,13 +272,14 @@ onBeforeUnmount(()=>{alive=false;epoch++;requestId++;});
       <p v-if="proposal.review?.state==='skipped'" class="muted">{{ proposal.review.note }}</p>
       <p v-if="targetChanged" class="proposal-feedback error" role="status">描述已变化。请重新整理后再保存。</p>
       <p v-if="!scopeLabel||scopeChanged" class="proposal-feedback error" role="status">预约类别尚未读取或已变化。请先到“查询场地”读取当前 Token 的类别，再重新整理。</p>
-      <p v-if="stale||scopeChanged" class="proposal-conflict-action"><button class="secondary-button" data-testid="regenerate" type="button" :disabled="status==='generating'||busySaving" @click="generate()">重新整理</button></p>
+      <p v-if="stale||scopeChanged" class="proposal-conflict-action"><button class="secondary-button" data-testid="regenerate" type="button" :disabled="status==='generating'||busySaving" @click="generate({regenerate:true})">重新整理</button></p>
       <p class="proposal-safety" data-testid="proposal-quality-note">本步骤只保存候选队列，不会立即预约或付款。开票前会按真实场地表核对，用不上的候选会被去掉。</p>
       <div class="proposal-actions"><button class="primary-button" data-testid="confirm-save-proposal" type="button" :disabled="!canSave" @click="saveProposal">{{ busySaving?'正在保存…':'确认并保存队列' }}</button><button class="secondary-button" data-testid="cancel-proposal" type="button" :disabled="busySaving" @click="cancelProposal">取消建议</button></div>
      </section>
     </div></li>
    </template>
    <template #composer>
+    <p v-if="view?.pending_edit" class="composer-hint" role="status">正在修改预约信息。也可以说“取消这次修改”，恢复编辑前的信息。</p>
     <p v-if="editingOriginal && !resetNotice" class="composer-hint">正在修改原描述。改动后需要确认，才会清除已回答的问题。<button class="text-button" type="button" @click="editingOriginal=false">返回补充</button></p>
     <p v-if="resetNotice" class="proposal-feedback error" role="status">描述已变化。继续会清除已经回答的问题。
      <button class="secondary-button" type="button" @click="applyMessageReset">清除回答并使用新描述</button>

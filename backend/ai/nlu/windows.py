@@ -13,7 +13,7 @@ from backend.plans.validation import CLOSE_MINUTE, OPEN_MINUTE
 _PERIOD = r"(?:凌晨|清晨|早上|早晨|早|上午|中午|下午|傍晚|晚上|晚间|晚|夜里|夜间)"
 _TOKEN = rf"(?:[0-9]{{1,2}}:[0-5][0-9]|{NUM}(?:点半|点整|点|时)?)"
 _RANGE = re.compile(
-    rf"(?<![0-9:])(?P<p1>{_PERIOD})?(?P<t1>{_TOKEN})(?P<sep>[到至~\-—–])(?P<p2>{_PERIOD})?(?P<t2>{_TOKEN})"
+    rf"(?<![0-9])(?<![0-9]:)(?P<p1>{_PERIOD})?(?P<t1>{_TOKEN})(?P<sep>[到至~\-—–])(?P<p2>{_PERIOD})?(?P<t2>{_TOKEN})"
     r"(?![0-9:]|个?小时|个?钟头|分钟|号|日|月|年|元|块|天|周|次|人|个)"
 )
 RANK = {"ok": 0, "outside_hours": 1, "bad_length": 2, "unaligned": 3, "bad_order": 4}

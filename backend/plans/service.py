@@ -11,7 +11,7 @@ from pathlib import Path
 
 from backend.booking_window import BookingWindowPolicy
 from backend.db import connect_database
-from backend.plans.manual_queue import QUEUE_KIND, parse_queue
+from backend.plans.manual_queue import QUEUE_KIND, parse_queue, automatic_queue_schedule
 from backend.plans.models import PlanInterpretationContext, describe_window
 from backend.plans.validation import IntentValidationError, parse_manual_intent
 
@@ -177,10 +177,10 @@ class PlanService:
         stable_id = uuid.uuid5(uuid.NAMESPACE_URL, f"yumao:manual-queue:v2:{user_id}:{credential_id}:{target_date}")
         return f"manual-queue-v2:{tag}:{stable_id}"
 
-    def _queue_dto(self, row, credential_id=None):
+    def _queue_dto(self, row, credential_id=None, now_utc_ms=None):
         snapshot = json.loads(row["intent_json"])
         scoped_credential = credential_id if self._stored_scope_tag(row["plan_id"]) == self._credential_scope_tag(row["user_id"], credential_id) else None
-        now = time.time_ns() // 1_000_000
+        now = time.time_ns() // 1_000_000 if now_utc_ms is None else now_utc_ms
         today = BookingWindowPolicy(snapshot["context"]["timezone_name"]).business_date_at_utc(now)
         within_window = date.fromisoformat(snapshot["target_date"]) in self.policy.queryable_target_dates(now)
         state = ("deleted" if snapshot.get("deleted") else "expired" if snapshot["target_date"] < today.isoformat()
@@ -189,6 +189,7 @@ class PlanService:
                 "current_revision_id": row["current_revision_id"], "intent_sha256": row["intent_sha256"],
                 "updated_at_utc_ms": row["updated_at_utc_ms"], **snapshot,
                 "plan_status": state, "execution_state": "not_started",
+                "automatic_schedule": automatic_queue_schedule(date.fromisoformat(snapshot["target_date"]), now, snapshot["context"]["timezone_name"]),
                 "can_open_selection": (within_window and snapshot["context"]["timezone_name"] == self.policy.timezone_name
                                        and not snapshot.get("deleted", False)),
                 "can_query_upstream": False, "can_book": False, "can_pay": False, "can_create_job": False}
@@ -226,12 +227,12 @@ class PlanService:
             saved = json.loads(row["intent_json"])["context"] if row else self.active_context.to_dict()
             context = PlanInterpretationContext(saved["timezone_name"], saved["currency_code"], saved["currency_minor_unit_exponent"])
             try:
-                snapshot = parse_queue({"target_date": target_date, "entries": entries}, context, BookingWindowPolicy(context.timezone_name).business_date_at_utc(now), allow_past=bool(row))
+                snapshot = parse_queue({"target_date": target_date, "entries": entries}, context, BookingWindowPolicy(context.timezone_name).business_date_at_utc(now), allow_past=False)
             except IntentValidationError as exc:
                 raise PlanError("invalid_plan", 400, exc.fields) from exc
             encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
             if row and encoded == row["intent_json"]:
-                return self._queue_dto(row, credential_id)
+                return self._queue_dto(row, credential_id, now)
             revision_id = str(uuid.uuid4())
             if not row:
                 db.execute("INSERT INTO booking_plans VALUES (?,?,?,?,?,?)", (identifier, user_id, revision_id, 1, now, now))
@@ -240,7 +241,7 @@ class PlanService:
                 changed = db.execute("UPDATE booking_plans SET current_revision_id=?, version=version+1,updated_at_utc_ms=? WHERE user_id=? AND plan_id=? AND version=?", (revision_id, now, user_id, identifier, base_version))
                 if changed.rowcount != 1:
                     raise PlanError("plan_version_conflict", 409)
-            return self._queue_dto(self._owned(db, user_id, identifier), credential_id)
+            return self._queue_dto(self._owned(db, user_id, identifier), credential_id, now)
 
 
     def delete_plan(self, user_id, plan_id, base_version, now, credential_id=None):

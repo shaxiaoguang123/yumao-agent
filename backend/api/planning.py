@@ -8,6 +8,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 
 from backend.api.auth import require_csrf, require_session
 from backend.api.ai_models import _body
+from backend.ai.planning import assistant_history_entry
 from backend.ai.service import AIModelError
 from backend.plans.service import PlanError
 
@@ -34,13 +35,16 @@ def _storage(_exc):
 
 def _queue_trace_event(result: dict, state: dict, now_utc_ms: int) -> dict:
     conversation = result.get("conversation") or {}
+    trace = conversation.get("turn_trace") or {}
     if conversation.get("escalation"):
         title, detail = "建议改用手动选场", "这一项多次没能确认；已确认的日期可带到选择预约页。"
     elif result["status"] == "needs_input":
-        title, detail = "还缺一项信息", "先确认当前这一项；答复后继续。当前没有保存队列。"
+        title = "本轮理解完成"
+        detail = trace.get("summary") or "先确认当前这一项；答复后继续。当前没有保存队列。"
     elif result["status"] == "ready":
         count = (result.get("proposal") or {}).get("entry_count", 0)
-        title, detail = "候选队列已整理好", f"共 {count} 项，等待核对并确认保存。"
+        title = "候选队列已整理好"
+        detail = f"{trace.get('summary', '')}共 {count} 项，等待核对并确认保存。"
     else:
         title, detail = "请求不属于整理范围", "助手不会代为查询、预约、付款或创建任务。"
     return {
@@ -123,8 +127,11 @@ def proposals():
 @require_csrf
 def queue_proposals():
     body = _body({"message", "credential_id"},
-                 {"message", "credential_id", "answers", "asked_fields", "scope_label", "conversation_id"})
+                 {"message", "credential_id", "answers", "asked_fields", "scope_label", "conversation_id", "regenerate"})
     if "answers" in body and type(body["answers"]) is not list:
+        raise PlanError("invalid_planning_request", 400)
+    regenerate = body.get("regenerate", False)
+    if type(regenerate) is not bool:
         raise PlanError("invalid_planning_request", 400)
     user_id = g.session_context.user.user_id
     credential_id = body["credential_id"]
@@ -137,6 +144,7 @@ def queue_proposals():
     answers = body.get("answers") or []
     asked_fields = body.get("asked_fields")
     previous_turn_kinds = ["answer"] * len(answers)
+    legacy_snapshot = None
     if asked_fields is None:
         asked_fields = [None] * len(answers)
     state = {
@@ -153,23 +161,43 @@ def queue_proposals():
             raise PlanError("planning_conversation_not_found", 404)
         expected_conversation_version = previous["version"]
         replaying = len(answers) == len(previous["answers"])
+        if regenerate and not replaying:
+            raise PlanError("invalid_planning_request", 400)
         previous_turn_kinds = previous.get("turn_kinds") or ["answer"] * (len(previous["answers"]) + 1)
         state["turn_kinds"] = previous_turn_kinds if replaying else [*previous_turn_kinds, "answer"]
         store.validate_next(previous, state)
+        if replaying and previous.get("response_history") and not regenerate:
+            return jsonify(previous["response_history"][-1])
         business_date = date.fromisoformat(previous["business_date"])
+        response_history = previous.get("response_history", [])
+        assistant_history = [assistant_history_entry(item) for item in response_history]
+        agent_state = previous.get("agent_state")
+        if agent_state is None and previous.get("response_history"):
+            latest_conversation = previous["response_history"][-1].get("conversation") or {}
+            if isinstance(latest_conversation, dict) and type(latest_conversation.get("slots")) is list:
+                legacy_snapshot = {"slots": latest_conversation["slots"]}
     else:
+        if regenerate:
+            raise PlanError("invalid_planning_request", 400)
         conversation_id = secrets.token_urlsafe(24)
         business_date = current_app.extensions["planning_service"].business_date_at(now_utc_ms)
+        assistant_history = []
+        agent_state = None
     with current_app.extensions["ai_call_guard"].hold(user_id):
         result = current_app.extensions["queue_planning_graph"].invoke(
             current_app.extensions["planning_service"],
             {"user_id": user_id, "message": body["message"], "now_utc_ms": now_utc_ms,
              "credential_id": credential_id, "answers": body.get("answers"),
              "asked_fields": body.get("asked_fields"), "scope_label": body.get("scope_label"),
-             "reference_date": business_date, "previous_turn_kinds": previous_turn_kinds},
+             "reference_date": business_date, "previous_turn_kinds": previous_turn_kinds,
+             "agent_state": agent_state, "assistant_history": assistant_history,
+             "legacy_snapshot": legacy_snapshot},
         )
     result["conversation_id"] = conversation_id
     state["turn_kinds"] = result["conversation"]["turn_kinds"]
+    agent_state = result["conversation"].pop("_agent_state", None)
+    if agent_state is not None:
+        state["agent_state"] = agent_state
     result["conversation_version"] = store.save(
         conversation_id, user_id, credential_id, business_date.isoformat(), state,
         {**result, "trace_event": _queue_trace_event(result, state, now_utc_ms)}, now_utc_ms,
@@ -186,7 +214,10 @@ def active_queue_conversation():
     if not credential_id or current_app.extensions["credential_service"].get_for_user(user_id, credential_id) is None:
         raise PlanError("credential_not_found", 404)
     store = current_app.extensions["planning_conversation_store"]
-    return jsonify({"conversation": store.latest(user_id, credential_id),
+    conversation = store.latest(user_id, credential_id)
+    if conversation:
+        conversation.pop("agent_state", None)
+    return jsonify({"conversation": conversation,
                     "conversations": store.list_recent(user_id, credential_id)})
 
 
@@ -202,6 +233,7 @@ def queue_conversation(conversation_id):
     saved = current_app.extensions["planning_conversation_store"].get(conversation_id, user_id, credential_id)
     if saved is None:
         raise PlanError("planning_conversation_not_found", 404)
+    saved.pop("agent_state", None)
     return jsonify({"conversation": saved})
 
 
@@ -219,7 +251,9 @@ def resume_queue_conversation(conversation_id):
     store = current_app.extensions["planning_conversation_store"]
     if not store.activate(conversation_id, user_id, credential_id, time.time_ns() // 1_000_000):
         raise PlanError("planning_conversation_not_found", 404)
-    return jsonify({"conversation": store.get(conversation_id, user_id, credential_id)})
+    conversation = store.get(conversation_id, user_id, credential_id)
+    conversation.pop("agent_state", None)
+    return jsonify({"conversation": conversation})
 
 
 @planning_bp.post("/queue-conversations/<conversation_id>/close")

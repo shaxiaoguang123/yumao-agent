@@ -12,12 +12,12 @@ async function home(list) {
  await flushPromises(); return wrapper;
 }
 describe('dashboard credential overview',()=>{
- it('derives counts from actual records without presenting booking capability',async()=>{
+ it('derives counts and explains that execution depends on server configuration',async()=>{
   const wrapper=await home(vi.fn().mockResolvedValue({credentials:[{enabled:true,expiry_state:'expiry_ok',account_binding_state:'confirmed',last_confirmed_validation_state:'confirmed_valid'},{enabled:false,expiry_state:'expired',account_binding_state:'needs_reconfirmation',last_confirmed_validation_state:'confirmed_invalid'}]}));
   expect(wrapper.get('[data-testid="total-credentials"]').text()).toBe('2');
   expect(wrapper.get('[data-testid="enabled-credentials"]').text()).toBe('1');
   expect(wrapper.get('[data-testid="attention-credentials"]').text()).toBe('1');
-  expect(wrapper.text()).toContain('尚未开放');
+  expect(wrapper.text()).toContain('按服务端配置');
   expect(wrapper.find('button[data-testid="start-booking"]').exists()).toBe(false);
  });
  it('does not claim zero or a healthy state while the request is pending',async()=>{

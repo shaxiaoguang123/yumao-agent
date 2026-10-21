@@ -37,6 +37,21 @@ class DecideTests(unittest.TestCase):
         state = decide(slots(target_date=SlotStatus.EMPTY, windows_2h=SlotStatus.EMPTY), ["booking_mode"], 1)
         self.assertEqual(state.asking, "target_date")
 
+    def test_the_model_prioritizes_any_active_gap_but_cannot_skip_hard_dependencies(self):
+        state = decide(slots(windows_2h=SlotStatus.EMPTY, windows_1h=SlotStatus.EMPTY), [], 0,
+                       preferred_field="windows_1h")
+        self.assertEqual((state.asking, state.eligible_fields, state.model_choice_accepted),
+                         ("windows_1h", ("windows_2h", "windows_1h"), True))
+        overlap_slots = slots(overlap_2h=SlotStatus.AMBIGUOUS, courts_2h=SlotStatus.EMPTY)
+        overlap_slots["courts_2h"] = Slot("courts_2h", SlotStatus.EMPTY, active=False)
+        state = decide(overlap_slots, [], 0, preferred_field="courts_2h")
+        self.assertEqual((state.asking, state.eligible_fields, state.model_choice_accepted),
+                         ("overlap_2h", ("overlap_2h",), False))
+        state = decide(slots(courts_2h=SlotStatus.EMPTY, windows_1h=SlotStatus.EMPTY), [], 0,
+                       preferred_field="windows_1h")
+        self.assertEqual((state.asking, state.eligible_fields, state.model_choice_accepted),
+                         ("windows_1h", ("courts_2h", "windows_1h"), True))
+
     def test_repair_and_turn_limits_remain_deterministic(self):
         self.assertEqual(decide(slots(target_date=SlotStatus.AMBIGUOUS), [], 0).phase, Phase.REPAIRING)
         self.assertEqual(decide(slots(courts_2h=SlotStatus.INVALID), [], 0).phase, Phase.REPAIRING)
@@ -57,6 +72,14 @@ class DecideTests(unittest.TestCase):
         for phase in conv.TERMINAL:
             self.assertEqual(conv.TRANSITIONS[phase], frozenset())
             self.assertFalse(can_follow(phase, Phase.COLLECTING))
+
+
+class PreviewContinuationTests(unittest.TestCase):
+    def test_a_ready_preview_can_return_to_collection_or_repair(self):
+        self.assertTrue(can_follow(Phase.READY, Phase.COLLECTING))
+        self.assertTrue(can_follow(Phase.READY, Phase.REPAIRING))
+        self.assertNotIn(Phase.READY, conv.TERMINAL)
+        self.assertIn(Phase.READY, conv.TURN_COMPLETE)
 
 
 class BookingQueueConversationTests(unittest.TestCase):
@@ -183,7 +206,7 @@ class ReplayInvariants(unittest.TestCase):
             built = build_slots(draft, TODAY)
             state = decide(built, asked, len(turns) - 1)
             phases.append(state.phase)
-            if state.phase in conv.TERMINAL:
+            if state.phase in conv.TURN_COMPLETE:
                 return state, draft, asked, phases
             asked.append(state.asking)
             turns.append(rng.choice(self.ANSWERS))
@@ -210,7 +233,7 @@ class ReplayInvariants(unittest.TestCase):
                 draft = fold(turns, asked, TODAY)
                 built = build_slots(draft, TODAY)
                 state = decide(built, asked, len(turns) - 1)
-                if state.phase in conv.TERMINAL:
+                if state.phase in conv.TURN_COMPLETE:
                     break
                 self.assertIn(state.asking, [slot.field for slot in conv.blocking_slots(built)])
                 self.assertTrue(question(built, state.asking, draft, TODAY))

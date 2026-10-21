@@ -2,11 +2,14 @@ import {enableAutoUnmount,mount} from '@vue/test-utils';
 import {afterEach,describe,expect,it} from 'vitest';
 import LiveAvailabilityGrid from './LiveAvailabilityGrid.vue';
 enableAutoUnmount(afterEach);
-const cell=(state='observed_clear_unmarked')=>({state,intent_selectable:state==='observed_clear_unmarked',selectable:false,activity_type:state==='observed_activity_occupied'?3:null});
+const cell=(state='observed_clear_unmarked')=>({state,price_display:'20',intent_selectable:state==='observed_clear_unmarked',selectable:false,activity_type:state==='observed_activity_occupied'?3:null});
 function grid(){return {target_date:'2026-10-15',timezone_name:'Asia/Shanghai',query_scope:{display_name:'羽毛球'},can_select_intent:true,client_selection_window:'open',source:{captured_at_utc_ms:Date.now(),ui_stale_after_utc_ms:Date.now()+60000},selection_limits:{min_slots_observed:1,max_slots_observed:4},courts:[{display_name:'任意首选场'},{display_name:'任意备选场'},{display_name:'占用场'}],rows:[{time_label:'18:00',intent_start_time:'18:00',intent_end_time:'19:00',time_status_code:'0',cells:[cell(),cell(),cell('observed_reserved')]},{time_label:'19:00',intent_start_time:'19:00',intent_end_time:'20:00',time_status_code:'0',cells:[cell(),cell(),cell('observed_unknown')]}]};}
 describe('official display selection for semantic intent',()=>{
  it('selects any returned clear court, cancels cells, orders alternatives and emits only semantic values',async()=>{
   const wrapper=mount(LiveAvailabilityGrid,{props:{grid:grid()}});
+  expect(wrapper.get('[data-testid="live-cell-0-2"] .observation-price').text()).toBe('20');
+  expect(wrapper.get('[data-testid="live-cell-0-2"]').attributes('aria-label')).toContain('价格 20，单位未核实');
+  expect(wrapper.get('[data-testid="live-cell-0-2"]').attributes('title')).toContain('价格 20，单位未核实');
   await wrapper.get('[data-testid="live-cell-0-1"]').trigger('click');await wrapper.get('[data-testid="live-cell-1-1"]').trigger('click');
   await wrapper.get('[data-testid="live-cell-0-0"]').trigger('click');
   expect(wrapper.get('.observed-selection').text()).toContain('首选 · 任意备选场');

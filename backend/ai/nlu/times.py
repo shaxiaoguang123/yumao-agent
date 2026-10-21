@@ -92,8 +92,8 @@ def mask_shift(text: str) -> str:
     return _RATE_HOUR.sub(lambda m: "□" * len(m.group(0)), SHIFT_PHRASE.sub(lambda m: "□" * len(m.group(0)), norm(text)))
 
 
-def scan_durations(text: str) -> list[int]:
-    values: list[int] = []
+def scan_duration_mentions(text: str) -> list[tuple[str, int, int]]:
+    values: list[tuple[str, int, int]] = []
     for match in _DURATION.finditer(mask_shift(text)):
         if match.group("hb"):
             hours = to_int(match.group("hb"))
@@ -109,5 +109,9 @@ def scan_durations(text: str) -> list[int]:
         else:
             value = to_int(match.group("mn"))
         if value:
-            values.append(value)
+            values.append((match.group(0), value, match.start()))
     return values
+
+
+def scan_durations(text: str) -> list[int]:
+    return [value for _text, value, _pos in scan_duration_mentions(text)]
