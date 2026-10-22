@@ -10,6 +10,7 @@ from backend.execution.engine import BookingExecutionEngine
 from backend.execution.repository import BookingExecutionRepository
 from backend.execution.settings import DEFAULT_SETTINGS, ExecutionSettingsService
 from backend.plans.service import PlanService
+from backend.diagnostics import diagnostic_scope, record_event, set_diagnostic_identity
 
 
 class BookingScheduler:
@@ -18,7 +19,7 @@ class BookingScheduler:
     def __init__(self, *, settings_service: ExecutionSettingsService,
                  engine: BookingExecutionEngine, repository: BookingExecutionRepository,
                  plan_service: PlanService, timezone_name: str,
-                 worker_enabled: bool, clock_utc_ms=None, sleep=time.sleep):
+                 worker_enabled: bool, clock_utc_ms=None, sleep=time.sleep, diagnostics=None):
         self.settings = settings_service
         self.engine = engine
         self.repository = repository
@@ -26,6 +27,7 @@ class BookingScheduler:
         self.timezone_name = timezone_name
         self.zone = ZoneInfo(timezone_name)
         self.worker_enabled = bool(worker_enabled)
+        self.diagnostics = diagnostics
         self._clock = clock_utc_ms or (lambda: time.time_ns() // 1_000_000)
         self._sleep = sleep
 
@@ -39,6 +41,10 @@ class BookingScheduler:
         return int(hour), int(minute)
 
     def tick_once(self, now_utc_ms: int | None = None) -> dict:
+        with diagnostic_scope(self.diagnostics):
+            return self._tick_once(now_utc_ms)
+
+    def _tick_once(self, now_utc_ms: int | None = None) -> dict:
         if not self.worker_enabled:
             return {"worker_enabled": False, "reconciled": 0, "executed": 0}
         now = int(self._clock() if now_utc_ms is None else now_utc_ms)
@@ -50,10 +56,12 @@ class BookingScheduler:
         execution_jobs: list[tuple[str, str, str]] = []
         settings_by_user: dict[str, dict | None] = {}
         for user_id, credential_id in self.settings.list_active_credentials():
+            set_diagnostic_identity(user_id=user_id, credential_id=credential_id)
             if user_id not in settings_by_user:
                 try:
                     settings_by_user[user_id] = self.settings.get(user_id)
-                except Exception:
+                except Exception as exc:
+                    record_event("execution", "scheduler.settings_failed", level="error", code="execution_settings_unavailable", exception=exc)
                     settings_by_user[user_id] = None
             settings_dto = settings_by_user[user_id]
             if settings_dto is None:
@@ -61,7 +69,8 @@ class BookingScheduler:
             try:
                 setting_values = settings_dto["settings"]
                 queue = self.plans.get_manual_queue(user_id, target_date, credential_id)
-            except Exception:
+            except Exception as exc:
+                record_event("execution", "scheduler.queue_failed", level="error", code="queue_read_failed", exception=exc)
                 continue
             latest = self.repository.latest_run(user_id, credential_id, target_date)
             if not queue or not queue.get("candidates") or queue.get("deleted"):
@@ -107,13 +116,14 @@ class BookingScheduler:
                 thread_name_prefix="booking-token",
             ) as executor:
                 futures = [executor.submit(self.engine.execute, *job) for job in execution_jobs]
-                for future in futures:
+                for job, future in zip(execution_jobs, futures):
                     try:
                         future.result()
-                    except Exception:
+                    except Exception as exc:
                         # Each run owns its durable state; one unexpected Token failure must
                         # not prevent the remaining due Tokens from starting.
-                        pass
+                        with diagnostic_scope(self.diagnostics, run_id=job[0], user_id=job[1], credential_id=job[2]):
+                            record_event("execution", "scheduler.token_failed", level="error", code="execution_internal_error", exception=exc)
         executed = len(execution_jobs)
         return {"worker_enabled": True, "target_date": target_date,
                 "reconciled": reconciled, "executed": executed}
@@ -130,7 +140,9 @@ class BookingScheduler:
             if user_id not in settings_by_user:
                 try:
                     settings_by_user[user_id] = self.settings.get(user_id)
-                except Exception:
+                except Exception as exc:
+                    with diagnostic_scope(self.diagnostics, user_id=user_id, credential_id=credential_id):
+                        record_event("execution", "scheduler.wait_settings_failed", level="error", code="execution_settings_unavailable", exception=exc)
                     settings_by_user[user_id] = None
             settings_dto = settings_by_user[user_id]
             if settings_dto is None:
@@ -138,7 +150,9 @@ class BookingScheduler:
             try:
                 setting_values = settings_dto["settings"]
                 queue = self.plans.get_manual_queue(user_id, target_date, credential_id)
-            except Exception:
+            except Exception as exc:
+                with diagnostic_scope(self.diagnostics, user_id=user_id, credential_id=credential_id):
+                    record_event("execution", "scheduler.wait_queue_failed", level="error", code="queue_read_failed", exception=exc)
                 continue
             if not queue or not queue.get("candidates") or queue.get("deleted"):
                 continue

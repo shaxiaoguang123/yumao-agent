@@ -67,6 +67,7 @@ class AppSettings:
     password_change_ip_attempt_limit: int = 30
     password_change_ip_window_seconds: int = 900
     trust_proxy_headers: bool = False
+    runtime_logs_enabled: bool = True
 
 
 def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
@@ -238,6 +239,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
     trust_proxy_headers_flag = source.get("TRUST_PROXY_HEADERS", "false")
     if trust_proxy_headers_flag not in {"true", "false"}:
         raise ValueError("TRUST_PROXY_HEADERS must be true or false")
+    runtime_logs_flag = source.get("RUNTIME_LOGS_ENABLED", "true")
+    if runtime_logs_flag not in {"true", "false"}:
+        raise ValueError("RUNTIME_LOGS_ENABLED must be true or false")
 
     raw_origins = source.get("APP_ALLOWED_ORIGINS", "")
     allowed_origins = tuple(origin.strip().rstrip("/") for origin in raw_origins.split(",") if origin.strip())
@@ -363,4 +367,5 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
             source, "PASSWORD_CHANGE_IP_WINDOW_SECONDS", 900
         ),
         trust_proxy_headers=trust_proxy_headers_flag == "true",
+        runtime_logs_enabled=runtime_logs_flag == "true",
     )

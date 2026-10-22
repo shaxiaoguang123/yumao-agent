@@ -8,6 +8,7 @@ from contextlib import closing
 from pathlib import Path
 
 from backend.db import connect_database
+from backend.diagnostics import record_event
 
 
 _STATES = {"ready", "calibrated", "running", "succeeded", "failed", "empty", "stale", "needs_attention"}
@@ -94,6 +95,11 @@ class BookingExecutionRepository:
                     "FROM booking_execution_stages WHERE run_id=? ORDER BY started_at_utc_ms,stage_id", (run_id,)
                 ).fetchall()
                 db.execute("COMMIT")
+                record_event("execution", "execution.snapshot", run_id=run_id, user_id=user_id,
+                             credential_id=credential_id, state=state, before_count=len(queue.get("candidates", [])),
+                             after_count=len(candidates), filtered_count=max(0,len(queue.get("candidates", []))-len(candidates)))
+                for event in stage_events or []:
+                    self._log_stage(run_id, event)
                 return self._row_dto(row, stages)
             except sqlite3.IntegrityError as exc:
                 if db.in_transaction:
@@ -151,6 +157,19 @@ class BookingExecutionRepository:
                 if db.in_transaction:
                     db.execute("ROLLBACK")
                 raise
+        self._log_stage(run_id, event)
+
+    @staticmethod
+    def _log_stage(run_id, event):
+        outcome = event.get("outcome") if event.get("outcome") in _OUTCOMES else "failed"
+        code = event.get("safe_code")
+        if code is not None and (type(code) is not str or not _SAFE_CODE.fullmatch(code)):
+            code = "upstream_error"
+        record_event("execution", "execution.stage", run_id=run_id,
+                     level="error" if outcome in {"failed","uncertain"} else "warning" if outcome=="rejected" else "info",
+                     code=code, stage=event.get("stage_key"), outcome=outcome,
+                     round_number=event.get("round_number",0), candidate_index=event.get("candidate_index",0),
+                     elapsed_ms=event.get("elapsed_ms",0))
 
     def find_source_run(self, user_id: str, credential_id: str, target_date: str,
                         source_revision_id: str) -> dict | None:

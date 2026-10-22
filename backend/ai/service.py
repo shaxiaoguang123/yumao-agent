@@ -11,6 +11,7 @@ from typing import Callable, Mapping, Sequence
 
 from backend.ai.crypto import EncryptedProviderKey, ProviderKeyCipher
 from backend.ai.provider import ProviderConfig, ProviderFailure, PinnedChatCompletionsTransport, _resolve_public, validate_base_url
+from backend.diagnostics import record_event
 from backend.credentials.keyring import CredentialKeyring
 from backend.db import connect_database
 
@@ -306,12 +307,19 @@ class AIProviderService:
             resolved = (config, config.public())
         if not resolved: raise AIModelError("provider_not_configured",409)
         config,public=resolved
+        started = time.monotonic_ns()
         try:
             content = self.transport.chat(config,self._messages(messages))
             if type(content) is not str or (config.api_key and config.api_key in content):
                 raise ProviderFailure("provider_response_invalid")
+            record_event("agent", "agent.model_call", model_id=config.provider_id,
+                         elapsed_ms=(time.monotonic_ns()-started)//1_000_000, outcome="success")
             return content,public
-        except ProviderFailure as exc: raise AIModelError(exc.code,exc.status) from None
+        except ProviderFailure as exc:
+            record_event("agent", "agent.model_call", level="warning", code=exc.code,
+                         model_id=config.provider_id, upstream_status=exc.upstream_status,
+                         elapsed_ms=(time.monotonic_ns()-started)//1_000_000, outcome="failed")
+            raise AIModelError(exc.code,exc.status) from None
 
     def explicit_config(self, user_id, model_id):
         db=self._db()

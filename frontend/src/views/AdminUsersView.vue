@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, onBeforeUnmount, ref, watch } from 'vue';
 import { RouterLink } from 'vue-router';
+import ActivityOverview from '../components/metrics/ActivityOverview.vue';
 import PageHeader from '../components/PageHeader.vue';
 
 const api = inject('adminUsersApi');
@@ -124,6 +125,8 @@ onBeforeUnmount(() => {
       title="用户管理"
       description="查看账户状态，管理用户访问权限。"
     />
+
+    <ActivityOverview v-if="authorized" system />
 
     <p v-if="!authorized" class="form-error" role="alert">管理员登录状态已失效，请重新登录。</p>
     <p v-if="errorMessage" class="form-error" role="alert">{{ errorMessage }} <button class="text-button" type="button" @click="load()">重试</button></p>

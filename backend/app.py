@@ -51,6 +51,8 @@ from backend.execution.repository import BookingExecutionRepository
 from backend.execution.scheduler import BookingScheduler
 from backend.db import CURRENT_SCHEMA_VERSION, check_schema_ready
 from backend.settings import load_settings
+from backend.api.diagnostics import diagnostics_bp
+from backend.diagnostics import RuntimeDiagnostics, init_request_diagnostics, record_event
 
 
 _SECRET_CONFIG_KEYS = {
@@ -67,7 +69,13 @@ _SECRET_CONFIG_KEYS = {
 }
 
 
-def create_app(config: Mapping[str, object] | None = None) -> Flask:
+class DiagnosticFlask(Flask):
+    def log_exception(self, exc_info):
+        # Flask's default formatter includes uncontrolled exception messages.
+        record_event("api", "api.unhandled", level="error", code="internal_error", exception=exc_info[1])
+
+
+def create_app(config: Mapping[str, object] | None = None, *, process_role="web") -> Flask:
     if config is None:
         settings = load_settings()
         flask_overrides: dict[str, Any] = {}
@@ -150,7 +158,7 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         timezone_name=settings.booking_timezone_name,
     )
 
-    app = Flask(__name__)
+    app = DiagnosticFlask(__name__)
     if settings.trust_proxy_headers:
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
     app.config.update(flask_overrides)
@@ -163,6 +171,13 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         SQLITE_BUSY_TIMEOUT_MS=settings.sqlite_busy_timeout_ms,
     )
     app.extensions["app_settings"] = settings
+    diagnostics = RuntimeDiagnostics(
+        settings.database_path, role=process_role,
+        enabled=settings.runtime_logs_enabled and (not app.testing or "RUNTIME_LOGS_ENABLED" in flask_overrides),
+    )
+    app.extensions["runtime_diagnostics"] = diagnostics
+    init_request_diagnostics(app, diagnostics)
+    diagnostics.emit("system", "service.started", stage=process_role)
     app.extensions["session_service"] = SessionService(
         settings.database_path,
         settings.sqlite_busy_timeout_ms,
@@ -208,6 +223,7 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         protocol=booking_protocol,
         timezone_name=settings.booking_timezone_name,
         worker_enabled=settings.booking_execution_enabled,
+        diagnostics=diagnostics,
     )
     execution_repository = BookingExecutionRepository(
         settings.database_path, settings.sqlite_busy_timeout_ms,
@@ -227,6 +243,7 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         plan_service=app.extensions["plan_service"],
         timezone_name=settings.booking_timezone_name,
         worker_enabled=settings.booking_execution_enabled,
+        diagnostics=diagnostics,
     )
     app.extensions["ai_provider_service"] = AIProviderService(
         database_path=settings.database_path,
@@ -263,4 +280,5 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
     app.register_blueprint(booking_window_bp)
     app.register_blueprint(ai_models_bp)
     app.register_blueprint(booking_execution_bp)
+    app.register_blueprint(diagnostics_bp)
     return app

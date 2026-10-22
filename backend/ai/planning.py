@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+from backend.diagnostics import record_event
 import re
 import time
 import unicodedata
@@ -726,6 +727,8 @@ class PlanningService:
                 interpreted["attempt"] = attempt
                 return interpreted, provider
             log.warning("queue turn interpretation rejected attempt=%d", attempt)
+            record_event("agent", "agent.interpretation_rejected", level="warning", code="invalid_model_proposal",
+                         attempt=attempt, validation_code=validation_reason)
         raise PlanError("invalid_model_proposal", 502)
 
     @staticmethod
@@ -902,6 +905,7 @@ class PlanningService:
             if warnings is not None:
                 return warnings, {"state": "reviewed", "attempts": attempt}, {"name": provider["name"], "model": provider["model"]}
             log.warning("queue review rejected attempt=%d", attempt)
+            record_event("agent", "agent.review_rejected", level="warning", code="invalid_model_review", attempt=attempt)
             reason = "bad_reply"
         if ctx.require_model:
             raise PlanError("invalid_model_proposal", 502)

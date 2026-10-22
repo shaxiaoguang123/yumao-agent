@@ -10,6 +10,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 from backend.api.auth import require_csrf, require_session
 from backend.credentials.types import CredentialDTO, CredentialOperationError, CredentialOperationResult
 from backend.db import connect_database
+from backend.diagnostics import record_event, set_diagnostic_identity
 
 
 credentials_bp = Blueprint("credentials", __name__, url_prefix="/api/credentials")
@@ -150,10 +151,15 @@ def _json_error(
 
 
 def _service_error(error: CredentialOperationError):
+    record_event("credential", "credential.operation", level="warning", code=error.code,
+                 endpoint=request.endpoint, http_status=error.http_status)
     return _json_error(error.code, error.http_status, error.retry_after_seconds)
 
 
 def _operation_response(result: CredentialOperationResult):
+    record_event("credential", "credential.operation", code=result.code,
+                 level="info" if result.succeeded else "warning", endpoint=request.endpoint,
+                 http_status=result.http_status, outcome="success" if result.succeeded else "failed")
     if result.http_status == 401:
         return _json_error("upstream_validation_unknown", 502)
     if not result.succeeded:
@@ -205,6 +211,8 @@ def create_credential():
         )
     except CredentialOperationError as exc:
         return _service_error(exc)
+    set_diagnostic_identity(credential_id=credential.credential_id)
+    record_event("credential", "credential.created", code="credential_created")
     return jsonify({"credential": _serialize_credential(credential)}), 201
 
 

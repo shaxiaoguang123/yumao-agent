@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import secrets
 import time
+from time import monotonic_ns
 from datetime import date
 from flask import Blueprint, current_app, g, jsonify, request
 
@@ -11,6 +12,7 @@ from backend.api.ai_models import _body
 from backend.ai.planning import assistant_history_entry
 from backend.ai.service import AIModelError
 from backend.plans.service import PlanError
+from backend.diagnostics import record_event, set_diagnostic_identity
 
 planning_bp = Blueprint("planning", __name__, url_prefix="/api/planning")
 
@@ -183,6 +185,8 @@ def queue_proposals():
         business_date = current_app.extensions["planning_service"].business_date_at(now_utc_ms)
         assistant_history = []
         agent_state = None
+    set_diagnostic_identity(credential_id=credential_id, conversation_id=conversation_id)
+    started = monotonic_ns()
     with current_app.extensions["ai_call_guard"].hold(user_id):
         result = current_app.extensions["queue_planning_graph"].invoke(
             current_app.extensions["planning_service"],
@@ -203,6 +207,11 @@ def queue_proposals():
         {**result, "trace_event": _queue_trace_event(result, state, now_utc_ms)}, now_utc_ms,
         expected_version=expected_conversation_version,
     )
+    conversation = result.get("conversation") or {}
+    trace = conversation.get("turn_trace") or {}
+    record_event("agent", "agent.turn", phase=conversation.get("phase"), field=conversation.get("asking"),
+                 candidate_count=trace.get("candidate_count"), context_turns=len(answers)+1,
+                 version=result["conversation_version"], elapsed_ms=(monotonic_ns()-started)//1_000_000)
     return jsonify(result)
 
 

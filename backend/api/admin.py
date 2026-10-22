@@ -7,6 +7,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 from backend.api.auth import require_admin, require_csrf, require_session
 from backend.auth.invitations import InvitationService
 from backend.db import connect_database
+from backend.diagnostics import record_event
 
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
@@ -104,6 +105,7 @@ def create_invitation():
         g.session_context.user.user_id,
         expires_at_utc_ms,
     )
+    record_event("admin", "admin.invitation_created")
     return jsonify(
         {
             "invitation_code": code,
@@ -162,6 +164,7 @@ def disable_user(user_id: str):
             (now_utc_ms, user_id),
         )
         conn.execute("COMMIT")
+        record_event("admin", "admin.user_disabled", target_user_id=user_id)
         return current_app.response_class(status=204)
     except BaseException:
         if conn.in_transaction:
@@ -203,6 +206,7 @@ def enable_user(user_id: str):
             (now_utc_ms, user_id),
         )
         conn.execute("COMMIT")
+        record_event("admin", "admin.user_enabled", target_user_id=user_id)
         return current_app.response_class(status=204)
     except BaseException:
         if conn.in_transaction:

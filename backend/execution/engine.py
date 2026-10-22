@@ -20,6 +20,7 @@ from backend.execution.repository import BookingExecutionRepository
 from backend.execution.settings import DEFAULT_SETTINGS
 from backend.plans.service import PlanService
 from backend.orders.status import order_is_confirmed
+from backend.diagnostics import diagnostic_scope, record_event
 
 
 _MAX_ROUNDS = 3
@@ -35,7 +36,7 @@ class BookingExecutionEngine:
                  protocol: OfficialBookingProtocol, timezone_name: str,
                  worker_enabled: bool, clock_utc_ms: Callable[[], int] | None = None,
                  monotonic_ns: Callable[[], int] | None = None,
-                 sleep: Callable[[float], None] = time.sleep):
+                 sleep: Callable[[float], None] = time.sleep, diagnostics=None):
         self.database_path = Path(database_path)
         self.busy_timeout_ms = int(busy_timeout_ms)
         self.plans = plan_service
@@ -43,6 +44,7 @@ class BookingExecutionEngine:
         self.protocol = protocol
         self.timezone_name = timezone_name
         self.worker_enabled = bool(worker_enabled)
+        self.diagnostics = diagnostics
         self.repository = BookingExecutionRepository(database_path, busy_timeout_ms)
         self._clock = clock_utc_ms or (lambda: time.time_ns() // 1_000_000)
         self._monotonic = monotonic_ns or time.monotonic_ns
@@ -355,6 +357,12 @@ class BookingExecutionEngine:
         return result == "paid", result
 
     def execute(self, run_id: str, user_id: str, credential_id: str) -> dict | None:
+        with diagnostic_scope(self.diagnostics, run_id=run_id, user_id=user_id, credential_id=credential_id):
+            result = self._execute(run_id, user_id, credential_id)
+            record_event("execution", "execution.finished", state=result.get("state") if result else "missing")
+            return result
+
+    def _execute(self, run_id: str, user_id: str, credential_id: str) -> dict | None:
         run = self.repository.run_by_id(run_id)
         if not run or run.get("state") != "calibrated":
             return run
@@ -565,7 +573,8 @@ class BookingExecutionEngine:
                 "credential_snapshot_check", self._now(), self._now(), 0, "rejected", exc.code,
             ))
             self.repository.update_state(run_id, ("running",), "needs_attention", self._now(), completed=True)
-        except Exception:
+        except Exception as exc:
+            record_event("execution", "execution.internal_error", level="error", code="execution_internal_error", exception=exc)
             # Never persist arbitrary exception text or upstream data.
             self.repository.record_stage(run_id, self._stage_event(
                 "execution_internal_error", self._now(), self._now(), 0,

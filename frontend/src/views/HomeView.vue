@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router';
 
 import AppIcon from '../components/AppIcon.vue';
 import PageHeader from '../components/PageHeader.vue';
+import ActivityOverview from '../components/metrics/ActivityOverview.vue';
 import { needsAttention } from '../utils/credentialSummary.js';
 const sessionStore = inject('sessionStore');
 const api = inject('credentialApi');
@@ -78,6 +79,7 @@ onBeforeUnmount(() => { requestId += 1; });
    </section>
    <aside class="scope-panel"><span class="section-icon"><AppIcon name="court" /></span><h2>一步一步，准备到位</h2><p>当前可管理账户、预约凭据、邀请码与预约意向。非空队列表示已授权自动预约和付款。</p><div class="scope-status"><span>自动预约 · 支付</span><strong>按服务端配置</strong></div><p class="scope-footnote">先配置有效凭据并启用执行器；状态可在凭据页查看。</p></aside>
   </div>
+  <ActivityOverview />
  </div>
 </template>
 <style scoped>

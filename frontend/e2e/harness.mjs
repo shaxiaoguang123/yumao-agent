@@ -2,6 +2,7 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { SYNTHETIC_CSRF, SYNTHETIC_CODE, SYNTHETIC_PASSWORD, SYNTHETIC_TOKEN, clone, credential, fixtures, viewports } from './fixtures.mjs';
 import { orderStatusOptions, syntheticOrders } from './orders.mjs';
+import { metricsFixture, logsFixture, logFixture } from '../test-support/diagnostics.js';
 
 export function createHarness({ getBrowser, base: BASE, out: OUT, sourceHead }) {
   const report = { sourceHead, base: BASE, browser: {}, screenshots: [], checks: [], scenarios: [], externalRequests: [], unexpectedApiRequests: [], jsExceptions: [], console: [], requestFailures: [] };
@@ -38,9 +39,11 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
       || /^\/api\/plans\/manual-queues(?:\/\d{4}-\d{2}-\d{2})?$/.test(url.pathname);
     const scopedPlanningConversationRead = url.pathname === '/api/planning/queue-conversations';
     const adminUserRead = url.pathname === '/api/admin/users' && request.method() === 'GET';
+    const adminLogRead = url.pathname === '/api/admin/logs' && request.method() === 'GET';
+    const adminLogQueryAllowed = adminLogRead && [...url.searchParams.keys()].every(key => ['hours','since','until','limit','before','level','module','user_id','code','request_id','conversation_id','run_id'].includes(key));
     const adminUserQueryAllowed = adminUserRead
       && [...url.searchParams.keys()].every((key) => ['q', 'role', 'status', 'limit', 'offset'].includes(key));
-    const queryAllowed = adminUserQueryAllowed || ((scopedPlanRead || scopedPlanningConversationRead)
+    const queryAllowed = adminLogQueryAllowed || adminUserQueryAllowed || ((scopedPlanRead || scopedPlanningConversationRead)
       && request.method() === 'GET'
       && [...url.searchParams.keys()].every((key) => key === 'credential_id')
       && (scopedPlanningConversationRead
@@ -54,6 +57,22 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
       await route.fulfill({ status, contentType: raw === null ? 'application/json' : 'text/plain', ...(status === 204 ? { body: '' } : { body: raw === null ? JSON.stringify(payload) : raw }) });
     };
     const delay = async (ms) => { if (ms) await new Promise((resolve) => setTimeout(resolve, ms)); };
+    if (url.pathname === '/api/metrics/overview' && record.method === 'GET') {
+      await reply(state.metricsError ? 503 : 200, state.metricsError ? { error: 'metrics_unavailable' } : metricsFixture()); return;
+    }
+    if (url.pathname === '/api/admin/metrics' && record.method === 'GET') {
+      await reply(state.role === 'admin' ? 200 : 403, state.role === 'admin' ? metricsFixture('system') : { error: 'forbidden' }); return;
+    }
+    if ((adminLogRead || /^\/api\/admin\/logs\/\d+$/.test(url.pathname)) && record.method === 'GET') {
+      if (state.role !== 'admin') { await reply(403, { error: 'forbidden' }); return; }
+      if (state.runtimeLogsError) { await reply(503, { error: 'runtime_logs_unavailable' }); return; }
+      if (adminLogRead) {
+        const events = [logFixture(5), { ...logFixture(4), level: 'warning', module: 'upstream', action: 'upstream.request', code: 'upstream_http_429' }]
+          .filter(event => ['level','module','user_id','code','request_id','conversation_id','run_id'].every(key => !url.searchParams.get(key) || event[key] === url.searchParams.get(key)));
+        await reply(200, { ...logsFixture(), events });
+      } else await reply(200, { event: logFixture(), related: [logFixture(4),logFixture(5)], related_truncated: false });
+      return;
+    }
     if (url.pathname === '/api/auth/session' && record.method === 'GET') {
       await reply(state.sessionError ? 503 : 200, state.sessionError ? { error: 'service_unavailable' } : session()); return;
     }

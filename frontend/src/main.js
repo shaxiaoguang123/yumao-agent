@@ -2,6 +2,7 @@ import { createApp } from 'vue';
 import App from './App.vue';
 import { createAdminInvitationApi } from './api/adminInvitations.js';
 import { createAdminUsersApi } from './api/adminUsers.js';
+import { createDiagnosticsApi } from './api/diagnostics.js';
 import { createCredentialApi } from './api/credentials.js';
 import { createPlanApi } from './api/plans.js';
 import { createOrderApi } from './api/orders.js';
@@ -25,6 +26,7 @@ createApp(App)
   .provide('sessionStore', sessionStore)
   .provide('adminInvitationApi', adminInvitationApi)
   .provide('adminUsersApi', adminUsersApi)
+  .provide('diagnosticsApi', createDiagnosticsApi(sessionStore))
   .provide('credentialApi', credentialApi)
   .provide('planApi', createPlanApi(sessionStore))
   .provide('orderApi', createOrderApi(sessionStore))
