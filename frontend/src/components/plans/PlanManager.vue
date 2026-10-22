@@ -13,6 +13,7 @@ import ManualQueuePreview from './ManualQueuePreview.vue';
 import PlanCredentialControl from './PlanCredentialControl.vue';
 import BookingExecutionSettings from '../BookingExecutionSettings.vue';
 import BookingSuccessPanel from './BookingSuccessPanel.vue';
+import OrderQueryPanel from './OrderQueryPanel.vue';
 import { useManualQueue, queueEntries } from '../../composables/useManualQueue.js';
 import { usePlans } from '../../composables/usePlans.js';
 import { visibleIntentPlans, visibleManualQueuePlans } from '../../utils/planQueueVisibility.js';
@@ -21,8 +22,9 @@ import { providerErrorMessage } from '../../api/providerErrors.js';
 const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('planningProposalApi',null),intentProposalApi=inject('intentPlanningProposalApi',null);
 const liveApi=inject('liveAvailabilityApi',null),credentialApi=inject('credentialApi',null);
 const aiModelsApi=inject('aiModelsApi',null),router=useRouter(),route=useRoute();
+const orderApi=inject('orderApi',null);
 const courtOptions=shallowRef([]),queueScopeLabel=shallowRef(''),queryDate=shallowRef(''),selectedCredentialId=shallowRef(''),credentialRefreshKey=shallowRef(0),planDateFilter=shallowRef(''),pendingDeletePlan=shallowRef(null);
-const activeSection=shallowRef(route.query.tab==='agent'?'agent':'query'),manualDate=shallowRef('');
+const activeSection=shallowRef(['agent','orders'].includes(route.query.tab)?route.query.tab:'query'),manualDate=shallowRef('');
 const agentReadiness=shallowRef('idle');
 const agentReadinessError=shallowRef('');
 let agentCheckSequence=0;
@@ -91,11 +93,23 @@ async function checkAgentService(){
   await redirectToModelSettings(typeof error?.code==='string'?error.code:'provider_unavailable');
  }
 }
-function changeSection(section){
+async function changeSection(section){
+ if(section==='orders'||route.query.tab==='orders'){
+  const failure=await router.replace({query:{...route.query,tab:section}});
+  if(failure||route.name!=='plans')return;
+ }
  activeSection.value=section;
  if(section==='agent'){agentReadinessError.value='';void checkAgentService();}
  else {agentCheckSequence++;agentReadiness.value='idle';agentReadinessError.value='';}
 }
+watch(()=>route.query.tab,(value,previous)=>{
+ if(value==='orders'||previous==='orders'){
+  const section=['query','manual','agent','current','orders'].includes(value)?value:'query';
+  activeSection.value=section;
+  if(section==='agent')void checkAgentService();
+  else {agentCheckSequence++;agentReadiness.value='idle';}
+ }
+});
 watch(()=>[session?.status,session?.user?.user_id,session?.invalidationEpoch],()=>{agentCheckSequence++;agentReadiness.value='idle';courtOptions.value=[];queueScopeLabel.value='';pendingDeletePlan.value=null;planDateFilter.value='';},{flush:'sync'});
 onBeforeUnmount(()=>{agentCheckSequence++;});
 const queryContextKey=computed(()=>JSON.stringify({user:session?.user?.user_id,epoch:session?.invalidationEpoch}));
@@ -148,6 +162,12 @@ if(activeSection.value==='agent')void checkAgentService();
    <TicketQueuePlans :queues="queueState.queues" :date-filter="planDateFilter" :calendar-state="defaultWindow" :court-names="courtOptions" :api="api" :session="session" :busy="queueState.dateLocked" @changed="queueChanged" @select="selectQueue" @history="queueState.showHistory" />
    <section v-if="queueState.history" class="panel queue-history"><div class="plan-section-heading"><h2>队列版本历史</h2><button type="button" class="text-button" @click="queueState.history=null">关闭历史</button></div><details v-for="revision in queueState.history" :key="revision.revision_id"><summary>版本 {{ revision.revision_number }} · {{ revision.target_date }}{{ revision.deleted?' · 已删除':'' }}</summary><ManualQueuePreview :entries="queueEntries(revision)" readonly /></details></section><p v-if="queueState.historyError" class="form-error" role="alert">{{ queueState.historyError }}</p>
    <PlanHistory v-if="historyPlanId" :revisions="history" :status="historyStatus" @close="closeHistory" @retry="showHistory(historyPlanId)" />
+   </section>
+   <section v-show="activeSection==='orders'" id="plan-panel-orders" role="tabpanel" aria-labelledby="plan-tab-orders" class="plan-workspace-section">
+    <OrderQueryPanel v-if="activeSection==='orders'&&orderApi" :api="orderApi" :session="session" :credential-id="selectedCredentialId" :refresh-key="credentialRefreshKey">
+     <template #credentials><PlanCredentialControl v-if="credentialApi" v-model="selectedCredentialId" :api="credentialApi" :session="session" :timezone-name="defaultWindow?.business_timezone_name||'Asia/Shanghai'" :disabled="queueState.dateLocked" @updated="credentialRefreshKey++" /></template>
+    </OrderQueryPanel>
+    <p v-else-if="activeSection==='orders'" class="panel form-error" role="alert">订单查询暂时不可用，请刷新页面重试。</p>
    </section>
   </template>
  </div>

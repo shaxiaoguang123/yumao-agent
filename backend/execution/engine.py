@@ -19,10 +19,10 @@ from backend.execution.reconciliation import (
 from backend.execution.repository import BookingExecutionRepository
 from backend.execution.settings import DEFAULT_SETTINGS
 from backend.plans.service import PlanService
+from backend.orders.status import order_is_confirmed
 
 
 _MAX_ROUNDS = 3
-_PAID_STATUSES = {"1", "4", "8"}
 _VERIFY_ATTEMPTS = 15
 _RESERVATION_COUNT = "5"
 
@@ -317,12 +317,12 @@ class BookingExecutionEngine:
                     self._sleep(verify_interval_ms / 1000)
                 continue
             content = ((listed.envelope.get("resultData") or {}).get("content")
-                       if type(listed.envelope.get("resultData")) is dict else [])
+                       if listed.envelope.get("success") is True
+                       and type(listed.envelope.get("resultData")) is dict else [])
             matching = next((item for item in content if type(item) is dict
                              and str(item.get("orderno") or "") == order_no), None) if type(content) is list else None
             if matching:
-                order_status = str(matching.get("status") or "")
-                if str(matching.get("paytime") or "") or order_status in _PAID_STATUSES:
+                if listed.envelope.get("success") is True and order_is_confirmed(matching):
                     result = "paid"
                     break
                 booking_no, order_id = str(matching.get("bookingno") or ""), str(matching.get("id") or "")
@@ -332,13 +332,16 @@ class BookingExecutionEngine:
                         details = self.protocol.order_details(material.token, booking_no=booking_no, order_id=order_id)
                     except UpstreamCallError:
                         details = None
-                    detail = details.envelope.get("resultData") if details else None
-                    if type(detail) is dict and (str(detail.get("paytime") or "")
-                                                 or str(detail.get("status") or "") in _PAID_STATUSES):
+                    detail = (details.envelope.get("resultData")
+                              if details and details.envelope.get("success") is True else None)
+                    if order_is_confirmed(detail):
                         result = "paid"
                         break
                     if type(detail) is dict and str(detail.get("status") or "") == "5":
                         result = "payment_pending"
+                    elif type(detail) is dict and str(detail.get("status") or "") in {"2", "9"}:
+                        result = "order_cancelled" if str(detail["status"]) == "2" else "order_expired"
+                        break
             if attempt + 1 < _VERIFY_ATTEMPTS:
                 self._sleep(verify_interval_ms / 1000)
         elapsed = max(0, (self._monotonic() - monotonic_start) // 1_000_000)

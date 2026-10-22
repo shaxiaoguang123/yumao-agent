@@ -29,12 +29,14 @@ class ProtocolReply:
 
 class UpstreamCallError(RuntimeError):
     def __init__(self, safe_code: str, outcome: str, *, started_at_utc_ms: int = 0,
-                 completed_at_utc_ms: int = 0, elapsed_ms: int = 0):
+                 completed_at_utc_ms: int = 0, elapsed_ms: int = 0,
+                 retry_after_seconds: int | None = None):
         self.safe_code = safe_code
         self.outcome = outcome
         self.started_at_utc_ms = started_at_utc_ms
         self.completed_at_utc_ms = completed_at_utc_ms
         self.elapsed_ms = elapsed_ms
+        self.retry_after_seconds = retry_after_seconds
         super().__init__(safe_code)
 
 
@@ -124,7 +126,8 @@ class OfficialBookingProtocol:
                     response = send(token)
                 break
             except CredentialOperationError as exc:
-                if exc.code in {"upstream_read_rate_limited", "validation_rate_limited"} and retry < 3:
+                if (path not in {"/phone/payOrderForPhone", "/phone/payOrderDetails"}
+                        and exc.code in {"upstream_read_rate_limited", "validation_rate_limited"} and retry < 3):
                     wait = exc.retry_after_seconds
                     if wait is None:
                         interval = self.credentials.gate.minimum_interval_ms
@@ -138,6 +141,7 @@ class OfficialBookingProtocol:
                     started_at_utc_ms=int(observed.get("started_at", 0)),
                     completed_at_utc_ms=int(observed.get("completed_at", self._now_ms())),
                     elapsed_ms=int(observed.get("elapsed_ms", 0)),
+                    retry_after_seconds=exc.retry_after_seconds,
                 ) from None
         if not isinstance(response, BoundedHttpResponse):
             raise UpstreamCallError(
@@ -270,10 +274,16 @@ class OfficialBookingProtocol:
             token=token,
         )
 
-    def list_orders(self, token: str) -> ProtocolReply:
+    def list_orders(self, token: str = "", *, page_number: int = 1, page_size: int = 20,
+                    status: str = "", read_user: tuple[str, str] | None = None) -> ProtocolReply:
+        payload = {"pageNumber": page_number, "pageSize": page_size, "ordertype": 1}
+        if status:
+            payload["status"] = status
         return self._call(path="/phone/payOrderForPhone",
-                          payload={"pageNumber": 1, "pageSize": 20, "ordertype": 1}, token=token)
+                          payload=payload, token=token, read_user=read_user)
 
-    def order_details(self, token: str, *, booking_no: str, order_id: str) -> ProtocolReply:
-        return self._call(path="/phone/payOrderDetails", payload={"bookingno": booking_no, "id": order_id}, token=token)
+    def order_details(self, token: str = "", *, booking_no: str, order_id: str,
+                      read_user: tuple[str, str] | None = None) -> ProtocolReply:
+        return self._call(path="/phone/payOrderDetails", payload={"bookingno": booking_no, "id": order_id},
+                          token=token, read_user=read_user)
 
