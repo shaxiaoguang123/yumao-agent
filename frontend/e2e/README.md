@@ -18,7 +18,7 @@ An installed Chrome can be used without downloading another browser:
 BROWSER_EXECUTABLE_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" npm run test:e2e
 ```
 
-`-- --only-regressions` runs the 31 targeted scenarios. The default runs all 77.
+`-- --only-regressions` skips the original baseline and runs the regression and feature suites.
 Each scenario owns a new Context; service workers are blocked. The runner starts
 its own loopback Vite on an available port, disables environment-file loading and
 API proxying, and filters inherited `VITE_*` variables. Only this local HTTP origin
@@ -63,3 +63,7 @@ The retired one-shot plan editor E2E was removed because that UI was replaced by
 the conversational Agent flow.
 
 UI redesign adds four discovery scenarios (one per viewport): local search/filter, distinct no-match state and explicit verification-record expansion. Intentional brand subtitle is checked separately from single-line navigation labels. The PR trigger includes the browser-fix base for stacked UI PRs.
+
+## Compact responsive layout
+
+The responsive suite covers 320–1920px widths and a short desktop viewport. It checks the visible Agent preview, first-screen phone input, execution-help bounds, both navigation rows after resizing, dense log details, and inline model editing. API responses stay synthetic and blocked from the upstream service. Screenshots support manual visual review; these checks do not establish physical iOS keyboard or safe-area behavior.

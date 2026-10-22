@@ -1,9 +1,27 @@
 <script setup>
-import { inject } from 'vue';
-import { RouterLink, RouterView } from 'vue-router';
+import { inject, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { RouterLink, RouterView, useRoute } from 'vue-router';
 import AppIcon from './components/AppIcon.vue';
 import './styles/design-system.css';
 const sessionStore = inject('sessionStore');
+const route = useRoute();
+const navElement = ref(null);
+async function revealActiveNavigationItem() {
+ await nextTick();
+ const nav = navElement.value;
+ const active = nav?.querySelector('.router-link-exact-active');
+ if (nav && active && nav.scrollWidth > nav.clientWidth) {
+  const navRect = nav.getBoundingClientRect();
+  const activeRect = active.getBoundingClientRect();
+  nav.scrollLeft += activeRect.left - navRect.left - (nav.clientWidth - active.offsetWidth) / 2;
+ }
+}
+watch([() => route.fullPath, () => sessionStore?.user?.role], revealActiveNavigationItem, { flush: 'post' });
+onMounted(() => {
+ window.addEventListener('resize', revealActiveNavigationItem);
+ revealActiveNavigationItem();
+});
+onUnmounted(() => window.removeEventListener('resize', revealActiveNavigationItem));
 </script>
 <template>
  <div class="app-shell" :class="{ 'public-shell': !sessionStore?.user }">
@@ -11,7 +29,7 @@ const sessionStore = inject('sessionStore');
   <header class="topbar">
    <RouterLink class="brand" :to="{name:'home'}"><span class="brand-mark"><AppIcon name="court" /></span><span><span class="brand-title">羽毛球预约工作台</span><small>YUMAO WORKSPACE</small></span></RouterLink>
    <p v-if="sessionStore?.user" class="nav-caption">工作空间</p>
-   <nav aria-label="主导航" :class="{'admin-nav':sessionStore?.user?.role==='admin'}">
+   <nav ref="navElement" aria-label="主导航" :class="{'admin-nav':sessionStore?.user?.role==='admin'}">
     <RouterLink v-if="sessionStore?.user" :to="{name:'home'}"><AppIcon name="home" />首页</RouterLink>
     <RouterLink v-if="sessionStore?.user" :to="{name:'credentials'}"><AppIcon name="shield" />预约凭据</RouterLink>
     <RouterLink v-if="sessionStore?.user" :to="{name:'plans'}"><AppIcon name="clock" />预约计划</RouterLink>

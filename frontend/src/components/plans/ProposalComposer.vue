@@ -149,7 +149,7 @@ function submit() {
           </div>
         </details>
         <p v-if="blocked" class="composer-hint is-blocked">先完成预约凭据验证和支付密码设置，再发送需求。</p>
-        <p v-else class="composer-hint">{{ mode === 'edit' ? '只描述需要修改的内容；其他字段会保留 · Enter 发送，Shift+Enter 换行' : '先选队列类型，再确认日期；2小时和1小时的时段、场地分开核对 · Enter 发送，Shift+Enter 换行' }}</p>
+        <details v-else class="proposal-input-help"><summary>输入说明</summary><p class="composer-hint">{{ mode === 'edit' ? '只描述需要修改的内容；其他字段会保留 · Enter 发送，Shift+Enter 换行' : '先选队列类型，再确认日期；2小时和1小时的时段、场地分开核对 · Enter 发送，Shift+Enter 换行' }}</p></details>
       </div>
     </form>
   </section>
@@ -168,7 +168,10 @@ function submit() {
 .proposal-input-box textarea:disabled { color: var(--muted); cursor: not-allowed; }
 .proposal-input-box textarea::placeholder { color: var(--muted); opacity: 1; }
 .proposal-send-button { flex: none; min-width: 72px; min-height:var(--control-height); padding:8px 16px; }
-.proposal-compose-meta { display:grid; gap:4px; }
+.proposal-compose-meta { display:flex; align-items:flex-start; flex-wrap:wrap; gap:4px 12px; }
+.proposal-input-help { min-width:0; }
+.proposal-input-help > summary { display:flex; align-items:center; min-height:44px; color:var(--muted); font-size:13px; cursor:pointer; }
+.proposal-input-help[open], .proposal-field-shortcuts[open], .composer-hint.is-blocked { flex-basis:100%; }
 .composer-hint { margin:0; color: var(--muted); font-size: 13px; line-height: 1.45; }
 .composer-hint.is-blocked { color: var(--warning); font-weight: 600; }
 .proposal-field-shortcuts { min-width:0; }
@@ -178,7 +181,7 @@ function submit() {
 .proposal-field-shortcuts[open] > summary { background: var(--brand-soft); }
 .proposal-field-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; width:100%; max-width:720px; padding:12px; border:1px solid var(--line); border-radius:14px; background:var(--page); }
 .proposal-field-options label { display:grid; gap:4px; min-width:0; color:var(--muted); font-size:12px; }
-.proposal-field-options input, .proposal-field-options select { min-width:0; min-height:40px; padding:6px 10px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); font:inherit; font-size:13px; }
+.proposal-field-options input, .proposal-field-options select { min-width:0; min-height:44px; padding:6px 10px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); font:inherit; font-size:13px; }
 .edit-field-options { display:flex; flex-wrap:wrap; }
 .edit-field-options button { min-height:var(--control-height); padding:8px 12px; border:1px solid var(--line); border-radius:999px; background:var(--surface); color:var(--ink); font-size:13px; cursor:pointer; }
 .proposal-field-options button:hover:not(:disabled) { border-color: var(--brand); background: var(--brand-soft); }
@@ -186,7 +189,7 @@ function submit() {
 .proposal-composer :deep(button:focus-visible), .proposal-composer :deep(summary:focus-visible) { outline: 3px solid var(--brand); outline-offset: 2px; }
 @media (max-width: 600px) {
   .proposal-composer { padding:8px; }
-  .proposal-compose-meta { align-items: flex-start; flex-direction: column; }
+  .proposal-compose-meta { gap:4px 12px; }
   .proposal-input-box textarea { font-size: 16px; }
   .proposal-field-options { grid-template-columns:1fr; }
 }

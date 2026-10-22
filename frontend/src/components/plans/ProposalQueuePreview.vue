@@ -61,12 +61,14 @@ function candidates(minutes) {
 <style scoped>
 .queue-preview { min-width: 0; }
 .queue-preview-details { border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
-.queue-preview-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 64px; padding: 8px 16px; cursor: pointer; list-style: none; }
+.queue-preview-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 56px; padding: 8px 12px; cursor: pointer; list-style: none; }
 .queue-preview-details > summary::-webkit-details-marker { display: none; }
+.queue-preview-details > summary::after { content:""; flex:none; width:7px; height:7px; border-right:1.5px solid var(--muted); border-bottom:1.5px solid var(--muted); transform:rotate(45deg); margin:0 2px 4px 0; }
+.queue-preview-details[open] > summary::after { transform:rotate(225deg); margin-top:5px; }
 .queue-preview-details > summary > span:first-child { min-width: 0; }
 .queue-preview-details strong, .queue-preview-details small { display: block; }
 .queue-preview-details small { margin-top: 4px; color: var(--muted); font-size: 12px; }
-.queue-preview-count { flex: none; color: var(--brand); font-size: 12px; font-weight: 650; }
+.queue-preview-count { margin-left:auto; flex: none; color: var(--brand); font-size: 12px; font-weight: 650; }
 .queue-preview-content { display: grid; gap: 8px; padding: 0 8px 8px; }
 .queue-preview-group { min-width: 0; padding: 8px; border-radius: 12px; background: var(--page); }
 .queue-preview-group header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -83,5 +85,5 @@ function candidates(minutes) {
 .queue-preview-note { margin: 0; padding: 0 8px 8px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .queue-preview :deep(summary:focus-visible) { outline: 3px solid var(--brand); outline-offset: 2px; }
 @media(max-width:1024px){.queue-preview-details{background:var(--brand-soft)}.queue-preview-details>summary{min-height:56px}.queue-preview-count{padding:4px 8px;border-radius:999px;background:var(--surface)}}
-@media(max-width:420px){.queue-preview-details>summary{align-items:flex-start;flex-direction:column}.queue-preview-count{align-self:flex-start}.queue-candidate-list li{align-items:flex-start;flex-direction:column}}
+@media(max-width:420px){.queue-preview-details>summary{padding:6px 10px}.queue-preview-details strong{font-size:14px}.queue-preview-count{padding:4px 6px}.queue-candidate-list li{align-items:flex-start;flex-direction:column}}
 </style>

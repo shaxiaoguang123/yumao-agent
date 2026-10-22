@@ -98,7 +98,8 @@ function formatHistoryDate(value) {
         <div><h2 id="proposal-chat-title">预约助手</h2><p>{{ assistantSubtitle }}</p></div>
       </div>
       <div class="chat-header-actions">
-        <slot name="header-actions" />
+        <div v-if="$slots['header-actions']" class="chat-credential-toolbar"><slot name="header-actions" /></div>
+        <div class="chat-conversation-actions">
         <RouterLink class="proposal-settings" :to="{ name: 'ai-models' }" aria-label="模型设置" title="模型设置"><AppIcon name="settings" /></RouterLink>
         <button v-if="showConversationHistory" class="chat-new-button" data-testid="restart-conversation" type="button" :disabled="interactionDisabled" @click="emit('new-conversation')"><AppIcon name="plus" />新对话</button>
         <button v-else class="chat-restart-button" data-testid="restart-conversation" type="button" aria-label="重新开始对话" title="重新开始对话" @click="emit('restart')"><slot name="restart-icon"><AppIcon name="refresh" /></slot></button>
@@ -115,6 +116,7 @@ function formatHistoryDate(value) {
             </button>
           </div>
         </details>
+        </div>
       </div>
     </header>
     <div v-if="showCredentialStatus && $slots['system-message']" class="chat-status-bar"><slot name="system-message" /></div>
@@ -132,13 +134,13 @@ function formatHistoryDate(value) {
             <li v-for="item in transcript" :key="item.id" class="chat-row" :class="[`is-${item.role}`, { 'is-welcome': item.kind === 'welcome' }]">
               <div class="chat-bubble" :class="`bubble-${item.kind}`">
                 <template v-if="item.kind === 'welcome'">
-                  <strong>{{ welcomeTitle }}</strong><p>{{ welcomeDescription }}</p>
-                  <p class="chat-example">{{ welcomeExample }}</p><p>{{ welcomeFooter }}</p>
+                  <strong>{{ welcomeTitle }}</strong>
                   <div v-if="modeChoices.length" class="mode-quick-choices" aria-label="选择预约队列类型">
                     <button v-for="choice in modeChoices" :key="choice.value" type="button" :disabled="interactionDisabled" @click="emit('quick-reply', choice.value)">
                       <strong>{{ choice.label }}</strong><small>{{ choice.description }}</small>
                     </button>
                   </div>
+                  <details class="chat-welcome-help"><summary>示例与说明</summary><p>{{ welcomeDescription }}</p><p class="chat-example">{{ welcomeExample }}</p><p>{{ welcomeFooter }}</p></details>
                 </template>
                 <template v-else-if="item.kind === 'questions'">
                   <strong v-if="item.heading">{{ item.heading }}</strong>
@@ -170,7 +172,7 @@ function formatHistoryDate(value) {
         </details>
         <slot name="composer" />
       </div>
-      <slot name="queue-preview" />
+      <div v-if="$slots['queue-preview']" class="proposal-chat-preview"><slot name="queue-preview" /></div>
     </div>
   </section>
 </template>
@@ -184,6 +186,8 @@ function formatHistoryDate(value) {
 .proposal-chat-heading h2 { margin:0; font-size:17px; font-weight:650; }
 .proposal-chat-heading p { margin:4px 0 0; color:var(--muted); font-size:13px; line-height:1.4; }
 .chat-header-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; min-width:0; }
+.chat-credential-toolbar { min-width:0; }
+.chat-conversation-actions { display:flex; align-items:center; gap:6px; }
 .proposal-settings, .chat-restart-button, .chat-new-button, .conversation-history > summary { flex:none; min-height:44px; display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:0 12px; border:1px solid var(--line); border-radius:999px; background:var(--surface); color:var(--muted); font:inherit; font-size:13px; text-decoration:none; }
 .proposal-settings, .chat-restart-button { width:44px; padding:0; }
 .chat-new-button { color:var(--brand); cursor:pointer; }
@@ -216,6 +220,7 @@ function formatHistoryDate(value) {
 .slot-strip .is-off { opacity:.65; }
 .proposal-chat-body { display:grid; grid-template-columns:minmax(0, 1fr); gap:16px; align-items:start; min-width:0; padding:16px; }
 .proposal-chat.has-queue-preview .proposal-chat-body { grid-template-columns:minmax(0, 1fr) minmax(240px, 300px); }
+.proposal-chat-preview { min-width:0; }
 .proposal-chat-main { display:flex; flex-direction:column; min-width:0; }
 .proposal-chat-messages { display:flex; min-width:0; min-height:320px; max-height:clamp(320px, 58vh, 620px); overflow-y:auto; overscroll-behavior:contain; padding:16px; border-radius:16px; background:var(--page); }
 .chat-conversation-group { width:100%; max-width:820px; margin:0 auto; }
@@ -228,6 +233,8 @@ function formatHistoryDate(value) {
 .bubble-welcome { max-width:none; padding:4px 0; background:transparent; box-shadow:none; }
 .chat-bubble strong { display:block; font-size:16px; font-weight:650; }
 .chat-bubble p { margin:7px 0 0; color:var(--muted); font-size:14px; }
+.chat-welcome-help { margin-top:8px; }
+.chat-welcome-help > summary { display:flex; align-items:center; min-height:44px; color:var(--brand); cursor:pointer; font-size:13px; }
 .chat-example { padding:8px 10px; border-radius:10px; background:var(--surface); color:var(--ink)!important; font-size:13px!important; }
 .contextual-reply { color:var(--ink)!important; }
 .mode-quick-choices { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; margin-top:12px; }
@@ -262,17 +269,35 @@ function formatHistoryDate(value) {
 @media (max-width:1024px) {
   .proposal-chat.has-queue-preview .proposal-chat-body { grid-template-columns:minmax(0, 1fr); }
   .proposal-chat-messages { min-height:260px; max-height:52vh; }
-  .queue-preview { order:-1; }
+  .proposal-chat-preview { order:-1; }
 }
 @media (max-width:600px) {
-  .proposal-chat-heading { align-items:flex-start; flex-wrap:wrap; }
-  .chat-header-actions { width:100%; justify-content:flex-end; }
+  .proposal-chat-heading { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px 8px; padding:8px 12px; }
+  .proposal-chat-identity { gap:8px; }
+  .proposal-chat-avatar { width:28px; height:28px; border-radius:9px; }
+  .proposal-chat-heading h2 { font-size:16px; }
+  .proposal-chat-heading p { display:none; }
+  .chat-header-actions { display:contents; }
+  .chat-conversation-actions { grid-column:2; grid-row:1; gap:4px; }
+  .chat-credential-toolbar { grid-column:1/-1; grid-row:2; }
+  .chat-credential-toolbar :deep(.plan-credential-control) { width:100%; justify-content:space-between; }
+  .chat-new-button, .conversation-history > summary { padding:0 8px; font-size:12px; }
+  .conversation-history-menu { position:fixed; left:12px; right:12px; top:auto; bottom:12px; width:auto; max-height:50dvh; }
   .proposal-chat-body { gap:10px; padding:10px; }
-  .proposal-chat-messages { min-height:240px; padding:12px; }
+  .proposal-chat-messages { min-height:180px; max-height:clamp(180px,32dvh,280px); padding:12px; }
   .chat-bubble { max-width:100%; }
-  .mode-quick-choices { grid-template-columns:1fr; }
+  .mode-quick-choices { grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; margin-top:8px; }
+  .mode-quick-choices button { min-height:60px; padding:6px; }
+  .mode-quick-choices button small { font-size:12px; }
   .trace-item { grid-template-columns:20px minmax(0, 1fr); }
   .trace-item time { grid-column:2; }
+}
+@media (max-width:380px) {
+  .proposal-chat-avatar { display:none; }
+  .proposal-chat-heading { padding:4px 8px; }
+  .proposal-chat-body { padding:8px; gap:8px; }
+  .proposal-chat-messages { min-height:156px; padding:8px; }
+  .chat-status-bar :deep(.agent-credential-gate.is-ready) { padding:6px 0; }
 }
 @media (prefers-reduced-motion: reduce) { .chat-thinking-dot { animation:none; } }
 </style>

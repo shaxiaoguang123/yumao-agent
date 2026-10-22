@@ -52,6 +52,17 @@ describe('activity metrics', () => {
     expect(wrapper.text()).toContain('123 ms');
   });
 
+  it('uses matching title rows for the two system trend charts', async () => {
+    const { wrapper } = await setup({ system: true, role: 'admin' });
+    const plots = wrapper.findAll('.activity-charts .activity-plot');
+    expect(plots).toHaveLength(2);
+    expect(plots.map(plot => plot.get('.runtime-heading h3').text())).toEqual([
+      '近七天执行结果',
+      '近七天异常趋势',
+    ]);
+    expect(plots.every(plot => plot.get('.plot-description').exists())).toBe(true);
+  });
+
   it('keeps business metrics visible when diagnostic collection is unavailable', async () => {
     const data = metricsFixture('system'); data.diagnostics = { available: false };
     const { wrapper } = await setup({ system: true, role: 'admin', response: data });

@@ -61,9 +61,9 @@ export async function runRedesign(qa) {
   await ctx.page.getByTestId('plan-tab-manual').click();await layout(ctx);
   await ctx.page.getByTestId('plan-tab-agent').click();
   await ctx.page.getByRole('heading',{name:'预约助手',exact:true}).waitFor();
-  const preview=ctx.page.locator('.queue-preview');
+  const preview=ctx.page.locator('.proposal-chat .queue-preview');
   await preview.getByText('队列预览',{exact:true}).waitFor();
-  const previewGeometry=await ctx.page.evaluate(()=>{const preview=document.querySelector('.queue-preview')?.getBoundingClientRect();const messages=document.querySelector('.proposal-chat-messages')?.getBoundingClientRect();return preview&&messages?{preview:{top:preview.top,left:preview.left,right:preview.right,width:preview.width},messages:{top:messages.top,left:messages.left,right:messages.right,width:messages.width},viewport:document.documentElement.clientWidth}:null;});
+  const previewGeometry=await ctx.page.evaluate(()=>{const preview=document.querySelector('.proposal-chat .queue-preview')?.getBoundingClientRect();const messages=document.querySelector('.proposal-chat-messages')?.getBoundingClientRect();return preview&&messages?{preview:{top:preview.top,left:preview.left,right:preview.right,width:preview.width},messages:{top:messages.top,left:messages.left,right:messages.right,width:messages.width},viewport:document.documentElement.clientWidth}:null;});
   check(ctx.name,'Agent queue preview remains visible without horizontal squeeze',Boolean(previewGeometry)&&previewGeometry.preview.left>=0&&previewGeometry.preview.right<=previewGeometry.viewport+1&&(viewport.width>1024||previewGeometry.preview.top<=previewGeometry.messages.top),{previewGeometry});
   await layout(ctx);await screenshot(ctx,`${ctx.name}-plans-agent`);
   await ctx.page.getByTestId('plan-tab-current').click();

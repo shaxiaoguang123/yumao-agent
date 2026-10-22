@@ -70,5 +70,9 @@ function onSaved(value) { started.value = false; emit('saved', value); }
 
 <style scoped>
 .proposal-mode-workspace { display:grid; gap:12px; min-width:0; }
+@media(max-width:600px) {
+  .proposal-mode-workspace { gap:0; border:1px solid var(--line); border-radius:16px; background:var(--surface); }
+  .proposal-mode-workspace :deep(.proposal-chat) { border:0; border-radius:0 0 16px 16px; }
+}
 .mode-unavailable { margin:0; padding:12px 16px; border-radius:12px; background:var(--warning-soft); color:var(--warning); }
 </style>

@@ -56,6 +56,74 @@ describe('AI models settings',()=>{
   expect(api.create).toHaveBeenCalledWith({name:'New provider',base_url:'https://new.test/v1',model:'new-chat',auth_mode:'bearer',api_key:'do-not-echo-this'});expect(wrapper.text()).not.toContain('do-not-echo-this');
   await wrapper.findAll('button').find(button=>button.text()==='编辑').trigger('click');expect(wrapper.get('[name="api_key"]').element.value).toBe('');expect(wrapper.text()).toContain('API Key 已配置（不会显示密钥）');
  });
+ it('opens an edit form inside the matching model row and keeps add form beside its entry point',async()=>{
+  const second={...model,id:'model-2',name:'Second model',model:'second-chat'};
+  const {wrapper}=await mountPanel(fixture({list:vi.fn(async()=>({models:[model,second],service_default:null,selected_model_id:'model-1',default_model_id:null,effective_model_id:'model-1'}))}));
+  const row=wrapper.findAll('.model-row').find(item=>item.text().includes('Second model'));
+  await row.findAll('button').find(button=>button.text()==='编辑').trigger('click');
+  expect(row.find('form[aria-label="AI模型配置"]').exists()).toBe(true);
+  expect(wrapper.findAll('.model-row').filter(item=>item.find('form[aria-label="AI模型配置"]').exists())).toHaveLength(1);
+  expect(row.findAll('button').find(button=>button.text()==='删除').element.disabled).toBe(true);
+  const workRow=wrapper.findAll('.model-row').find(item=>item.text().includes('Work model'));
+  expect(workRow.findAll('button').find(button=>button.text()==='删除').element.disabled).toBe(true);
+  await wrapper.get('form[aria-label="AI模型配置"]').findAll('button').find(button=>button.text()==='取消').trigger('click');
+  expect(row.findAll('button').find(button=>button.text()==='删除').element.disabled).toBe(false);
+  expect(workRow.findAll('button').find(button=>button.text()==='删除').element.disabled).toBe(false);
+  await wrapper.get('.add-model').trigger('click');
+  expect(wrapper.get('form[aria-label="AI模型配置"]').exists()).toBe(true);
+  expect(wrapper.get('.add-model').element.nextElementSibling?.getAttribute('aria-label')).toBe('AI模型配置');
+ });
+ it('requires canceling an edit before refreshing a changed model list',async()=>{
+  const list=vi.fn()
+   .mockResolvedValueOnce({models:[model],service_default:null,selected_model_id:'model-1',default_model_id:null,effective_model_id:'model-1'})
+   .mockResolvedValueOnce({models:[],service_default:null,selected_model_id:null,default_model_id:null,effective_model_id:null});
+  const {wrapper,api}=await mountPanel(fixture({list}));
+  await wrapper.findAll('button').find(button=>button.text()==='编辑').trigger('click');
+  expect(wrapper.get('.model-refresh').element.disabled).toBe(true);
+  await wrapper.get('[aria-label="重新读取模型配置"]').trigger('click');await flushPromises();
+  expect(api.list).toHaveBeenCalledTimes(1);
+  expect(wrapper.get('form[aria-label="AI模型配置"]').exists()).toBe(true);
+  await wrapper.get('form[aria-label="AI模型配置"]').findAll('button').find(button=>button.text()==='取消').trigger('click');
+  await wrapper.get('[aria-label="重新读取模型配置"]').trigger('click');await flushPromises();
+  expect(api.list).toHaveBeenCalledTimes(2);
+  expect(wrapper.find('.model-row:not(.service-model)').exists()).toBe(false);
+  expect(wrapper.get('.add-model').element.disabled).toBe(false);
+ });
+ it('prevents list reload and other mutations from discarding an edit draft',async()=>{
+  const second={...model,id:'model-2',name:'Second model',model:'second-chat'};
+  const api=fixture({list:vi.fn(async()=>({models:[model,second],service_default:null,selected_model_id:'model-1',default_model_id:null,effective_model_id:'model-1'}))});
+  const {wrapper}=await mountPanel(api);
+  const row=wrapper.findAll('.model-row').find(item=>item.text().includes('Second model'));
+  await row.findAll('button').find(button=>button.text()==='编辑').trigger('click');
+  await wrapper.get('[name="name"]').setValue('Draft name');
+  await wrapper.get('[name="api_key"]').setValue('temporary-edit-key');
+  api.list.mockClear();
+  expect(wrapper.get('.model-refresh').element.disabled).toBe(true);
+  expect(wrapper.get('.preference-save').element.disabled).toBe(true);
+  expect(wrapper.findAll('.model-row .danger-button').every(button=>button.element.disabled)).toBe(true);
+  await wrapper.get('.model-refresh').trigger('click');
+  await wrapper.get('.preference-save').trigger('click');
+  for(const button of wrapper.findAll('.model-row .danger-button')) await button.trigger('click');
+  expect(api.list).not.toHaveBeenCalled();
+  expect(api.preferences).not.toHaveBeenCalled();
+  expect(api.remove).not.toHaveBeenCalled();
+  expect(wrapper.get('[name="name"]').element.value).toBe('Draft name');
+  expect(wrapper.get('[name="api_key"]').element.value).toBe('temporary-edit-key');
+  await wrapper.get('form[aria-label="AI模型配置"]').findAll('button').find(button=>button.text()==='取消').trigger('click');
+  expect(wrapper.get('.model-refresh').element.disabled).toBe(false);
+  expect(wrapper.get('.preference-save').element.disabled).toBe(false);
+  expect(wrapper.findAll('.model-row .danger-button').every(button=>!button.element.disabled)).toBe(true);
+ });
+ it('disables model editing while a refresh is loading',async()=>{
+  let resolveList;const api=fixture();const {wrapper}=await mountPanel(api);
+  api.list.mockImplementationOnce(()=>new Promise(resolve=>{resolveList=resolve;}));
+  await wrapper.get('.model-refresh').trigger('click');
+  const row=wrapper.findAll('.model-row').find(item=>item.text().includes('Work model'));
+  expect(row.findAll('button').find(button=>button.text()==='编辑').element.disabled).toBe(true);
+  resolveList({models:[model],service_default:{...model,id:'service_default'},selected_model_id:'model-1',default_model_id:null,effective_model_id:'model-1'});
+  await flushPromises();
+  expect(row.findAll('button').find(button=>button.text()==='编辑').element.disabled).toBe(false);
+ });
  it('updates preferences, tests safely, and sends base version on deletion',async()=>{
   const {wrapper,api}=await mountPanel();await wrapper.get('[name="selected_model_id"]').setValue('service_default');await wrapper.get('[name="default_model_id"]').setValue('model-1');await wrapper.get('.preference-save').trigger('click');await flushPromises();expect(api.preferences).toHaveBeenCalledWith('service_default','model-1');
   await wrapper.findAll('button').find(button=>button.text()==='测试连接').trigger('click');await flushPromises();expect(wrapper.text()).toContain('模型连接成功');
@@ -99,6 +167,13 @@ describe('AI models settings',()=>{
  });
  it('only calls parsing on explicit click and renders needs-input results',async()=>{
   const api=fixture({testParsing:vi.fn(async()=>({ok:false,outcome:'needs_input',questions:['请补充场地'],proposal:null}))});const {wrapper}=await mountPanel(api);expect(api.testParsing).not.toHaveBeenCalled();await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(api.testParsing).toHaveBeenCalledWith('model-1');expect(wrapper.text()).toContain('多轮整理没有生成完整的候选预览');expect(wrapper.text()).toContain('请补充场地');
+ });
+ it('shows the parsing progress on the service-default model action',async()=>{
+  let resolveParsing;const api=fixture({testParsing:vi.fn(()=>new Promise(resolve=>{resolveParsing=resolve;}))});const {wrapper}=await mountPanel(api);
+  const button=wrapper.get('.service-model').findAll('button').find(item=>item.text()==='测试计划解析能力');
+  await button.trigger('click');
+  expect(wrapper.get('.service-model').text()).toContain('正在解析…');
+  resolveParsing({ok:false,outcome:'needs_input',questions:[],proposal:null});await flushPromises();
  });
  it('explains when the model fails the queue-type short-choice test',async()=>{
   const api=fixture({testParsing:vi.fn(async()=>({ok:false,outcome:'short_choice_failed',question_check:{short_choice:false,mode_choices:false,answered:false,context_used:false,step_preserved:false,queue_ready:false,reviewed:false}}))});const {wrapper}=await mountPanel(api);await wrapper.get('[data-testid="test-model-parsing"]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('没有正确询问或识别 1/A、2/B、3/C');

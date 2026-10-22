@@ -1,16 +1,22 @@
 <script setup>
-import { nextTick, useTemplateRef, watch } from 'vue';
+import { nextTick, onMounted, onUnmounted, useTemplateRef, watch } from 'vue';
 import AppIcon from '../AppIcon.vue';
 const props=defineProps({modelValue:{type:String,default:'query'},planCount:{type:Number,default:0}});
 const emit=defineEmits(['update:modelValue']);
 const nav=useTemplateRef('nav');
 const tabs=[{id:'query',label:'查询场地',icon:'search'},{id:'manual',label:'选择预约',icon:'court'},{id:'agent',label:'Agent 预约',icon:'bot'},{id:'current',label:'抢票计划',icon:'list'},{id:'orders',label:'查询订单',icon:'ticket'}];
-watch(()=>props.modelValue,async()=>{
- await nextTick();
- if(nav.value&&nav.value.scrollWidth>nav.value.clientWidth){
-  nav.value.querySelector('[aria-selected="true"]')?.scrollIntoView?.({block:'nearest',inline:'nearest'});
+function revealActiveTab(){
+ const element=nav.value;
+ const active=element?.querySelector('[aria-selected="true"]');
+ if(element&&active&&element.scrollWidth>element.clientWidth){
+  const navRect=element.getBoundingClientRect();
+  const activeRect=active.getBoundingClientRect();
+  element.scrollLeft+=activeRect.left-navRect.left-(element.clientWidth-active.offsetWidth)/2;
  }
-},{immediate:true,flush:'post'});
+}
+watch(()=>props.modelValue,async()=>{await nextTick();revealActiveTab()},{immediate:true,flush:'post'});
+onMounted(()=>window.addEventListener('resize',revealActiveTab));
+onUnmounted(()=>window.removeEventListener('resize',revealActiveTab));
 async function navigate(event,index){
  let next=index;
  if(event.key==='ArrowRight')next=(index+1)%tabs.length;

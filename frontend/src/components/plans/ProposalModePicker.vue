@@ -43,5 +43,12 @@ const choices = [
 .proposal-mode-card strong, .proposal-mode-card small { display: block; }
 .proposal-mode-card strong { font-size: 15px; font-weight: 600; line-height: 1.35; }
 .proposal-mode-card small { margin-top:8px; color: var(--muted); font-size: 13px; line-height: 1.4; }
-@media (max-width: 560px) { .proposal-mode-picker { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width:600px) {
+  .proposal-mode-picker { margin:8px; gap:4px; padding:4px; border-radius:12px; background:var(--page); }
+  .proposal-mode-card { min-height:44px; align-items:center; justify-content:center; gap:6px; padding:6px; border-color:transparent; background:transparent; }
+  .proposal-mode-card.is-selected { background:var(--surface); border-color:var(--line); }
+  .proposal-mode-card > .app-icon { width:16px; height:16px; margin:0; }
+  .proposal-mode-card strong { font-size:13px; }
+  .proposal-mode-card small { display:none; }
+}
 </style>
