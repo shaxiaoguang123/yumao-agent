@@ -61,7 +61,7 @@ describe('queue assistant: asking',()=>{
   const workflowTrace=[
    {stage:'准备上下文',detail:'已加载3轮用户消息、2轮助手校验记录。'},
    {stage:'模型理解',detail:'已按结构化协议解释本轮意图。模型：deepseek-flash。'},
-   {stage:'应用更新并校验',detail:'有效候选 4/32；当前阻塞 2小时场地。'},
+   {stage:'应用更新并校验',detail:'有效候选 4；当前阻塞 2小时场地。'},
    {stage:'追问',detail:'等待用户补充courts_2h。'},
   ];
   const result=ask('请问两小时时段要选哪些场地？',{asking:'courts_2h',heading:'2小时场地',workflow_trace:workflowTrace});
@@ -70,7 +70,7 @@ describe('queue assistant: asking',()=>{
   const trace=wrapper.findAll('.proposal-trace-list .trace-item').map(item=>item.text());
   expect(trace.some(item=>item.includes('准备上下文')&&item.includes('3轮用户消息'))).toBe(true);
   expect(trace.some(item=>item.includes('模型理解')&&item.includes('deepseek-flash'))).toBe(true);
-  expect(trace.some(item=>item.includes('应用更新并校验')&&item.includes('4/32'))).toBe(true);
+  expect(trace.some(item=>item.includes('应用更新并校验')&&item.includes('有效候选 4'))).toBe(true);
   expect(trace.some(item=>item.includes('追问')&&item.includes('courts_2h'))).toBe(true);
  });
 

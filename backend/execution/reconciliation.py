@@ -86,15 +86,17 @@ def _checked_response(envelope: object, *, target_date: str, timezone_name: str,
     return result
 
 
-def _conflicts(result: dict, court_count: int, row_count: int) -> set[tuple[int, int]]:
+def _conflicts(result: dict, *, ignore_preopening_unbookable: bool) -> set[tuple[int, int]]:
     conflicts = set()
     for raw in result["conflictList"]:
         parts = raw.split("-")
+        if ignore_preopening_unbookable and len(parts) == 3 and parts[2] == "7":
+            continue
         conflicts.add((int(parts[0]), int(parts[1])))
     return conflicts
 
 
-def _match_cells(intent: dict, result: dict) -> str | None:
+def _match_cells(intent: dict, result: dict, *, ignore_preopening_unbookable: bool = False) -> str | None:
     candidates = intent
     court_list = result["nodeList"]
     time_list = result["timeList"]
@@ -113,7 +115,10 @@ def _match_cells(intent: dict, result: dict) -> str | None:
     row_index = row_matches[0]
     row_count = candidates["duration_minutes"] // 60
     court_index = court_matches[0]
-    conflicts = _conflicts(result, len(court_list), len(time_list))
+    conflicts = _conflicts(
+        result,
+        ignore_preopening_unbookable=ignore_preopening_unbookable,
+    )
     for offset in range(row_count):
         index = row_index + offset
         if index >= len(time_list):
@@ -157,7 +162,11 @@ def reconcile_queue(candidates: list[dict], responses_by_scope: dict[str, dict],
                     envelope, target_date=target_date, timezone_name=timezone_name,
                     scope_label=scope, captured_at_utc_ms=captured_at,
                 )
-            reason = _match_cells(candidate, validated[scope])
+            reason = _match_cells(
+                candidate,
+                validated[scope],
+                ignore_preopening_unbookable=True,
+            )
         if reason is None:
             retained.append(candidate)
         else:

@@ -31,8 +31,8 @@ describe('Credential API helpers', () => {
     await api.update('credential-a', { expected_credential_version: 3, enabled: false });
     await api.update('credential-a', { expected_credential_version: 4, enabled: true });
     await api.remove('credential-a', 4);
-    await api.executionSettings('credential-a');
-    await api.updateExecutionSettings('credential-a', 0, { reconciliation_time: '00:30' });
+    await api.executionSettings();
+    await api.updateExecutionSettings(0, { reconciliation_time: '00:30' });
 
     expect(client.request.mock.calls).toEqual([
       ['/api/credentials'],
@@ -65,8 +65,8 @@ describe('Credential API helpers', () => {
         method: 'DELETE',
         body: { expected_credential_version: 4 },
       }],
-      ['/api/booking-execution/credentials/credential-a/settings'],
-      ['/api/booking-execution/credentials/credential-a/settings', {
+      ['/api/booking-execution/settings'],
+      ['/api/booking-execution/settings', {
         method: 'PUT',
         body: { expected_version: 0, settings: { reconciliation_time: '00:30' } },
       }],

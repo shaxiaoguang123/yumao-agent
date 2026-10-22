@@ -188,12 +188,12 @@ class BookingQueueConversationTests(unittest.TestCase):
         self.assertEqual((state.phase, state.escalation), (Phase.ESCALATED, "stalled"))
         self.assertEqual(built["overlap_2h"].status, SlotStatus.AMBIGUOUS)
 
-    def test_candidate_limit_is_enforced(self):
+    def test_large_valid_candidate_queue_is_accepted(self):
         text = "只要2小时 后天 9-11、11-13、13-15、15-17、17-19、19-21 1到10号场"
         state, built, draft = run([text])
-        self.assertEqual(state.asking, "courts_2h")
-        self.assertEqual(built["courts_2h"].status, SlotStatus.INVALID)
-        self.assertIn("最多 32 项", built["courts_2h"].detail)
+        self.assertEqual(state.phase, Phase.READY)
+        self.assertEqual(built["courts_2h"].status, SlotStatus.PROPOSED)
+        self.assertEqual(len(build_entries(draft)), 60)
 
 
 class ReplayInvariants(unittest.TestCase):
@@ -223,7 +223,6 @@ class ReplayInvariants(unittest.TestCase):
                 self.assertIn(state.escalation, {"stalled", "turn_limit"})
             if state.phase is Phase.READY:
                 self.assertTrue(build_entries(draft))
-                self.assertLessEqual(len(build_entries(draft)), 32)
 
     def test_no_open_field_is_skipped(self):
         rng = random.Random(31)

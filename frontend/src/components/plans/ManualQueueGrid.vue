@@ -4,7 +4,7 @@ import { candidateKey } from '../../composables/useManualQueue.js';
 const props=defineProps({courtNames:{type:Array,default:()=>[]},entries:{type:Array,default:()=>[]},duration:{type:Number,default:120},scopeLabel:{type:String,default:''},disabled:Boolean});
 const emit=defineEmits(['change']);
 const fromHour=9,untilHour=22,error=ref('');
-const courts=computed(()=>[...new Set([...props.courtNames,...props.entries.map(e=>e.court_preference)].filter(v=>typeof v==='string'&&v.trim()).map(v=>v.trim()))].slice(0,32));
+const courts=computed(()=>[...new Set([...props.courtNames,...props.entries.map(e=>e.court_preference)].filter(v=>typeof v==='string'&&v.trim()).map(v=>v.trim()))]);
 const rows=computed(()=>Array.from({length:Math.max(0,untilHour-fromHour)},(_,index)=>({start:fromHour+index,end:fromHour+index+1})));
 const clock=hour=>`${String(hour).padStart(2,'0')}:00`;
 function selected(row,court){return props.entries.some(e=>e.duration_minutes===props.duration&&e.scope_label===props.scopeLabel&&e.court_preference===court&&Number(e.start_time.slice(0,2))<=row.start&&Number(e.end_time.slice(0,2))>=row.end);}
@@ -14,7 +14,6 @@ function toggle(row,court){
  const existing=props.entries.find(e=>candidateKey(e)===candidateKey(entry))||props.entries.find(e=>e.duration_minutes===props.duration&&e.scope_label===props.scopeLabel&&e.court_preference===court&&e.start_time<=entry.start_time&&e.end_time>entry.start_time);
  if(existing){emit('change',props.entries.filter(e=>e!==existing));return;}
  if(row.start+props.duration/60>untilHour||row.start+props.duration/60>24){error.value='两小时候选必须完整覆盖两个连续小时，请选择更早的开始格。';return;}
- if(props.entries.length>=32){error.value='候选最多 32 项，请先移除不需要的候选。';return;}
  emit('change',[...props.entries,entry]);
 }
 </script>

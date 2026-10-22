@@ -24,7 +24,7 @@ from backend.plans.service import PlanService
 _MAX_ROUNDS = 3
 _PAID_STATUSES = {"1", "4", "8"}
 _VERIFY_ATTEMPTS = 15
-_VERIFY_INTERVAL_MS = 3000
+_RESERVATION_COUNT = "5"
 
 
 class BookingExecutionEngine:
@@ -299,27 +299,6 @@ class BookingExecutionEngine:
         )
         return {item["label"]: item for item in categories}
 
-    def _children_count(self, run_id: str, material: BookingCredentialMaterial,
-                        node_id: str, settings: dict, round_number: int,
-                        candidate_index: int) -> str:
-        self.credentials.assert_booking_snapshot(material)
-        self._delay(settings, "get_children_delay_ms")
-        try:
-            reply = self.protocol.get_children(material.token, node_id)
-            success = reply.envelope.get("success") is True
-            self.repository.record_stage(
-                run_id, self._reply_event("get_children", reply, round_number=round_number,
-                                          candidate_index=candidate_index),
-            )
-            result = reply.envelope.get("resultData")
-            return str(result.get("childrennum") or "1") if success and type(result) is dict else "1"
-        except UpstreamCallError as exc:
-            self.repository.record_stage(
-                run_id, self._error_event("get_children", exc, round_number=round_number,
-                                          candidate_index=candidate_index),
-            )
-            return "1"  # Matches the prior Python flow's fallback.
-
     def _payment_verified(self, run_id: str, material: BookingCredentialMaterial,
                           order_no: str, settings: dict, round_number: int,
                           candidate_index: int) -> tuple[bool, str]:
@@ -327,6 +306,7 @@ class BookingExecutionEngine:
         monotonic_start = self._monotonic()
         result = "payment_unverified"
         self._delay(settings, "payment_verify_delay_ms")
+        verify_interval_ms = int(settings.get("payment_verify_interval_ms", 3000))
         for attempt in range(_VERIFY_ATTEMPTS):
             self.credentials.assert_booking_snapshot(material)
             try:
@@ -334,7 +314,7 @@ class BookingExecutionEngine:
             except UpstreamCallError as exc:
                 result = exc.safe_code
                 if attempt + 1 < _VERIFY_ATTEMPTS:
-                    self._sleep(_VERIFY_INTERVAL_MS / 1000)
+                    self._sleep(verify_interval_ms / 1000)
                 continue
             content = ((listed.envelope.get("resultData") or {}).get("content")
                        if type(listed.envelope.get("resultData")) is dict else [])
@@ -360,7 +340,7 @@ class BookingExecutionEngine:
                     if type(detail) is dict and str(detail.get("status") or "") == "5":
                         result = "payment_pending"
             if attempt + 1 < _VERIFY_ATTEMPTS:
-                self._sleep(_VERIFY_INTERVAL_MS / 1000)
+                self._sleep(verify_interval_ms / 1000)
         elapsed = max(0, (self._monotonic() - monotonic_start) // 1_000_000)
         self.repository.record_stage(
             run_id,
@@ -395,8 +375,8 @@ class BookingExecutionEngine:
             item for item in candidates if item.get("priority") == "one_hour"
         ]
         reservation_person = self._reservation_person.pop(run_id, "")
-        children_by_scope: dict[str, str] = {}
         needs_attention = False
+        attempt_index = 0
         try:
             if not reservation_person:
                 self._delay(settings, "get_user_info_delay_ms")
@@ -423,6 +403,9 @@ class BookingExecutionEngine:
                     ))
                     continue
                 for candidate in candidates:
+                    if attempt_index:
+                        self._delay(settings, "candidate_interval_ms")
+                    attempt_index += 1
                     candidate_index = int(candidate["queue_index"])
                     category = categories.get(candidate["scope_label"])
                     if category is None:
@@ -464,12 +447,6 @@ class BookingExecutionEngine:
                         continue
                     result_data = booking.envelope["resultData"]
                     time_list, node_list = result_data["timeList"], result_data["nodeList"]
-                    if candidate["scope_label"] not in children_by_scope:
-                        children_by_scope[candidate["scope_label"]] = self._children_count(
-                            run_id, material, category["node_id"], settings,
-                            round_number, candidate_index,
-                        )
-                    childrennum = children_by_scope[candidate["scope_label"]]
                     self.credentials.assert_booking_snapshot(material)
                     self._delay(settings, "get_pay_price_delay_ms")
                     try:
@@ -505,7 +482,7 @@ class BookingExecutionEngine:
                             material.token, node_id=category["node_id"], target_date=run["target_date"],
                             coordinates=coordinates, txamt=txamt, time_list=time_list, node_list=node_list,
                             is_last_day=result_data.get("bookingenddate") == run["target_date"],
-                            childrennum=childrennum,
+                            childrennum=_RESERVATION_COUNT,
                         )
                     except UpstreamCallError as exc:
                         self.repository.record_stage(run_id, self._error_event(

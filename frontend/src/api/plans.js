@@ -17,6 +17,7 @@ export function createPlanApi(client) {
     executionQueue: (date, credential_id) => client.request(
       `/api/booking-execution/credentials/${encodeURIComponent(credential_id)}/queues/${encodeURIComponent(date)}`,
     ),
+    executionSuccesses: () => client.request('/api/booking-execution/successes'),
     list: (credential_id) => client.request(scopedPath('/api/plans',credential_id)),
     options: () => client.request('/api/plans/options'),
     get: (id, credential_id) => client.request(scopedPath(path(id),credential_id)),

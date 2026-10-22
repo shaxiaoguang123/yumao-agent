@@ -18,8 +18,8 @@ def parse_queue(payload, context: PlanInterpretationContext, today: date, *, all
     if target < today and not allow_past:
         fail('目标日期不能早于当前业务日期。')
     entries = payload['entries']
-    if type(entries) is not list or len(entries) > 32:
-        fail('候选队列最多 32 项。')
+    if type(entries) is not list:
+        fail('候选队列必须是列表。')
     candidates, seen = [], set()
     for entry in entries:
         base_fields = {'court_preference', 'start_time', 'end_time', 'duration_minutes'}

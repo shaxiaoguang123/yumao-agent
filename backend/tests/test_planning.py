@@ -427,7 +427,8 @@ class ConversationTests(Base):
         self.assertEqual(payload['workflow_context']['groups']['2h']['fields'], [
             'windows_2h', 'overlap_2h', 'courts_2h'])
         self.assertTrue(any(gate['field'] == 'courts_2h' for gate in payload['workflow_context']['gates']))
-        self.assertEqual(payload['workflow_context']['max_candidates'], payload['candidate_counts']['maximum'])
+        self.assertEqual(payload['candidate_counts']['total'], 0)
+        self.assertNotIn('maximum', payload['candidate_counts'])
         self.assertEqual(payload['workflow_context']['max_updates_per_turn'], 12)
         self.assertEqual(payload['workflow_context']['max_windows_per_update'], 12)
         self.assertIn('target_date', payload['blocking_fields'])
@@ -1053,7 +1054,7 @@ if __name__ == '__main__':
 
 
 class QueueSafetyRegressionTests(Base):
-    def test_court_keep_range_cannot_become_a_time_and_resolves_the_40_item_limit(self):
+    def test_court_keep_range_cannot_become_a_time_and_allows_40_items(self):
         message = '我想预约羽毛球场'
         result = self.result(message)
         conversation_id = result['conversation_id']
@@ -1070,20 +1071,10 @@ class QueueSafetyRegressionTests(Base):
         self.assertEqual(answer('1')['conversation']['asking'], 'target_date')
         self.assertEqual(answer('10月27日')['conversation']['asking'], 'windows_2h')
         self.assertEqual(answer('10-12、12-14、14-16、16-18')['conversation']['asking'], 'courts_2h')
-        capped = answer('1到10')
-        self.assertEqual((capped['conversation']['asking'], capped['conversation']['turn_trace']['candidate_count']),
-                         ('courts_2h', 40))
-        self.provider.turn_replies = [json.dumps({
-            'kind': 'answer', 'updates': [
-                {'field': 'courts_2h', 'operation': 'replace', 'value': list(range(1, 9)), 'evidence': '保留1-8'},
-            ], 'unresolved': [],
-            'reply': '已将两小时场地保留为1到8号。', 'next_field': 'courts_2h',
-            'next_question': '两小时还要调整哪些场地？例如1-4号。',
-        }, ensure_ascii=False)]
-        ready = answer('保留1-8')
-        self.assertEqual((ready['status'], ready['proposal']['entry_count']), ('ready', 32))
-        self.assertEqual(ready['conversation']['turn_trace']['candidate_count'], 32)
-        self.assertEqual(ready['conversation']['slots'][4]['display'], '1号、2号、3号、4号、5号、6号、7号、8号')
+        ready = answer('1到10')
+        self.assertEqual((ready['status'], ready['proposal']['entry_count']), ('ready', 40))
+        self.assertEqual(ready['conversation']['turn_trace']['candidate_count'], 40)
+        self.assertEqual(ready['conversation']['slots'][4]['display'], '1号、2号、3号、4号、5号、6号、7号、8号、9号、10号')
         self.assertEqual(self.counts(), (0, 0))
 
     def test_model_acknowledgement_is_hidden_when_the_server_accepts_no_update(self):
@@ -1143,7 +1134,7 @@ class QueueSafetyRegressionTests(Base):
         self.assertIn('14-16 与 13-15', result['questions'][0])
         self.assertIsNone(result['proposal'])
 
-    def test_zhl_failure_path_is_recovered_by_contextual_model_and_candidate_cap(self):
+    def test_zhl_path_accepts_both_independent_groups_without_candidate_cap(self):
         message = '我想预约羽毛球场'
         result = self.result(message)
         conversation_id = result['conversation_id']
@@ -1164,29 +1155,20 @@ class QueueSafetyRegressionTests(Base):
         self.assertEqual(answer('都保留，1到10号场地')['conversation']['asking'], 'windows_1h')
         self.assertEqual(answer('13-14、15-16、17-18、14-15')['conversation']['asking'], 'courts_1h')
 
-        capped = answer('1到10')
-        self.assertEqual((capped['status'], capped['conversation']['asking']), ('needs_input', 'courts_1h'))
-        slots = {slot['field']: slot for slot in capped['conversation']['slots']}
-        self.assertEqual(slots['courts_1h']['status'], 'invalid')
-        self.assertIn('70项', capped['questions'][0])
-        self.assertIn('最多 32 项', capped['questions'][0])
-        self.assertIn('1～4号场', capped['questions'][0])
+        ready = answer('1到10')
+        self.assertEqual((ready['status'], ready['proposal']['entry_count']), ('ready', 70))
+        slots = {slot['field']: slot for slot in ready['conversation']['slots']}
+        self.assertEqual(slots['courts_1h']['status'], 'proposed')
         self.assertIn('14-15', slots['windows_1h']['display'])
         self.assertIn('10号', slots['courts_2h']['display'])
 
-        no_more = answer('没有其他时间段了，一个小时就这些')
-        self.assertEqual(no_more['conversation']['asking'], 'courts_1h')
-        self.assertEqual(no_more['conversation']['contextual_reply'], '明白，一小时就按刚才列出的时段处理。')
-        self.assertIn('14-15', {slot['field']: slot for slot in no_more['conversation']['slots']}['windows_1h']['display'])
-
         reduced_one = answer('一小时场地改为1到4号')
-        self.assertEqual(reduced_one['conversation']['asking'], 'courts_2h')
+        self.assertEqual(reduced_one['status'], 'ready')
         reduced_slots = {slot['field']: slot for slot in reduced_one['conversation']['slots']}
         self.assertEqual(reduced_slots['courts_1h']['display'], '1号、2号、3号、4号')
         self.assertEqual(reduced_one['conversation']['turn_trace']['candidate_count'], 46)
-        self.assertIn('46项', reduced_one['questions'][0])
-        ready = answer('2小时场地改成1到4号')
-        self.assertEqual((ready['status'], ready['proposal']['entry_count']), ('ready', 28))
+        reduced_both = answer('2小时场地改成1到4号')
+        self.assertEqual((reduced_both['status'], reduced_both['proposal']['entry_count']), ('ready', 28))
         self.assertEqual(self.counts(), (0, 0))
 
     def test_time_and_duration_answers_cannot_supply_a_court_number(self):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from contextlib import closing
 from datetime import datetime, timezone
@@ -72,6 +73,7 @@ class FakeProtocol:
         self.create_calls = 0
         self.pay_calls = 0
         self.children_calls = 0
+        self.created_children_counts = []
         self.get_user_calls = 0
         self.fresh_conflict = False
         self.create_error = None
@@ -107,6 +109,7 @@ class FakeProtocol:
 
     def create_booking(self, *_args, **_kwargs):
         self.create_calls += 1
+        self.created_children_counts.append(_kwargs.get("childrennum"))
         if self.create_error:
             raise self.create_error
         return self._reply({"success": True, "message": "CORE10008", "resultData": {"orderno": "order-a"}})
@@ -139,18 +142,19 @@ class ExecutionEngineTests(unittest.TestCase):
         )
         self.credentials = FakeCredentialService()
         self.protocol = FakeProtocol(epoch(15, 0, 30))
+        self.sleeps = []
         self.engine = BookingExecutionEngine(
             database_path=self.database, busy_timeout_ms=5000,
             plan_service=self.plan_service, credential_service=self.credentials,
             protocol=self.protocol, timezone_name=ZONE, worker_enabled=True,
-            clock_utc_ms=lambda: self.protocol.now, sleep=lambda _seconds: None,
+            clock_utc_ms=lambda: self.protocol.now, sleep=self.sleeps.append,
         )
 
-    def _insert_owned_credential(self):
+    def _insert_owned_credential(self, credential_id=CREDENTIAL, revision_id="revision-a"):
         with closing(connect_database(self.database, 5000)) as db:
             db.execute("BEGIN")
             db.execute(
-                """INSERT INTO users
+                """INSERT OR IGNORE INTO users
                    (user_id,username,normalized_username,password_hash,role,status,created_at_utc_ms,updated_at_utc_ms)
                    VALUES (?, 'a', 'a', 'hash', 'user', 'active', ?, ?)""",
                 (USER, epoch(15, 0, 0), epoch(15, 0, 0)),
@@ -161,23 +165,24 @@ class ExecutionEngineTests(unittest.TestCase):
                     account_binding_state,upstream_account_fingerprint,fingerprint_key_version,
                     account_identity_contract_version,last_confirmed_validation_state,requires_revalidation,
                     created_at_utc_ms,updated_at_utc_ms)
-                   VALUES (?,?,'A',1,1,'revision-a','confirmed',?,'fp-v1','getuserinfo-idserial-v1',
+                   VALUES (?,?,'A',1,1,?,'confirmed',?,'fp-v1','getuserinfo-idserial-v1',
                            'confirmed_valid',0,?,?)""",
-                (CREDENTIAL, USER, "f" * 64, epoch(15, 0, 0), epoch(15, 0, 0)),
+                (credential_id, USER, revision_id, "f" * 64,
+                 epoch(15, 0, 0), epoch(15, 0, 0)),
             )
             db.execute(
                 """INSERT INTO credential_token_revisions
                    (revision_id,user_id,credential_id,revision_number,token_fingerprint,
                     token_fingerprint_key_version,initial_validation_result,initial_validation_at_utc_ms,
                     created_by_user_id,secret_material_active,ciphertext,nonce,tag,encryption_key_version)
-                   VALUES ('revision-a',?,?,1,?,'fp-v1','success',?,?,1,?,?,?,'enc-v1')""",
-                (USER, CREDENTIAL, "a" * 64, epoch(15, 0, 0), USER,
+                   VALUES (?,?,?,1,?,'fp-v1','success',?,?,1,?,?,?,'enc-v1')""",
+                (revision_id, USER, credential_id, "a" * 64, epoch(15, 0, 0), USER,
                  b"cipher", b"n" * 12, b"t" * 16),
             )
             db.commit()
 
-    def _reconcile(self):
-        setting_dto = {"version": 0, "settings": dict(DEFAULT_SETTINGS), "worker_enabled": True}
+    def _reconcile(self, settings=None):
+        setting_dto = {"version": 0, "settings": dict(settings or DEFAULT_SETTINGS), "worker_enabled": True}
         return self.engine.reconcile(USER, CREDENTIAL, TARGET, self.queue, setting_dto)
 
     def _calibrate(self, run):
@@ -194,12 +199,69 @@ class ExecutionEngineTests(unittest.TestCase):
         self.protocol.now = epoch(15, 7, 30, 1)
         done = self.engine.execute(run["run_id"], USER, CREDENTIAL)
         self.assertEqual(done["state"], "succeeded")
+        successful_run_id = done["run_id"]
         self.assertEqual(self.protocol.grid_calls, 2)  # one preflight, one fresh opening query
         self.assertEqual(self.protocol.quote_calls, 1)
         self.assertEqual(self.protocol.create_calls, 1)
         self.assertEqual(self.protocol.pay_calls, 1)
-        self.assertEqual(self.protocol.children_calls, 1)
+        self.assertEqual(self.protocol.children_calls, 0)
+        self.assertEqual(self.protocol.created_children_counts, ["5"])
         self.assertTrue(any(stage["stage_key"] == "payment_verification" for stage in done["stages"]))
+        successes = BookingExecutionRepository(self.database, 5000).list_successes(USER)
+        self.assertEqual(len(successes), 1)
+        self.assertEqual(
+            (successes[0]["credential_id"], successes[0]["court_preference"],
+             successes[0]["start_time"], successes[0]["verification"]),
+            (CREDENTIAL, "6号场", "09:00", "order_query"),
+        )
+        self.assertEqual(BookingExecutionRepository(self.database, 5000).list_successes("other-user"), [])
+        self.assertFalse({"token", "payment_password", "orderno"} & set(successes[0]))
+
+    def test_configurable_query_candidate_and_verification_intervals_are_applied(self):
+        self.queue = self.plan_service.save_manual_queue(
+            USER, TARGET, self.queue["version"],
+            [
+                {"court_preference": "6号场", "scope_label": "羽毛球", "start_time": "09:00",
+                 "end_time": "10:00", "duration_minutes": 60},
+                {"court_preference": "6号场", "scope_label": "羽毛球", "start_time": "10:00",
+                 "end_time": "11:00", "duration_minutes": 60},
+            ],
+            epoch(15, 0, 31), CREDENTIAL,
+        )
+        settings = {**DEFAULT_SETTINGS, "booking_by_time_delay_ms": 100,
+                    "candidate_interval_ms": 250}
+        self.protocol.fresh_conflict = True
+        run = self._reconcile(settings)
+        self._calibrate(run)
+        self.protocol.now = epoch(15, 7, 30, 1)
+        done = self.engine.execute(run["run_id"], USER, CREDENTIAL)
+        self.assertEqual(done["state"], "succeeded")
+        successful_run_id = done["run_id"]
+        self.assertEqual(self.sleeps.count(0.1), 3)
+        self.assertEqual(self.sleeps.count(0.25), 1)
+
+        self.protocol.orders_paid = False
+        self.sleeps.clear()
+        next_queue = self.plan_service.save_manual_queue(
+            USER, TARGET, self.queue["version"],
+            [{"court_preference": "6号场", "scope_label": "羽毛球", "start_time": "11:00",
+              "end_time": "12:00", "duration_minutes": 60}],
+            epoch(15, 0, 32), CREDENTIAL,
+        )
+        verify_settings = {**DEFAULT_SETTINGS, "payment_verify_interval_ms": 125}
+        run = self.engine.reconcile(
+            USER, CREDENTIAL, TARGET, next_queue,
+            {"version": 0, "settings": verify_settings, "worker_enabled": True},
+        )
+        self._calibrate(run)
+        self.protocol.now = epoch(15, 7, 30, 2)
+        done = self.engine.execute(run["run_id"], USER, CREDENTIAL)
+        self.assertEqual(done["state"], "needs_attention")
+        self.assertEqual(self.sleeps.count(0.125), 14)
+        self.assertEqual(
+            [item["run_id"] for item in BookingExecutionRepository(self.database, 5000).list_successes(USER)],
+            [successful_run_id],
+        )
 
     def test_fresh_unavailable_candidates_are_rechecked_in_exactly_three_rounds(self):
         self.protocol.fresh_conflict = True
@@ -249,6 +311,84 @@ class ExecutionEngineTests(unittest.TestCase):
         self.assertEqual(result["reconciled"], 1)
         self.assertEqual(self.protocol.grid_calls, 1)
         self.assertIsNotNone(repository.latest_run(USER, CREDENTIAL, TARGET))
+
+    def test_scheduler_reads_one_shared_profile_once_for_all_user_tokens(self):
+        second = "credential-b"
+        self._insert_owned_credential(second, "revision-b")
+        second_queue = self.plan_service.save_manual_queue(
+            USER, TARGET, 0,
+            [{"court_preference": "6号场", "scope_label": "羽毛球", "start_time": "10:00",
+              "end_time": "11:00", "duration_minutes": 60}],
+            epoch(15, 0, 30), second,
+        )
+        self.assertTrue(second_queue["candidates"])
+        settings_service = ExecutionSettingsService(self.database, 5000, worker_enabled=True)
+        shared = {**DEFAULT_SETTINGS, "start_offset_ms": 875, "candidate_interval_ms": 250}
+        settings_service.save(USER, 0, shared, epoch(15, 0, 0))
+        original_get = settings_service.get
+        calls = []
+
+        def counted_get(user_id):
+            calls.append(user_id)
+            return original_get(user_id)
+
+        settings_service.get = counted_get
+        repository = BookingExecutionRepository(self.database, 5000)
+        scheduler = BookingScheduler(
+            settings_service=settings_service, engine=self.engine, repository=repository,
+            plan_service=self.plan_service, timezone_name=ZONE, worker_enabled=True,
+            clock_utc_ms=lambda: epoch(15, 0, 30),
+        )
+        result = scheduler.tick_once(epoch(15, 0, 30))
+        self.assertEqual((result["reconciled"], calls), (2, [USER]))
+        snapshots = [
+            repository.latest_run(USER, credential_id, TARGET)["reconciliation"]["execution_settings"]
+            for credential_id in (CREDENTIAL, second)
+        ]
+        self.assertEqual(snapshots, [shared, shared])
+
+    def test_scheduler_dispatches_due_tokens_without_waiting_for_previous_execution(self):
+        second = "credential-b"
+        self._insert_owned_credential(second, "revision-b")
+        second_queue = self.plan_service.save_manual_queue(
+            USER, TARGET, 0,
+            [{"court_preference": "6号场", "scope_label": "羽毛球", "start_time": "10:00",
+              "end_time": "11:00", "duration_minutes": 60}],
+            epoch(15, 0, 30), second,
+        )
+        first_run = self._reconcile()
+        second_run = self.engine.reconcile(
+            USER, second, TARGET, second_queue,
+            {"version": 0, "settings": dict(DEFAULT_SETTINGS), "worker_enabled": True},
+        )
+        repository = BookingExecutionRepository(self.database, 5000)
+        for run in (first_run, second_run):
+            repository.update_state(
+                run["run_id"], ("ready",), "calibrated", epoch(15, 7, 29),
+                clock_offset_ms=0, clock_uncertainty_ms=0,
+            )
+
+        barrier = threading.Barrier(2, timeout=2)
+        started = []
+
+        def execute(run_id, user_id, credential_id):
+            started.append((run_id, user_id, credential_id))
+            barrier.wait()
+
+        scheduler = BookingScheduler(
+            settings_service=ExecutionSettingsService(self.database, 5000, worker_enabled=True),
+            engine=self.engine, repository=repository, plan_service=self.plan_service,
+            timezone_name=ZONE, worker_enabled=True,
+            clock_utc_ms=lambda: epoch(15, 7, 30, 1),
+        )
+        original_execute = self.engine.execute
+        self.engine.execute = execute
+        try:
+            result = scheduler.tick_once(epoch(15, 7, 30, 1))
+        finally:
+            self.engine.execute = original_execute
+        self.assertEqual(result["executed"], 2)
+        self.assertEqual({item[2] for item in started}, {CREDENTIAL, second})
 
 
 if __name__ == "__main__":

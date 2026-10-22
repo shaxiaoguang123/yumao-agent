@@ -378,5 +378,9 @@ onBeforeUnmount(() => {
   padding:16px 8px;
 
 }
+.invitation-actions button {
+  flex:1 1 100%;
+  width:100%;
+}
 }
 </style>

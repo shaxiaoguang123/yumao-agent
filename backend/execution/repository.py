@@ -190,6 +190,50 @@ class BookingExecutionRepository:
             ).fetchall()
         return self._row_dto(row, stages)
 
+    def list_successes(self, user_id: str) -> list[dict]:
+        """Return safe, order-query-confirmed booking summaries for one user."""
+        with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
+            rows = db.execute(
+                """SELECT run.*, credential.label AS credential_label,
+                          stage.candidate_index AS success_candidate_index,
+                          stage.completed_at_utc_ms AS confirmed_at_utc_ms
+                   FROM booking_execution_runs AS run
+                   JOIN booking_execution_stages AS stage
+                     ON stage.run_id=run.run_id
+                    AND stage.stage_key='payment_verification'
+                    AND stage.outcome='success'
+                   JOIN credentials AS credential
+                     ON credential.user_id=run.user_id
+                    AND credential.credential_id=run.credential_id
+                   WHERE run.user_id=? AND run.state='succeeded'
+                   ORDER BY stage.completed_at_utc_ms DESC, run.run_id DESC
+                   LIMIT 20""",
+                (user_id,),
+            ).fetchall()
+        successes = []
+        for row in rows:
+            snapshot = json.loads(row["snapshot_json"])
+            candidate = next((
+                item for item in snapshot.get("candidates", [])
+                if item.get("queue_index") == row["success_candidate_index"]
+            ), None)
+            if candidate is None:
+                continue
+            successes.append({
+                "run_id": row["run_id"],
+                "credential_id": row["credential_id"],
+                "credential_label": row["credential_label"],
+                "target_date": row["target_date"],
+                "scope_label": candidate.get("scope_label"),
+                "court_preference": candidate.get("court_preference"),
+                "start_time": candidate.get("start_time"),
+                "end_time": candidate.get("end_time"),
+                "duration_minutes": candidate.get("duration_minutes"),
+                "confirmed_at_utc_ms": row["confirmed_at_utc_ms"],
+                "verification": "order_query",
+            })
+        return successes
+
     def run_by_id(self, run_id: str) -> dict | None:
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
             row = db.execute("SELECT * FROM booking_execution_runs WHERE run_id=?", (run_id,)).fetchone()

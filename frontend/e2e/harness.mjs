@@ -36,12 +36,15 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
     const scopedPlanRead = url.pathname === '/api/plans'
       || /^\/api\/plans\/manual-queues(?:\/\d{4}-\d{2}-\d{2})?$/.test(url.pathname);
     const scopedPlanningConversationRead = url.pathname === '/api/planning/queue-conversations';
-    const queryAllowed = (scopedPlanRead || scopedPlanningConversationRead)
+    const adminUserRead = url.pathname === '/api/admin/users' && request.method() === 'GET';
+    const adminUserQueryAllowed = adminUserRead
+      && [...url.searchParams.keys()].every((key) => ['q', 'role', 'status', 'limit', 'offset'].includes(key));
+    const queryAllowed = adminUserQueryAllowed || ((scopedPlanRead || scopedPlanningConversationRead)
       && request.method() === 'GET'
       && [...url.searchParams.keys()].every((key) => key === 'credential_id')
       && (scopedPlanningConversationRead
         ? url.searchParams.getAll('credential_id').length === 1 && state.credentials.some((item) => item.credential_id === url.searchParams.get('credential_id'))
-        : url.searchParams.getAll('credential_id').length <= 1);
+        : url.searchParams.getAll('credential_id').length <= 1));
     if ((url.search && !queryAllowed) || url.hash || (scopedPlanningConversationRead && !queryAllowed)) { report.unexpectedApiRequests.push({ scenario: name, reason: 'unexpected API query', path: url.pathname }); await route.abort('blockedbyclient'); return; }
     if (!['GET', 'HEAD', 'OPTIONS'].includes(record.method) && !['/api/auth/login', '/api/auth/register'].includes(record.path)) record.csrfValid = request.headers()['x-csrf-token'] === SYNTHETIC_CSRF;
     state.requests.push(record);
@@ -79,11 +82,19 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
       else await reply(201, { invitation_code: SYNTHETIC_CODE, expires_at_utc_ms: Date.UTC(2026, 9, 10, 12) });
       return;
     }
+    if (adminUserRead) {
+      const users = [
+        { user_id: 'synthetic-admin', username: 'visual_admin', role: 'admin', status: 'active', created_at_utc_ms: Date.UTC(2026, 8, 1) },
+        { user_id: 'synthetic-user-a', username: '普通用户甲', role: 'user', status: 'active', created_at_utc_ms: Date.UTC(2026, 8, 2) },
+        { user_id: 'synthetic-user-b', username: '已停用用户乙', role: 'user', status: 'disabled', created_at_utc_ms: Date.UTC(2026, 8, 3) },
+      ];
+      await reply(200, { users, total: users.length, summary: { total: 3, active: 2, disabled: 1, active_admins: 1 } }); return;
+    }
     if (url.pathname === '/api/credentials' && record.method === 'GET') {
       await delay(state.listDelay); if (state.listNetworkError) { record.status = 'MOCK_NETWORK_ABORT'; await route.abort('failed'); return; } await reply(state.listError ? 503 : 200, state.listError ? { error: 'upstream_unavailable' } : { credentials: state.credentials }); return;
     }
     if (url.pathname === '/api/ai/models' && record.method === 'GET') {
-      await reply(200, { effective_model_id: 'visual-model', selected_model_id: 'visual-model', default_model_id: null, service_default: null, models: [{ id: 'visual-model', auth_mode: 'bearer', has_api_key: true }] }); return;
+      await reply(200, { effective_model_id: 'visual-model', selected_model_id: 'visual-model', default_model_id: null, service_default: null, models: [{ id: 'visual-model', name: '合成 DeepSeek', model: 'deepseek-chat', base_url: 'https://example.invalid/v1', auth_mode: 'bearer', has_api_key: true }] }); return;
     }
     if (url.pathname === '/api/ai/models/visual-model/test' && record.method === 'POST') {
       await reply(200, { ok: true, message: 'synthetic connection success' }); return;
@@ -108,6 +119,30 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
       if (state.createError) await reply(409, { error: 'credential_account_already_configured' });
       else { const item = credential('visual-created', '合成新凭据'); state.credentials.push(item); await reply(201, { credential: item }); } return;
     }
+    if (url.pathname === '/api/booking-execution/settings') {
+      const settings = state.executionSettings.settings || {
+        reconciliation_time: '00:30', clock_calibration_lead_ms: 1000, start_offset_ms: 0,
+        booking_node_delay_ms: 0, booking_by_time_delay_ms: 0, get_user_info_delay_ms: 0,
+        get_pay_price_delay_ms: 0, create_booking_delay_ms: 0,
+        open_platform_pay_order_delay_ms: 0, payment_verify_delay_ms: 0,
+        payment_verify_interval_ms: 3000, candidate_interval_ms: 0,
+      };
+      const version = state.executionSettings.version || 0;
+      if (record.method === 'GET') {
+        await reply(200, { version, settings, worker_enabled: false }); return;
+      }
+      if (record.method === 'PUT') {
+        const body = request.postDataJSON();
+        if (body.expected_version !== version) { await reply(409, { error: 'execution_settings_version_conflict' }); return; }
+        state.executionSettings = { settings: body.settings, version: version + 1 };
+        await reply(200, { version: version + 1, settings: body.settings, worker_enabled: false }); return;
+      }
+      report.unexpectedApiRequests.push({ scenario: name, method: record.method, path: record.path });
+      await reply(501, { error: 'unmocked_api' }); return;
+    }
+    if (url.pathname === '/api/booking-execution/successes' && record.method === 'GET') {
+      await reply(200, { successes: state.executionSuccesses || [], worker_enabled: false }); return;
+    }
     const executionSettingsRoute = url.pathname.match(/^\/api\/booking-execution\/credentials\/([^/]+)\/settings$/);
     if (executionSettingsRoute) {
       const credentialId = executionSettingsRoute[1];
@@ -117,8 +152,9 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
       const settings = state.executionSettings[credentialId] || {
         reconciliation_time: '00:30', clock_calibration_lead_ms: 1000, start_offset_ms: 0,
         booking_node_delay_ms: 0, booking_by_time_delay_ms: 0, get_user_info_delay_ms: 0,
-        get_children_delay_ms: 0, get_pay_price_delay_ms: 0, create_booking_delay_ms: 0,
+        get_pay_price_delay_ms: 0, create_booking_delay_ms: 0,
         open_platform_pay_order_delay_ms: 0, payment_verify_delay_ms: 0,
+        payment_verify_interval_ms: 3000, candidate_interval_ms: 0,
       };
       const version = state.executionSettings[`${credentialId}:version`] || 0;
       if (record.method === 'GET') {
@@ -194,7 +230,8 @@ async function layout(ctx) {
     const width = document.documentElement.clientWidth;
     const shown = (e) => !!(e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden' && !e.classList.contains('sr-only') && !e.closest('.sr-only'));
     const describe = (e) => ({ tag: e.tagName.toLowerCase(), class: e.className, testid: e.getAttribute('data-testid'), left: Math.round(e.getBoundingClientRect().left), right: Math.round(e.getBoundingClientRect().right), width: Math.round(e.getBoundingClientRect().width), height: Math.round(e.getBoundingClientRect().height) });
-    const overflowing = [...document.querySelectorAll('header,nav,a,button,input,h1,h2,h3,article,section,dl,dd')].filter(shown).filter((e) => e.getBoundingClientRect().right > width + 1 || e.getBoundingClientRect().left < -1).map(describe);
+    const insideScroller = (e) => { for (let parent = e.parentElement; parent; parent = parent.parentElement) { const overflow = getComputedStyle(parent).overflowX; if (['auto', 'scroll'].includes(overflow) && parent.scrollWidth > parent.clientWidth + 1) return true; } return false; };
+    const overflowing = [...document.querySelectorAll('header,nav,a,button,input,h1,h2,h3,article,section,dl,dd')].filter(shown).filter((e) => (e.getBoundingClientRect().right > width + 1 || e.getBoundingClientRect().left < -1) && !insideScroller(e)).map(describe);
     const clipped = [...document.querySelectorAll('a,button,h1,h2,h3,label,dt,dd')].filter(shown).filter((e) => ['hidden','clip'].includes(getComputedStyle(e).overflowX) && e.scrollWidth > e.clientWidth + 1).map(describe);
     const nav = [...document.querySelectorAll('.topbar a')].map((e) => ({ text: e.textContent.trim(), ...describe(e) }));
     const controls = [...document.querySelectorAll('button,input')].filter(shown).map(describe);
