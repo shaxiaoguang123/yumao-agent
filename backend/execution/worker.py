@@ -3,7 +3,7 @@ from __future__ import annotations
 
 def main() -> None:
     from backend.app import create_app
-    from backend.diagnostics import diagnostic_scope, record_event
+    from backend.diagnostics import diagnostic_scope, report_exception
 
     app = create_app(process_role="worker")
     diagnostics = app.extensions["runtime_diagnostics"]
@@ -11,7 +11,7 @@ def main() -> None:
         try:
             app.extensions["booking_scheduler"].run_forever()
         except Exception as exc:
-            record_event("system", "worker.stopped", level="error", code="worker_internal_error", exception=exc)
+            report_exception("system", "worker.stopped", code="worker_internal_error", exception=exc)
             raise SystemExit(1) from None
         finally:
             diagnostics.close()

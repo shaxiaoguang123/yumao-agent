@@ -7,13 +7,13 @@ import sqlite3
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
 from support import credential_test_settings
 from backend.app import create_app
 from backend.db import connect_database
-from backend.diagnostics import RuntimeDiagnostics, diagnostic_scope, record_event
+from backend.diagnostics import RuntimeDiagnostics, diagnostic_scope, record_event, report_exception
 from backend.metrics import overview
 from backend.migrate import migrate_database
 from backend.ai.provider import ProviderConfig, ProviderFailure
@@ -108,6 +108,37 @@ class DiagnosticApiTests(unittest.TestCase):
         result = self.clients["admin"].get("/api/admin/logs?request_id="+request_id).get_json()
         self.assertEqual({row["action"] for row in result["events"]},{"api.unhandled","api.request"})
         self.assertNotIn(secret,json.dumps(result))
+
+    def test_unhandled_errors_keep_safe_stderr_when_collection_is_disabled(self):
+        secret = "synthetic-private-fatal-message"
+        @self.app.get("/api/synthetic-disabled-crash")
+        def crash():
+            raise RuntimeError(secret)
+        self.app.config["PROPAGATE_EXCEPTIONS"] = False
+        self.logs.enabled = False
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            response = self.clients["alice"].get("/api/synthetic-disabled-crash?token=" + secret)
+        self.assertEqual(response.status_code, 500)
+        failure = json.loads(stderr.getvalue())
+        self.assertEqual(failure["action"], "api.unhandled")
+        self.assertEqual(failure["request_id"], response.headers["X-Request-ID"])
+        self.assertEqual(failure["exception_type"], "RuntimeError")
+        self.assertTrue(failure["frames"])
+        self.assertNotIn(secret, stderr.getvalue())
+
+    def test_worker_fatal_error_keeps_safe_stderr_and_exit_status(self):
+        from backend.execution.worker import main
+        self.logs.enabled = False
+        with patch("backend.app.create_app", return_value=self.app), \
+                patch.object(self.app.extensions["booking_scheduler"], "run_forever", side_effect=RuntimeError("synthetic-private-worker-message")), \
+                patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            with self.assertRaises(SystemExit) as raised:
+                main()
+        self.assertEqual(raised.exception.code, 1)
+        failure = json.loads(stderr.getvalue())
+        self.assertEqual(failure["action"], "worker.stopped")
+        self.assertTrue(failure["frames"])
+        self.assertNotIn("synthetic-private-worker-message", stderr.getvalue())
 
     def test_request_context_does_not_leak_between_users_or_outside_requests(self):
         a = self.clients["alice"].get("/api/credentials")
@@ -267,6 +298,78 @@ class DiagnosticStorageTests(unittest.TestCase):
                     self.assertNotIn("synthetic-secret",stderr.getvalue())
                 finally:
                     collector.close()
+
+    def test_full_database_prunes_before_accepting_the_next_batch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            collector = RuntimeDiagnostics(Path(temp)/"business.sqlite3", enabled=False)
+            collector.enabled = True
+            details = {key: "x"*96 for key in ("stage", "state", "phase", "field", "outcome", "method", "endpoint", "validation_code", "model_id", "target_user_id")}
+            db = collector._open_writer()
+            try:
+                db.execute("PRAGMA max_page_count=22")
+                for _ in range(1000):
+                    try:
+                        db.execute("INSERT INTO runtime_events(at_utc_ms,level,module,action,details_json) VALUES (1,'info','system','synthetic.old',?)", (json.dumps(details),))
+                        db.commit()
+                    except sqlite3.OperationalError as exc:
+                        self.assertEqual(exc.sqlite_errorcode, sqlite3.SQLITE_FULL)
+                        db.rollback()
+                        break
+                else:
+                    self.fail("Synthetic diagnostic DB did not reach its page budget")
+                self.assertGreater(db.execute("SELECT COUNT(*) FROM runtime_events").fetchone()[0], 0)
+                collector.emit("system", "synthetic.recovered", **details)
+                collector._stop.set()
+                # Drain exactly one nonempty batch; idle maintenance cannot mask the regression.
+                with patch.object(collector, "_open_writer", return_value=db):
+                    collector._run()
+                with collector.reader() as reader:
+                    self.assertEqual(reader.execute("SELECT COUNT(*) FROM runtime_events WHERE at_utc_ms=1").fetchone()[0], 0)
+                    self.assertEqual(reader.execute("SELECT action FROM runtime_events").fetchone()[0], "synthetic.recovered")
+                self.assertEqual(collector.status()["failed_events"], 0)
+            finally:
+                db.close()
+                collector.close()
+
+    def test_failed_commit_retries_due_maintenance_with_the_next_batch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            collector = RuntimeDiagnostics(Path(temp)/"business.sqlite3", enabled=False)
+            collector.enabled = True
+            for _ in range(129):
+                collector.emit("system", "synthetic.event")
+            collector._stop.set()
+            open_writer = collector._open_writer
+            opens = 0
+            def writer():
+                nonlocal opens
+                opens += 1
+                db = open_writer()
+                if opens == 1:
+                    wrapped = Mock(wraps=db)
+                    wrapped.commit.side_effect = sqlite3.OperationalError("synthetic commit failure")
+                    return wrapped
+                return db
+            try:
+                with patch.object(collector, "_open_writer", side_effect=writer), \
+                        patch.object(collector, "_prune", wraps=collector._prune) as prune, \
+                        patch("sys.stderr", new_callable=io.StringIO):
+                    collector._run()
+                self.assertEqual(prune.call_count, 2)
+                self.assertEqual(collector.status()["failed_events"], 128)
+                self.assertEqual(collector.status()["state"], "ready")
+                with collector.reader() as db:
+                    self.assertEqual(db.execute("SELECT COUNT(*) FROM runtime_events").fetchone()[0], 1)
+            finally:
+                collector.close()
+
+    def test_unwritable_stderr_does_not_replace_the_original_error_handling(self):
+        with patch("sys.stderr") as stderr:
+            stderr.write.side_effect = OSError("synthetic broken stderr")
+            try:
+                raise RuntimeError("synthetic private error")
+            except RuntimeError as exc:
+                report_exception("system", "worker.stopped", code="worker_internal_error", exception=exc)
+        self.assertTrue(stderr.write.called)
 
     def test_retention_removes_old_and_excess_events(self):
         with tempfile.TemporaryDirectory() as temp:

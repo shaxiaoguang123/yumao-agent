@@ -83,6 +83,20 @@ def _safe_frames(exception):
     return frames[-20:]
 
 
+def report_exception(module, action, *, code, exception):
+    record_event(module, action, level="error", code=code, exception=exception)
+    # Fatal/unhandled errors must remain visible when async collection is disabled or fails.
+    failure = {"module": module, "action": action, "code": code,
+               "exception_type": type(exception).__name__[:80], "frames": _safe_frames(exception),
+               **{key: value for key, value in _CONTEXT.get().items()
+                  if key in {"request_id", "user_id", "credential_id", "conversation_id", "run_id"}
+                  and valid_identifier(value)}}
+    try:
+        print(json.dumps(failure, ensure_ascii=False, separators=(",", ":")), file=sys.stderr)
+    except (OSError, ValueError):
+        pass
+
+
 class DiagnosticsUnavailable(RuntimeError):
     pass
 
@@ -209,20 +223,24 @@ class RuntimeDiagnostics:
                     if db is None:
                         db = self._open_writer()
                     now = time.time_ns() // 1_000_000
+                    maintain = now-maintenance >= 3600000
+                    if maintain:
+                        self._prune(db, now)
                     if batch:
                         db.executemany("""INSERT INTO runtime_events
                           (at_utc_ms,level,module,action,code,request_id,user_id,credential_id,conversation_id,run_id,elapsed_ms,details_json)
                           VALUES (:at_utc_ms,:level,:module,:action,:code,:request_id,:user_id,:credential_id,:conversation_id,:run_id,:elapsed_ms,:details_json)""", batch)
-                    if now-maintenance >= 3600000:
-                        self._prune(db, now)
-                        maintenance = now
-                    if now-heartbeat >= 30000 or batch:
+                    beat = now-heartbeat >= 30000 or bool(batch)
+                    if beat:
                         with self._lock:
                             dropped, failed = self._dropped, self._failed
                         db.execute("INSERT OR REPLACE INTO runtime_collectors VALUES (?,?,?,?,?,?,?)",
                                    (self.role, os.getpid(), now, "ready", dropped, failed, now if batch else self._last_write))
-                        heartbeat = now
                     db.commit()
+                    if maintain:
+                        maintenance = now
+                    if beat:
+                        heartbeat = now
                     with self._lock:
                         self._state = "ready"
                         if batch:

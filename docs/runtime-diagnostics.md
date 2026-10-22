@@ -29,6 +29,8 @@ Queue saturation drops events and increments a counter. Write failures drop that
 
 Collector heartbeats indicate collection health, not scheduler success. A heartbeat older than 120 seconds is marked stale. The page reports queued/dropped/failed events and last collection times. Counts describe retained data; events discarded or predating collection cannot be reconstructed. API health checks and successful diagnostic polling are excluded from ordinary request totals; administrator log reads are still audited separately.
 
+Unhandled Web exceptions and fatal Worker exceptions also write safe structured stderr records (error code, exception type, safe frames and validated correlation IDs), even when collection is disabled or unavailable. These records exclude exception messages and local variables; the existing systemd journal retains the fallback. Due retention cleanup runs before inserting a batch, and its maintenance clock advances only after commit, so a full database can reclaim expired events while writes remain queued.
+
 The backend must be running to view logs in the application. Startup failures before collector initialization and a completely unavailable Web process still require the host's systemd journal.
 
 ## Metric definitions

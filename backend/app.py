@@ -52,7 +52,7 @@ from backend.execution.scheduler import BookingScheduler
 from backend.db import CURRENT_SCHEMA_VERSION, check_schema_ready
 from backend.settings import load_settings
 from backend.api.diagnostics import diagnostics_bp
-from backend.diagnostics import RuntimeDiagnostics, init_request_diagnostics, record_event
+from backend.diagnostics import RuntimeDiagnostics, init_request_diagnostics, report_exception
 
 
 _SECRET_CONFIG_KEYS = {
@@ -72,7 +72,7 @@ _SECRET_CONFIG_KEYS = {
 class DiagnosticFlask(Flask):
     def log_exception(self, exc_info):
         # Flask's default formatter includes uncontrolled exception messages.
-        record_event("api", "api.unhandled", level="error", code="internal_error", exception=exc_info[1])
+        report_exception("api", "api.unhandled", code="internal_error", exception=exc_info[1])
 
 
 def create_app(config: Mapping[str, object] | None = None, *, process_role="web") -> Flask:
