@@ -1,6 +1,6 @@
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { reactive } from 'vue';
 import App from './App.vue';
 
@@ -53,6 +53,38 @@ describe('application navigation', () => {
       expect(wrapper.find('[data-testid="admin-invitations-link"]').exists()).toBe(false);
       wrapper.unmount();
     }
+  });
+
+  it('scrolls the navigation container to the active route', async () => {
+    const addListener = vi.spyOn(window, 'addEventListener');
+    const removeListener = vi.spyOn(window, 'removeEventListener');
+    const { wrapper, router } = await mountApp('admin');
+    await flushPromises();
+    const resizeHandler = addListener.mock.calls.filter(([type]) => type === 'resize').at(-1)?.[1];
+    const nav = wrapper.get('nav').element;
+    const activeLink = wrapper.get('[data-testid=admin-logs-link]').element;
+    let navWidth = 200;
+    Object.defineProperty(nav, 'clientWidth', { configurable: true, get: () => navWidth });
+    Object.defineProperty(nav, 'scrollWidth', { configurable: true, value: 900 });
+    Object.defineProperty(nav, 'getBoundingClientRect', { configurable: true, value: () => ({ left: 16 }) });
+    Object.defineProperty(activeLink, 'offsetWidth', { configurable: true, value: 80 });
+    Object.defineProperty(activeLink, 'getBoundingClientRect', { configurable: true, value: () => ({ left: 16 + 700 - nav.scrollLeft }) });
+    nav.scrollLeft = 120;
+
+    await router.push('/admin/logs');
+    await flushPromises();
+
+    expect(nav.scrollLeft).toBe(640);
+    expect(wrapper.get('[data-testid=admin-logs-link]').attributes('aria-current')).toBe('page');
+
+    navWidth = 160;
+    window.dispatchEvent(new Event('resize'));
+    await flushPromises();
+    expect(nav.scrollLeft).toBe(660);
+    wrapper.unmount();
+    expect(removeListener).toHaveBeenCalledWith('resize', resizeHandler);
+    addListener.mockRestore();
+    removeListener.mockRestore();
   });
 
   it('updates role navigation without rebuilding the application when Session is cleared', async () => {

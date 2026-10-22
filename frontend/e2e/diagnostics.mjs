@@ -39,6 +39,10 @@ export async function runDiagnostics(qa) {
       await ctx.page.getByRole('link', { name: '全站运行概览', exact: true }).click();
       await ctx.page.getByText('123 ms', { exact: true }).waitFor();
       check(ctx.name, 'administrator overview includes actual error trend and request metrics', await ctx.page.getByRole('heading', { name: '近七天异常趋势', exact: true }).count() === 1 && ctx.state.requests.some(request => request.path === '/api/admin/metrics'));
+      if (viewport.width > 850) {
+        const tops = await ctx.page.locator('.activity-charts > .activity-plot').evaluateAll(nodes => nodes.map(node => node.querySelector('.bar-track')?.getBoundingClientRect().top));
+        check(ctx.name, 'desktop chart baselines align despite different header actions', tops.length === 2 && tops.every(top => typeof top === 'number') && Math.abs(tops[0] - tops[1]) <= 1, { tops });
+      }
       await layout(ctx); await screenshot(ctx, ctx.name + '-metrics');
       await ctx.page.goto(BASE + '/admin/logs');
       await ctx.page.getByRole('heading', { name: '运行日志', exact: true }).waitFor();

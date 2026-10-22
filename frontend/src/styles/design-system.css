@@ -13,7 +13,7 @@
   --danger-soft:#fff0ee;
   --warning:#925a00;
   --warning-soft:#fff6e8;
-  --success:#248a3d;
+  --success:#207a35;
   --success-soft:#edf7ee;
   --radius:8px;
   --content-max-width:1120px;
@@ -123,6 +123,7 @@
   flex-direction:column;
   gap:0;
   height:100vh;
+  overflow-y:auto;
   padding:24px 16px;
   background:var(--surface);
   border-right:1px solid var(--line);
@@ -865,6 +866,11 @@ small.form-error {
 }
 }
 @media(max-width:640px) {
+  :root {
+    --page-padding:16px;
+    --card-gap:12px;
+  }
+
   .topbar {
   padding:16px 16px 8px;
   gap:16px;
@@ -927,12 +933,12 @@ small.form-error {
 }
 
 .page-content {
-  padding:24px 16px 40px;
+  padding:16px 12px 32px;
 
 }
 
 .page-header {
-  margin-bottom:24px;
+  margin-bottom:16px;
   gap:8px;
 
 }
@@ -1160,9 +1166,11 @@ small.form-error {
     overflow-x:auto;
     padding:4px 0 8px;
     overscroll-behavior-inline:contain;
-    scrollbar-width:none;
+    scrollbar-width:thin;
+    scrollbar-color:rgba(29,29,31,.5) transparent;
   }
-  .app-shell:not(.public-shell) .topbar nav::-webkit-scrollbar { display:none; }
+  .app-shell:not(.public-shell) .topbar nav::-webkit-scrollbar { height:4px; }
+  .app-shell:not(.public-shell) .topbar nav::-webkit-scrollbar-thumb { background:rgba(29,29,31,.5); border-radius:3px; }
   .app-shell:not(.public-shell) .topbar nav a {
     flex:0 0 auto;
     justify-content:center;
