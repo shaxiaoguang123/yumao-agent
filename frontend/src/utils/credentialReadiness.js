@@ -1,4 +1,4 @@
-export function planSetupRequirement(credentials) {
+export function planSetupRequirement(credentials, { readOnly = false } = {}) {
   if (!Array.isArray(credentials) || credentials.length === 0) return 'token';
 
   const tokenReady = credentials.filter((credential) => (
@@ -10,7 +10,7 @@ export function planSetupRequirement(credentials) {
   ));
 
   if (!tokenReady.length) return 'token';
-  if (!tokenReady.some((credential) => credential.has_payment_password === true)) {
+  if (!readOnly && !tokenReady.some((credential) => credential.has_payment_password === true)) {
     return 'payment_password';
   }
   return '';

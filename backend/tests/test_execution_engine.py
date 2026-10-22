@@ -275,6 +275,30 @@ class ExecutionEngineTests(unittest.TestCase):
         self.assertEqual(sorted(stage["round_number"] for stage in done["stages"]
                                 if stage["stage_key"] == "booking_by_time"), [1, 2, 3])
 
+    def test_pending_order_with_a_nonempty_detail_paytime_is_never_successful(self):
+        pending = {"orderno": "order-a", "bookingno": "booking-a", "id": "id-a",
+                   "status": "5", "paytime": "2026-10-22 12:36:00"}
+        self.protocol.list_orders = lambda _token: self.protocol._reply({"success": True, "resultData": {"content": [pending]}})
+        self.protocol.order_details = lambda *_args, **_kwargs: self.protocol._reply({"success": True, "resultData": pending})
+        run = self._reconcile()
+        self._calibrate(run)
+        self.protocol.now = epoch(15, 7, 30, 1)
+        done = self.engine.execute(run["run_id"], USER, CREDENTIAL)
+        self.assertEqual(done["state"], "needs_attention")
+        self.assertEqual((self.protocol.create_calls, self.protocol.pay_calls), (1, 1))
+        self.assertEqual(self.engine.repository.list_successes(USER), [])
+        verification = next(item for item in done['stages'] if item['stage_key'] == 'payment_verification')
+        self.assertEqual((verification['outcome'], verification['safe_code']), ('uncertain', 'payment_pending'))
+
+    def test_failed_order_list_envelope_cannot_confirm_payment(self):
+        self.protocol.list_orders = lambda _token: self.protocol._reply({"success": False, "resultData": {"content": [{"orderno": "order-a", "status": "1"}]}})
+        run = self._reconcile()
+        self._calibrate(run)
+        self.protocol.now = epoch(15, 7, 30, 1)
+        done = self.engine.execute(run['run_id'], USER, CREDENTIAL)
+        self.assertEqual(done['state'], 'needs_attention')
+        self.assertEqual(self.engine.repository.list_successes(USER), [])
+
     def test_uncertain_order_creation_stops_without_replaying_or_paying(self):
         self.protocol.create_error = UpstreamCallError("upstream_transport_error", "uncertain")
         run = self._reconcile()

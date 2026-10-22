@@ -10,6 +10,7 @@ import { createHarness } from './harness.mjs';
 import { runBaseline } from './baseline.mjs';
 import { runRegressions } from './regressions.mjs';
 import { runRedesign } from './redesign.mjs';
+import { runOrders } from './orders.mjs';
 
 const frontend = fileURLToPath(new URL('../', import.meta.url));
 const repository = path.resolve(frontend, '..');
@@ -86,6 +87,7 @@ try {
   if (!process.argv.includes('--only-regressions')) await runBaseline(qa);
   await runRegressions(qa);
   await runRedesign(qa);
+  await runOrders(qa);
 } catch (error) {
   if (qa) qa.report.runnerError = { message: error.message };
   throw error;

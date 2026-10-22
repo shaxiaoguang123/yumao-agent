@@ -12,6 +12,8 @@ from backend.api.admin import admin_bp
 from backend.api.auth import auth_bp
 from backend.api.credentials import credentials_bp
 from backend.api.health import health_bp
+from backend.api.orders import orders_bp
+from backend.orders.service import OrderQueryService
 from backend.api.plans import plans_bp
 from backend.api.planning import planning_bp
 from backend.ai.planning import PlanningService
@@ -211,6 +213,11 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         settings.database_path, settings.sqlite_busy_timeout_ms,
     )
     app.extensions["booking_execution_protocol"] = booking_protocol
+    app.extensions["order_query_service"] = OrderQueryService(
+        credential_service=credential_service, protocol=booking_protocol,
+        reference_secret=settings.csrf_hmac_secret,
+        enabled=bool(settings.upstream_item_aes_key_ascii and settings.upstream_item_aes_iv_ascii),
+    )
     app.extensions["booking_execution_engine"] = booking_execution_engine
     app.extensions["booking_execution_repository"] = execution_repository
     app.extensions["booking_scheduler"] = BookingScheduler(
@@ -244,6 +251,7 @@ def create_app(config: Mapping[str, object] | None = None) -> Flask:
         history_preview_enabled=settings.app_env == 'development')
     app.extensions['venue_catalog_service'] = VenueCatalogService()
     app.register_blueprint(health_bp)
+    app.register_blueprint(orders_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(credentials_bp)
     app.register_blueprint(admin_bp)

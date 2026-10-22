@@ -18,6 +18,18 @@ function makeStore() {
 }
 
 describe('auth router guard', () => {
+  it('allows order reads without a payment password and keeps booking setup enforced', async () => {
+    const createAppRouter = await loadRouterFactory();
+    const store = { ...makeStore(), status: 'authenticated', initialRefreshComplete: true, user: { user_id: 'a', role: 'user' } };
+    const credentialApi = { list: vi.fn(async () => ({ credentials: [{ enabled: true, account_binding_state: 'confirmed',
+      requires_revalidation: false, last_confirmed_validation_state: 'confirmed_valid', expiry_state: 'expiry_ok', has_payment_password: false }] })) };
+    const router = createAppRouter(store, createMemoryHistory(), { credentialApi });
+    await router.push('/plans?tab=orders');
+    expect(router.currentRoute.value.name).toBe('plans');
+    await router.push('/plans?tab=manual');
+    expect(router.currentRoute.value.name).toBe('credentials');
+    expect(router.currentRoute.value.query.setup).toBe('payment_password');
+  });
   it('waits for the initial Session refresh before choosing a route', async () => {
     const createAppRouter = await loadRouterFactory();
     const store = makeStore();

@@ -86,7 +86,7 @@ export function createAppRouter(sessionStore, history = createWebHistory(), { cr
       }
       try {
         const result = await credentialApi.list();
-        const setup = planSetupRequirement(result?.credentials);
+        const setup = planSetupRequirement(result?.credentials, { readOnly: to.query.tab === 'orders' });
         if (setup) {
           return { name: 'credentials', query: { returnTo: 'plans', setup }, replace: true };
         }

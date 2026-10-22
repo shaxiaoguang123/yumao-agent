@@ -40,13 +40,34 @@ async function mountPlans(api=apiFixture(),extraProvide={},startPath='/plans'){
 }
 
 describe('reservation plan workspace',()=>{
- it('keeps the four work areas and uses the renamed ticket plan tab',async()=>{
+ it('keeps the existing work areas and adds read-only order queries',async()=>{
   const {wrapper}=await mountPlans();
-  expect(wrapper.findAll('[role="tab"]').map(tab=>tab.text().replace(/\s+/g,''))).toEqual(['查询场地','选择预约','Agent预约','抢票计划2']);
+  expect(wrapper.findAll('[role="tab"]').map(tab=>tab.text().replace(/\s+/g,''))).toEqual(['查询场地','选择预约','Agent预约','抢票计划2','查询订单']);
   expect(wrapper.get('#plan-panel-query').isVisible()).toBe(true);
   await wrapper.get('[data-testid="plan-tab-manual"]').trigger('click');await flushPromises();
   expect(wrapper.get('#plan-panel-manual [data-testid="browse-date-0"]').text()).toContain('周四');
   expect(wrapper.find('#plan-panel-manual form').exists()).toBe(false);
+ });
+ it('opens and restores the order tab without calling the Agent provider',async()=>{
+  const orderApi={query:vi.fn(async()=>({orders:[],status_options:[],page:1,page_size:10,total:0,total_pages:0,has_next:false})),details:vi.fn()};
+  const {wrapper,router}=await mountPlans(apiFixture(),{orderApi});
+  await wrapper.get('[data-testid="plan-tab-orders"]').trigger('click');await flushPromises();
+  expect(router.currentRoute.value.query.tab).toBe('orders');
+  expect(wrapper.get('#plan-panel-orders').isVisible()).toBe(true);
+  expect(orderApi.query).toHaveBeenLastCalledWith({credentialId:'credential-a',page:1,status:''});
+  await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');await flushPromises();
+  expect(wrapper.get('#plan-panel-current').isVisible()).toBe(true);
+  await router.replace('/plans?tab=orders');await flushPromises();
+  expect(wrapper.get('#plan-panel-orders').isVisible()).toBe(true);
+ });
+ it('does not start an Agent check after a booking setup guard redirects away from orders',async()=>{
+  const orderApi={query:vi.fn(async()=>({orders:[],status_options:[],page:1,page_size:10,total:0,total_pages:0,has_next:false})),details:vi.fn()};
+  const aiModelsApi={list:vi.fn(async()=>({effective_model_id:null,models:[]})),test:vi.fn()};
+  const {wrapper,router}=await mountPlans(apiFixture(),{orderApi,aiModelsApi},'/plans?tab=orders');
+  router.beforeEach(to=>to.name==='plans'&&to.query.tab==='agent'?{name:'credentials'}:true);
+  await wrapper.get('[data-testid="plan-tab-agent"]').trigger('click');await flushPromises();
+  expect(router.currentRoute.value.name).toBe('credentials');
+  expect(aiModelsApi.list).not.toHaveBeenCalled();
  });
  it('renders every 09:00–22:00 hourly row for the selected Token and saves by credential scope',async()=>{
   const {wrapper,api}=await mountPlans();await wrapper.get('[data-testid="plan-tab-manual"]').trigger('click');await flushPromises();

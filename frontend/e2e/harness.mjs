@@ -1,6 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { SYNTHETIC_CSRF, SYNTHETIC_CODE, SYNTHETIC_PASSWORD, SYNTHETIC_TOKEN, clone, credential, fixtures, viewports } from './fixtures.mjs';
+import { orderStatusOptions, syntheticOrders } from './orders.mjs';
 
 export function createHarness({ getBrowser, base: BASE, out: OUT, sourceHead }) {
   const report = { sourceHead, base: BASE, browser: {}, screenshots: [], checks: [], scenarios: [], externalRequests: [], unexpectedApiRequests: [], jsExceptions: [], console: [], requestFailures: [] };
@@ -98,6 +99,20 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
     }
     if (url.pathname === '/api/ai/models/visual-model/test' && record.method === 'POST') {
       await reply(200, { ok: true, message: 'synthetic connection success' }); return;
+    }
+    if (url.pathname === '/api/orders/query' && record.method === 'POST') {
+      if (state.orderQueryError) { await reply(429, { error: 'order_query_rate_limited', retry_after_seconds: 2 }); return; }
+      const body = request.postDataJSON();
+      const rows = state.orderQueryEmpty ? [] : syntheticOrders(body.credential_id).filter(item => !body.status || item.status === body.status);
+      const start = (body.page - 1) * body.page_size;
+      await reply(200, { orders: rows.slice(start, start + body.page_size), page: body.page, page_size: body.page_size,
+        total: rows.length, total_pages: Math.ceil(rows.length / body.page_size), has_next: start + body.page_size < rows.length,
+        status_options: orderStatusOptions, queried_at_utc_ms: Date.UTC(2026, 9, 22, 4, 36) }); return;
+    }
+    if (url.pathname === '/api/orders/details' && record.method === 'POST') {
+      const body = request.postDataJSON();
+      const order = syntheticOrders(body.credential_id).find(item => item.reference === body.reference);
+      await reply(order ? 200 : 404, order ? { order, queried_at_utc_ms: Date.UTC(2026, 9, 22, 4, 36) } : { error: 'order_not_found' }); return;
     }
     if (url.pathname === '/api/plans' && record.method === 'GET') { await reply(200, { plans: [] }); return; }
     if (scopedPlanningConversationRead && record.method === 'GET') { await reply(200, { conversation: null }); return; }
@@ -254,7 +269,12 @@ async function tabs(ctx) {
   check(ctx.name, 'keyboard Tab and focus indication', controls.length > 0 && controls.every((item) => item.visible && (item.outlineStyle !== 'none' && parseFloat(item.outlineWidth) > 0 || item.boxShadow !== 'none')), { sequence });
 }
 async function privacy(ctx) {
-  const data = await ctx.page.evaluate(() => ({ localKeys: Object.keys(localStorage), sessionKeys: Object.keys(sessionStorage), urlHasQuery: Boolean(location.search || location.hash) }));
+  const data = await ctx.page.evaluate(() => {
+    const query = new URLSearchParams(location.search);
+    const navigationOnly = location.pathname === '/plans' && [...query.keys()].every(key => key === 'tab')
+      && query.getAll('tab').length === 1 && ['query','manual','agent','current','orders'].includes(query.get('tab'));
+    return { localKeys: Object.keys(localStorage), sessionKeys: Object.keys(sessionStorage), urlHasQuery: Boolean(location.hash || (location.search && !navigationOnly)) };
+  });
   check(ctx.name, 'no persistent synthetic credentials or URL data', data.localKeys.length === 0 && data.sessionKeys.length === 0 && !data.urlHasQuery, data);
   const mutations = ctx.state.requests.filter((item) => 'csrfValid' in item);
   check(ctx.name, 'authenticated mutations carry Session CSRF', mutations.every((item) => item.csrfValid), { mutations });
