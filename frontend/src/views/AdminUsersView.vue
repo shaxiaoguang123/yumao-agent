@@ -121,12 +121,9 @@ onBeforeUnmount(() => {
   <section class="admin-users-page" aria-labelledby="admin-users-title">
     <PageHeader
       title-id="admin-users-title"
-      eyebrow="管理员工作台"
       title="用户管理"
-      description="查看账户状态，管理用户访问权限。"
     />
 
-    <ActivityOverview v-if="authorized" system />
 
     <p v-if="!authorized" class="form-error" role="alert">管理员登录状态已失效，请重新登录。</p>
     <p v-if="errorMessage" class="form-error" role="alert">{{ errorMessage }} <button class="text-button" type="button" @click="load()">重试</button></p>
@@ -141,7 +138,7 @@ onBeforeUnmount(() => {
 
     <section class="panel admin-user-panel" aria-labelledby="admin-user-list-title" :aria-busy="status === 'loading'">
       <div class="admin-user-heading">
-        <div><h2 id="admin-user-list-title">账户列表</h2><p class="muted">列表不包含密码、Token 或 API 密钥。</p></div>
+        <div><h2 id="admin-user-list-title">账户列表</h2></div>
         <RouterLink class="secondary-button" :to="{ name: 'admin-invitations' }">管理邀请码</RouterLink>
       </div>
 
@@ -178,14 +175,15 @@ onBeforeUnmount(() => {
         <div><button class="secondary-button" type="button" :disabled="offset === 0 || status === 'loading'" @click="load(Math.max(0, offset - pageSize))">上一页</button><button class="secondary-button" type="button" :disabled="offset + pageSize >= total || status === 'loading'" @click="load(offset + pageSize)">下一页</button></div>
       </footer>
     </section>
+    <details v-if="authorized" class="disclosure-panel admin-runtime-overview"><summary>全站运行概览<small>预约执行与异常趋势</small></summary><div class="disclosure-body"><ActivityOverview system /></div></details>
   </section>
 </template>
 
 <style scoped>
-.admin-users-page{display:grid;gap:16px;min-width:0}
-.admin-user-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
-.admin-stat{display:grid;gap:8px;padding:16px;min-width:0}
-.admin-stat>span,.admin-stat small{color:var(--muted);font-size:13px}
+.admin-users-page{display:grid;gap:16px;min-width:0}.admin-users-page .page-header{margin-bottom:0}.admin-runtime-overview :deep(.activity-overview){margin-top:0}
+.admin-user-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.admin-stat{display:grid;gap:4px;align-content:start;padding:14px 16px;min-width:0;border:0;border-right:1px solid var(--line);border-radius:0;box-shadow:none}.admin-stat:last-child{border-right:0}
+.admin-stat>span{color:var(--muted);font-size:12px}.admin-stat small{display:none}.admin-stat:last-child small{display:block;font-size:11px;color:var(--muted)}
 .admin-stat strong{font-size:30px;line-height:1.1;font-variant-numeric:tabular-nums}
 .admin-user-panel{display:grid;gap:16px;padding:16px;min-width:0}
 .admin-user-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
@@ -208,14 +206,24 @@ onBeforeUnmount(() => {
 .admin-user-pagination{display:flex;justify-content:space-between;align-items:center;gap:12px;color:var(--muted);font-size:13px}
 .admin-user-pagination>div{display:flex;gap:8px}
 .admin-user-pagination button{min-height:36px}
-@media(max-width:850px){.admin-user-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.admin-user-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.admin-user-search{grid-column:1/-1}}
+@media(max-width:850px){.admin-user-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.admin-stat{border-bottom:1px solid var(--line)}.admin-stat:nth-child(2n){border-right:0}.admin-stat:nth-last-child(-n+2){border-bottom:0}.admin-user-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.admin-user-search{grid-column:1/-1}}
 @media(max-width:640px){
-  .admin-user-filters{grid-template-columns:minmax(0,1fr)}.admin-user-search{grid-column:auto}.admin-user-filters button{width:100%}
-  .admin-user-table-scroll{overflow:visible}.admin-user-table,.admin-user-table tbody{display:block}.admin-user-table thead{display:none}
-  .admin-user-table tr{display:grid;gap:0;margin-bottom:12px;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--page)}
-  .admin-user-table th[scope=row]{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 0 12px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
-  .admin-user-table td{display:grid;grid-template-columns:minmax(88px,.8fr) minmax(0,1.2fr);align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--line);text-align:right;overflow-wrap:anywhere}
-  .admin-user-table td:last-child{border-bottom:0;padding-bottom:0}.admin-user-table td::before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:600;text-align:left}
-  .admin-user-table td button{width:100%;min-height:44px}.admin-user-pagination{align-items:stretch;flex-direction:column}.admin-user-pagination>div{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.admin-user-pagination button{min-height:44px}
+ .admin-user-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .admin-user-search { grid-column:1/-1; }
+ .admin-user-filters button { min-height:44px; }
+ .admin-user-table-scroll { overflow:visible; }
+ .admin-user-table,.admin-user-table tbody { display:block; }
+ .admin-user-table thead { display:none; }
+ .admin-user-table tr { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:4px 8px; padding:12px 0; border-bottom:1px solid var(--line); }
+ .admin-user-table tr:last-child { border:0; }
+ .admin-user-table th[scope=row] { grid-column:1; padding:0; border:0; overflow-wrap:anywhere; }
+ .admin-user-table td { border:0; padding:0; font-size:12px; }
+ .admin-user-table td[data-label="角色"] { grid-column:1; color:var(--muted); }
+ .admin-user-table td[data-label="状态"] { grid-column:2; grid-row:1; justify-self:end; }
+ .admin-user-table td[data-label="创建时间"] { grid-column:1; color:var(--muted); }
+ .admin-user-table td[data-label="操作"] { grid-column:2; grid-row:2/4; justify-self:end; }
+ .admin-user-table td button { min-height:44px; }
+ .admin-user-pagination { flex-direction:column; align-items:stretch; }
+ .admin-user-pagination > div { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 </style>

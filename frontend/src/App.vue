@@ -16,7 +16,16 @@ async function revealActiveNavigationItem() {
   nav.scrollLeft += activeRect.left - navRect.left - (nav.clientWidth - active.offsetWidth) / 2;
  }
 }
-watch([() => route.fullPath, () => sessionStore?.user?.role], revealActiveNavigationItem, { flush: 'post' });
+function closeNavigationMenus(event) {
+ const menu = navElement.value?.querySelector('details[open]');
+ if (!menu) return;
+ menu.open = false;
+ if (event?.key === 'Escape') menu.querySelector('summary')?.focus();
+}
+watch([() => route.fullPath, () => sessionStore?.user?.role], () => {
+ closeNavigationMenus();
+ revealActiveNavigationItem();
+}, { flush: 'post' });
 onMounted(() => {
  window.addEventListener('resize', revealActiveNavigationItem);
  revealActiveNavigationItem();
@@ -27,27 +36,34 @@ onUnmounted(() => window.removeEventListener('resize', revealActiveNavigationIte
  <div class="app-shell" :class="{ 'public-shell': !sessionStore?.user }">
   <a class="skip-link" href="#main-content">跳到主要内容</a>
   <header class="topbar">
+   <div class="topbar-inner">
    <RouterLink class="brand" :to="{name:'home'}"><span class="brand-mark"><AppIcon name="court" /></span><span><span class="brand-title">羽毛球预约工作台</span><small>YUMAO WORKSPACE</small></span></RouterLink>
-   <p v-if="sessionStore?.user" class="nav-caption">工作空间</p>
-   <nav ref="navElement" aria-label="主导航" :class="{'admin-nav':sessionStore?.user?.role==='admin'}">
+   <nav ref="navElement" aria-label="主导航" :class="{'admin-nav':sessionStore?.user?.role==='admin'}" @keydown.esc="closeNavigationMenus">
     <RouterLink v-if="sessionStore?.user" :to="{name:'home'}"><AppIcon name="home" />首页</RouterLink>
     <RouterLink v-if="sessionStore?.user" :to="{name:'credentials'}"><AppIcon name="shield" />预约凭据</RouterLink>
     <RouterLink v-if="sessionStore?.user" :to="{name:'plans'}"><AppIcon name="clock" />预约计划</RouterLink>
-    <RouterLink v-if="sessionStore?.user?.role==='admin'" data-testid="admin-users-link" :to="{name:'admin-users'}"><AppIcon name="user" />用户管理</RouterLink>
-    <RouterLink v-if="sessionStore?.user?.role==='admin'" data-testid="admin-logs-link" :to="{name:'admin-logs'}"><AppIcon name="clock" />运行日志</RouterLink>
-    <RouterLink v-if="sessionStore?.user?.role==='admin'" data-testid="admin-invitations-link" :to="{name:'admin-invitations'}"><AppIcon name="ticket" />邀请码管理</RouterLink>
-    <RouterLink v-if="sessionStore?.user" :to="{name:'account'}"><AppIcon name="user" />账户</RouterLink>
-    <RouterLink v-if="sessionStore?.user" :to="{name:'ai-models'}"><AppIcon name="settings" />设置 · AI模型</RouterLink>
+    <details v-if="sessionStore?.user?.role==='admin'" class="nav-group" name="workspace-navigation" :class="{'is-active':String(route.name).startsWith('admin-')}">
+     <summary><AppIcon name="user" />管理<AppIcon class="nav-chevron" name="down" /></summary>
+     <div class="nav-menu">
+      <RouterLink data-testid="admin-users-link" :to="{name:'admin-users'}"><AppIcon name="user" />用户管理</RouterLink>
+      <RouterLink data-testid="admin-logs-link" :to="{name:'admin-logs'}"><AppIcon name="clock" />运行日志</RouterLink>
+      <RouterLink data-testid="admin-invitations-link" :to="{name:'admin-invitations'}"><AppIcon name="ticket" />邀请码管理</RouterLink>
+     </div>
+    </details>
+    <details v-if="sessionStore?.user" class="nav-group" name="workspace-navigation" :class="{'is-active':['account','ai-models'].includes(route.name)}">
+     <summary><AppIcon name="settings" />设置<AppIcon class="nav-chevron" name="down" /></summary>
+     <div class="nav-menu">
+      <RouterLink :to="{name:'account'}"><AppIcon name="user" />账户</RouterLink>
+      <RouterLink :to="{name:'ai-models'}"><AppIcon name="settings" />设置 · AI模型</RouterLink>
+     </div>
+    </details>
     <RouterLink v-if="!sessionStore?.user" :to="{name:'login'}"><AppIcon name="user" />登录</RouterLink>
    </nav>
-   <div v-if="sessionStore?.user" class="sidebar-user">
+   <RouterLink v-if="sessionStore?.user" class="workspace-profile" :to="{name:'account'}" aria-label="当前账户设置">
     <span class="avatar">{{ sessionStore.user.username?.slice(0,1).toUpperCase() }}</span>
-    <span class="sidebar-user-meta">
-     <strong>{{ sessionStore.user.username }}</strong>
-     <span>{{ sessionStore.user.role==='admin'?'管理员':'用户' }}</span>
-    </span>
+    <span class="profile-name">{{ sessionStore.user.username }}</span>
+   </RouterLink>
    </div>
-   <div v-if="sessionStore?.user" class="sidebar-note"><span class="availability-dot" />目前开放<p>账户、凭据与意向草稿</p><small>让每一步准备都清晰可见。</small></div>
   </header>
   <div class="workspace">
    <main id="main-content" class="page-content" tabindex="-1"><RouterView /></main>

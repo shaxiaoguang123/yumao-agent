@@ -73,8 +73,8 @@ describe('reservation plan workspace',()=>{
   const {wrapper,api}=await mountPlans();await wrapper.get('[data-testid="plan-tab-manual"]').trigger('click');await flushPromises();
   expect(wrapper.text()).toContain('Token A');
   expect(wrapper.findAll('.manual-queue-grid tbody tr')).toHaveLength(13);
-  expect(wrapper.get('.manual-queue-grid tbody tr:first-child th').text()).toBe('09:00–10:00');
-  expect(wrapper.get('.manual-queue-grid tbody tr:last-child th').text()).toBe('21:00–22:00');
+  expect(wrapper.get('.manual-queue-grid tbody tr:first-child th').text()).toBe('09–10');
+  expect(wrapper.get('.manual-queue-grid tbody tr:last-child th').text()).toBe('21–22');
   await wrapper.get('[data-testid="queue-cell-1-0"]').trigger('click');
   await new Promise(resolve=>setTimeout(resolve,500));await flushPromises();
   expect(api.saveQueue).toHaveBeenCalledWith('2026-10-17',3,[{court_preference:'6号场',start_time:'18:00',end_time:'20:00',duration_minutes:120,scope_label:'羽毛球'},{court_preference:'6号场',start_time:'10:00',end_time:'12:00',duration_minutes:120,scope_label:'羽毛球'}],'credential-a');

@@ -308,7 +308,7 @@ onUnmounted(() => {
 
 <template>
   <section class="credential-page" aria-labelledby="credential-title">
-    <PageHeader title-id="credential-title" eyebrow="账户安全 · 凭据管理" title="预约凭据" />
+    <PageHeader title-id="credential-title" title="预约凭据" />
 
     <p v-if="planSetupNotice" class="credential-message error-message" role="alert">
       {{ planSetupNotice }}
@@ -327,19 +327,6 @@ onUnmounted(() => {
     </p>
 
     <div class="credential-workspace">
-    <section class="credential-add panel" aria-labelledby="credential-add-title">
-      <header class="credential-add-heading">
-        <span class="section-icon"><AppIcon name="plus" /></span>
-        <div><h2 id="credential-add-title">添加预约凭据</h2><p class="muted">Token 验证后加密保存；支付密码单独加密保存，不参与 Token 验证。</p></div>
-      </header>
-      <form class="credential-create-grid" data-testid="credential-create" @submit.prevent="createCredential">
-        <label class="field">凭据名称<input v-model="label" data-testid="credential-label" type="text" maxlength="128" autocomplete="off" required /></label>
-        <label class="field">上游 Token<input v-model="createToken" data-testid="credential-token" type="password" autocomplete="off" spellcheck="false" required /></label>
-        <label class="field">支付密码<input v-model="createPaymentPassword" data-testid="credential-payment-password" type="password" autocomplete="new-password" required /><small>单独加密保存；非空抢票队列授权付款，执行器启用后才会执行。</small></label>
-        <div class="credential-actions"><button class="primary-button" type="submit" :disabled="creating">{{ creating ? '验证并保存中…' : '验证并保存凭据' }}</button><button class="secondary-button" type="button" data-testid="credential-create-cancel" @click="cancelCreate">清空</button></div>
-      </form>
-    </section>
-
     <section class="credential-list" aria-labelledby="credential-list-title" :aria-busy="loading">
       <div class="section-heading">
         <h2 id="credential-list-title">已保存凭据</h2>
@@ -403,123 +390,53 @@ onUnmounted(() => {
       </CredentialCard>
       </div>
     </section>
+    <details class="credential-add disclosure-panel" :open="!credentials.length || Boolean(planSetupNotice) || creating || Boolean(createToken)" @toggle="!$event.currentTarget.open && cancelCreate()">
+      <summary><span>添加预约凭据</span><small>Token 与支付密码</small></summary>
+      <div class="disclosure-body">
+      <header class="credential-add-heading">
+
+        <div><h2 id="credential-add-title" class="sr-only">添加预约凭据</h2><p class="muted">Token 与支付密码分别加密保存。</p></div>
+      </header>
+      <form class="credential-create-grid" data-testid="credential-create" @submit.prevent="createCredential">
+        <label class="field">凭据名称<input v-model="label" data-testid="credential-label" type="text" maxlength="128" autocomplete="off" required /></label>
+        <label class="field">上游 Token<input v-model="createToken" data-testid="credential-token" type="password" autocomplete="off" spellcheck="false" required /></label>
+        <label class="field">支付密码<input v-model="createPaymentPassword" data-testid="credential-payment-password" type="password" autocomplete="new-password" required /><small>单独加密保存；非空抢票队列授权付款，执行器启用后才会执行。</small></label>
+        <div class="credential-actions"><button class="primary-button" type="submit" :disabled="creating">{{ creating ? '验证并保存中…' : '验证并保存凭据' }}</button><button class="secondary-button" type="button" data-testid="credential-create-cancel" @click="cancelCreate">清空</button></div>
+      </form>
+      </div>
+    </details>
+
     </div>
   </section>
 </template>
 
 <style scoped>
-.credential-message {
-  margin:0 0 16px;
-
+.credential-message { margin:0 0 12px; }
+.credential-workspace,.credential-list { display:grid; grid-template-columns:minmax(0,1fr); gap:16px; min-width:0; }
+.credential-list .section-heading h2 { font-size:16px; }
+.credential-add-heading { margin-bottom:12px; }
+.credential-add-heading p { margin:0; font-size:13px; }
+.credential-create-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:start; gap:12px; }
+.credential-create-grid .field small { font-size:12px; line-height:1.5; font-weight:400; color:var(--muted); }
+.credential-create-grid > .credential-actions { grid-column:1/-1; }
+.credential-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.credential-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,430px),1fr)); gap:16px; align-items:start; min-width:0; }
+.credential-toolbar { display:flex; align-items:center; gap:8px; }
+.search-field { position:relative; flex:1; min-width:0; }
+.search-field svg { position:absolute; left:12px; top:13px; color:var(--muted); }
+.search-field input { padding-left:40px; }
+.filter-field { min-width:0; }
+.filter-field select { min-height:44px; max-width:100%; padding:8px 12px; border:1px solid var(--line); border-radius:14px; background:var(--surface); color:var(--ink); font:inherit; font-size:13px; }
+.search-empty { margin:0; padding:16px; border:1px dashed var(--line); border-radius:16px; font-size:13px; color:var(--muted); }
+.rotation-form { display:grid; gap:12px; margin-top:16px; padding:16px; border:1px solid var(--line); border-radius:16px; background:var(--page); }
+.rotation-form p { margin:0; font-size:12px; }
+@media(max-width:600px) {
+ .credential-create-grid { grid-template-columns:minmax(0,1fr); }
+ .credential-cards,.credential-workspace,.credential-list { gap:12px; }
+ .credential-toolbar { flex-wrap:wrap; }
+ .search-field { flex-basis:100%; }
+ .filter-field,.filter-field select { width:100%; }
+ .credential-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .credential-actions button { padding-inline:10px; }
 }
-
-.credential-workspace {
-  display:grid;
-  grid-template-columns:minmax(0,1fr);
-  gap:16px;
-  align-items:start;
-
-}
-
-.credential-add{padding:16px;min-width:0}.credential-add-heading{display:flex;align-items:flex-start;gap:8px;margin-bottom:16px}.credential-add-heading .section-icon{flex:0 0 40px;height:40px;display:grid;place-items:center;border:1px solid var(--line);border-radius:8px;background:var(--brand-soft);color:var(--brand)}.credential-add-heading h2{font-size:17px;margin:0}.credential-add-heading p{font-size:12px;line-height:1.6;margin:8px 0 0}.credential-create-grid{display:grid;gap:16px}.credential-create-grid .field{min-width:0}.credential-create-grid .field input{min-width:0;width:100%}.credential-create-grid .field small{font-size:11px;color:var(--muted);line-height:1.5}.credential-create-grid button{min-height:var(--control-height);font-size:12px}.credential-create-grid .credential-actions{margin-top:8px}
-
-.credential-actions {
-  display:flex;
-  flex-wrap:wrap;
-  gap:8px;
-
-}
-
-.credential-list {
-  display:grid;
-  grid-template-columns:minmax(0,1fr);
-  gap:16px;
-  min-width:0;
-
-}
-.credential-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:8px;align-items:start;min-width:0}.credential-cards :deep(.credential-card){height:100%;padding:16px}.credential-cards :deep(.credential-facts){grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 16px;margin:16px 0}.credential-cards :deep(.credential-actions){gap:8px}.credential-cards :deep(.credential-actions button){min-height:var(--control-height);padding:8px 8px;font-size:11px}
-
-.section-heading h2 {
-  font-size:18px;
-
-}
-
-.credential-toolbar {
-  display:flex;
-  gap:8px;
-
-}
-
-.search-field {
-  position:relative;
-  min-width:0;
-  flex:1;
-
-}
-
-.search-field svg {
-  position:absolute;
-  top:14px;
-  left:12px;
-  color:var(--muted);
-
-}
-
-.search-field input {
-  padding-left:40px;
-  font-size:13px;
-
-}
-
-.filter-field select {
-  min-height:var(--control-height);
-  max-width:100%;
-  padding:8px 24px 8px 16px;
-  background:white;
-  border:1px solid var(--line);
-  border-radius:8px;
-  color:var(--ink);
-  font-size:12px;
-
-}
-
-.search-empty {
-  font-size:13px;
-  color:var(--muted);
-  padding:16px;
-  border:1px dashed var(--line);
-  border-radius:16px;
-
-}
-
-.text-button {
-  padding-inline:8px;
-
-}
-
-.rotation-form {
-  margin-top:16px;
-  display:grid;
-  gap:8px;
-  background:var(--page);
-  border:1px solid var(--line);
-  border-radius:8px;
-  padding:16px;
-
-}
-
-.sr-only {
-  position:absolute;
-  width:1px;
-  height:1px;
-  padding:0;
-  margin:-8px;
-  overflow:hidden;
-  clip:rect(0,0,0,0);
-  white-space:nowrap;
-  border:0;
-
-}
-@media(min-width:1050px){.credential-workspace{grid-template-columns:minmax(270px,310px) minmax(0,1fr)}}
-@media(max-width:640px){.credential-workspace{gap:8px}.credential-add{padding:16px}.credential-cards{grid-template-columns:minmax(0,1fr)}.credential-cards :deep(.credential-facts){grid-template-columns:minmax(0,1fr)}.credential-toolbar{flex-wrap:wrap}.search-field{flex-basis:100%}.filter-field{width:100%}.filter-field select{width:100%}.credential-create-grid>.credential-actions{display:grid;grid-template-columns:minmax(0,1fr)}.credential-create-grid>.credential-actions button{width:100%}.rotation-form>.credential-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.rotation-form>.credential-actions button{width:100%}}
 </style>

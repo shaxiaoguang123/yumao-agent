@@ -95,13 +95,13 @@ function formatHistoryDate(value) {
     <header class="proposal-chat-heading">
       <div class="proposal-chat-identity">
         <span class="proposal-chat-avatar"><AppIcon name="bot" /></span>
-        <div><h2 id="proposal-chat-title">预约助手</h2><p>{{ assistantSubtitle }}</p></div>
+        <div class="chat-identity-title"><h2 id="proposal-chat-title">预约助手</h2><div v-if="showCredentialStatus && $slots['system-message']" class="chat-status-bar"><slot name="system-message" /></div></div>
       </div>
       <div class="chat-header-actions">
         <div v-if="$slots['header-actions']" class="chat-credential-toolbar"><slot name="header-actions" /></div>
         <div class="chat-conversation-actions">
         <RouterLink class="proposal-settings" :to="{ name: 'ai-models' }" aria-label="模型设置" title="模型设置"><AppIcon name="settings" /></RouterLink>
-        <button v-if="showConversationHistory" class="chat-new-button" data-testid="restart-conversation" type="button" :disabled="interactionDisabled" @click="emit('new-conversation')"><AppIcon name="plus" />新对话</button>
+        <button v-if="showConversationHistory" class="chat-new-button" data-testid="restart-conversation" type="button" aria-label="新对话" :disabled="interactionDisabled" @click="emit('new-conversation')"><AppIcon name="plus" /><span class="chat-action-label">新对话</span></button>
         <button v-else class="chat-restart-button" data-testid="restart-conversation" type="button" aria-label="重新开始对话" title="重新开始对话" @click="emit('restart')"><slot name="restart-icon"><AppIcon name="refresh" /></slot></button>
         <details v-if="showConversationHistory" class="conversation-history">
           <summary :aria-label="`历史对话，${conversations.length}条`">历史 <span>{{ conversations.length }}</span></summary>
@@ -119,7 +119,6 @@ function formatHistoryDate(value) {
         </div>
       </div>
     </header>
-    <div v-if="showCredentialStatus && $slots['system-message']" class="chat-status-bar"><slot name="system-message" /></div>
     <ol v-if="slots.length" class="slot-strip" aria-label="预约信息进度">
       <li v-for="slot in slots" :key="slot.id" :class="`is-${slot.state}`">
         <span>{{ slot.label }}</span>
@@ -179,9 +178,9 @@ function formatHistoryDate(value) {
 
 <style scoped>
 .proposal-chat { display:flex; flex-direction:column; width:100%; min-width:0; border:1px solid var(--line); border-radius:20px; background:var(--surface); }
-.proposal-chat-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; min-height:72px; padding:12px 16px; border-bottom:1px solid var(--line); }
+.proposal-chat-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; min-height:60px; padding:8px 16px; border-bottom:1px solid var(--line); }
 .proposal-chat-identity { display:flex; align-items:center; gap:12px; min-width:0; }
-.proposal-chat-avatar { flex:none; width:40px; height:40px; display:grid; place-items:center; border-radius:14px; background:var(--brand-soft); color:var(--brand); }
+.proposal-chat-avatar { flex:none; width:32px; height:32px; display:grid; place-items:center; border-radius:14px; background:var(--brand-soft); color:var(--brand); }
 .proposal-chat-avatar :deep(.app-icon) { width:20px; height:20px; }
 .proposal-chat-heading h2 { margin:0; font-size:17px; font-weight:650; }
 .proposal-chat-heading p { margin:4px 0 0; color:var(--muted); font-size:13px; line-height:1.4; }
@@ -209,7 +208,7 @@ function formatHistoryDate(value) {
 .conversation-history-item > span { display:flex; justify-content:space-between; gap:8px; color:var(--muted); font-size:11px; }
 .conversation-history-item em { color:var(--brand); font-style:normal; }
 .conversation-history-item:disabled { opacity:.55; cursor:not-allowed; }
-.chat-status-bar { padding:0 16px; border-bottom:1px solid var(--line); background:var(--page); }
+.chat-identity-title { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; min-width:0; }.chat-status-bar { padding:0; min-width:0; }.chat-status-bar:has(.is-blocked) { flex-basis:100%; }
 .slot-strip { display:flex; gap:8px; margin:0; padding:8px 16px; overflow-x:auto; list-style:none; border-bottom:1px solid var(--line); background:var(--surface); }
 .slot-strip li { flex:0 0 auto; max-width:260px; padding:6px 10px; border-radius:999px; background:var(--page); }
 .slot-strip span, .slot-strip strong { display:inline; }
@@ -222,7 +221,7 @@ function formatHistoryDate(value) {
 .proposal-chat.has-queue-preview .proposal-chat-body { grid-template-columns:minmax(0, 1fr) minmax(240px, 300px); }
 .proposal-chat-preview { min-width:0; }
 .proposal-chat-main { display:flex; flex-direction:column; min-width:0; }
-.proposal-chat-messages { display:flex; min-width:0; min-height:320px; max-height:clamp(320px, 58vh, 620px); overflow-y:auto; overscroll-behavior:contain; padding:16px; border-radius:16px; background:var(--page); }
+.proposal-chat-messages { display:flex; min-width:0; min-height:220px; max-height:clamp(260px, 50dvh, 560px); overflow-y:auto; overscroll-behavior:contain; padding:12px; border-radius:16px; background:var(--page); }
 .chat-conversation-group { width:100%; max-width:820px; margin:0 auto; }
 .chat-message-list { display:grid; gap:10px; padding:0; margin:0; list-style:none; }
 .chat-row { display:flex; min-width:0; }
@@ -268,13 +267,13 @@ function formatHistoryDate(value) {
 @keyframes chat-pulse { 50% { opacity:.35; } }
 @media (max-width:1024px) {
   .proposal-chat.has-queue-preview .proposal-chat-body { grid-template-columns:minmax(0, 1fr); }
-  .proposal-chat-messages { min-height:260px; max-height:52vh; }
+  .proposal-chat-messages { min-height:200px; max-height:48vh; }
   .proposal-chat-preview { order:-1; }
 }
 @media (max-width:600px) {
   .proposal-chat-heading { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px 8px; padding:8px 12px; }
   .proposal-chat-identity { gap:8px; }
-  .proposal-chat-avatar { width:28px; height:28px; border-radius:9px; }
+  .proposal-chat-avatar { display:none; }
   .proposal-chat-heading h2 { font-size:16px; }
   .proposal-chat-heading p { display:none; }
   .chat-header-actions { display:contents; }
@@ -293,7 +292,9 @@ function formatHistoryDate(value) {
   .trace-item time { grid-column:2; }
 }
 @media (max-width:380px) {
-  .proposal-chat-avatar { display:none; }
+  .proposal-chat-avatar,.chat-action-label { display:none; }
+  .chat-new-button { width:44px; padding:0; }
+  .chat-status-bar :deep(.agent-credential-gate.is-ready .agent-gate-copy) { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); }
   .proposal-chat-heading { padding:4px 8px; }
   .proposal-chat-body { padding:8px; gap:8px; }
   .proposal-chat-messages { min-height:156px; padding:8px; }

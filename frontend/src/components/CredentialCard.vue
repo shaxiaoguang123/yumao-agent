@@ -194,222 +194,33 @@ function riskClass(credential) {
       </article>
 </template>
 <style scoped>
-.credential-card {
-  min-width:0;
-  padding:24px;
-  border:1px solid var(--line);
-  border-radius:16px;
-  background:var(--surface);
-
-}
-.credential-card{border-left:3px solid transparent}.credential-card.risk-critical{border-left-color:var(--danger)}.credential-card.risk-warning{border-left-color:var(--warning)}
-
-.credential-card-heading {
-  display:flex;
-  justify-content:space-between;
-  align-items:flex-start;
-  gap:16px;
-
-}
-
-.credential-identity {
-  min-width:0;
-
-}
-
-.credential-card-heading h3 {
-  margin:0;
-  overflow-wrap:anywhere;
-  font-weight:650;
-  line-height:1.5;
-
-}
-
-.credential-card-heading p {
-  margin:8px 0 0;
-  font-size:10px;
-  color:var(--muted);
-
-}
-
-.credential-facts {
-  display:grid;
-  grid-template-columns:repeat(3,minmax(0,1fr));
-  gap:16px 24px;
-  margin:24px 0;
-
-}
-
-.credential-facts > div {
-  min-width:0;
-
-}  .credential-facts dt {
-  font-size:11px;
-  color:var(--muted);
-
-}
-
-.credential-facts dd {
-  margin:8px 0 0;
-  font-size:12px;
-  line-height:1.75;
-  overflow-wrap:anywhere;
-
-}
-
-.credential-facts dd span {
-  display:block;
-  font-size:11px;
-
-}
-
-.risk-note {
-  margin:8px 0;
-  padding:8px 16px;
-  border-left:2px solid #d0a557;
-  border-radius:8px;
-  background:var(--warning-soft);
-  color:var(--warning);
-  font-size:12px;
-  line-height:1.8;
-
-}
-
-.danger-note {
-  background:var(--danger-soft);
-  color:var(--danger);
-  border-left-color:var(--danger);
-
-}
-
-.credential-actions {
-  display:flex;
-  flex-wrap:wrap;
-  gap:8px;
-  padding-top:8px;
-
-}
-
-.credential-actions button {
-  font-size:12px;
-  padding:8px 8px;
-
-}
-@media(max-width:640px) {
-  .credential-card {
-  padding:16px;
-
-}
-
-.credential-facts {
-  grid-template-columns:minmax(0,1fr);
-  gap:12px;
-
-}
-
-.credential-actions {
-  display:grid;
-  grid-template-columns:repeat(2,minmax(0,1fr));
-}
-.credential-actions button {
-  width:100%;
-  font-size:12px;
-  white-space:normal;
-
-}
-}
-@media(max-width:380px) {
-  .credential-actions { grid-template-columns:minmax(0,1fr); }
-}
-.fact-state {
-  font-weight:600;
-
-}
-
-.fact-positive {
-  color:var(--brand);
-
-}
-
-.fact-warning {
-  color:var(--warning);
-
-}
-
-.validation-record {
-  border-top:1px solid var(--line);
-  margin-bottom:8px;
-
-}
-
-.validation-record summary {
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  gap:8px;
-  min-height:var(--control-height);
-  cursor:pointer;
-  color:var(--muted);
-  font-size:11px;
-  list-style:none;
-
-}
-
-.validation-record summary:after {
-  content:"+";
-  font-size:17px;
-  color:var(--brand);
-
-}
-
-.validation-record[open] summary:after {
-  content:"−";
-
-}
-
-.validation-record summary > span:first-child {
-  display:flex;
-  align-items:center;
-  gap:8px;
-
-}
-
-.validation-record summary svg {
-  width:15px;
-  height:15px;
-
-}
-
-.record-result {
-  margin-left:auto;
-  font-size:11px;
-
-}
-
-.validation-record dl {
-  padding:8px 16px;
-  margin:0 0 8px;
-  background:var(--page);
-  border-radius:8px;
-  font-size:11px;
-  line-height:1.7;
-
-}
-
-.validation-record dt {
-  color:var(--muted);
-  margin-bottom:8px;
-
-}
-
-.validation-record dd {
-  margin:0;
-
-}
-
-.validation-record dd span {
-  display:block;
-  color:var(--muted);
-
-}
+.credential-card { min-width:0; padding:20px; border:1px solid var(--line); border-radius:24px; background:var(--surface); box-shadow:var(--shadow); }
+.credential-card.risk-danger { border-left:3px solid var(--danger); }
+.credential-card.risk-warning { border-left:3px solid var(--warning); }
+.credential-card-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.credential-identity { min-width:0; }
+.credential-card-heading h3 { font-size:16px; overflow-wrap:anywhere; }
+.credential-card-heading p { margin:2px 0 0; color:var(--muted); font-size:11px; }
+.credential-facts { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; margin:16px 0; }
+.credential-facts > div { display:grid; grid-template-columns:minmax(100px,.8fr) minmax(0,1.2fr); gap:12px; min-width:0; align-items:baseline; }
+.credential-facts dt { color:var(--muted); font-size:12px; }
+.credential-facts dd { margin:0; color:var(--ink); font-size:13px; overflow-wrap:anywhere; }
+.credential-facts dd.fact-positive { color:var(--success); }
+.credential-facts dd.fact-warning { color:var(--warning); }
+.validation-record { border-top:1px solid var(--line); }
+.validation-record summary { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:44px; font-size:12px; color:var(--muted); cursor:pointer; list-style:none; }
+.validation-record summary::-webkit-details-marker { display:none; }
+.validation-record summary > span:first-child { display:flex; align-items:center; gap:6px; }
+.validation-record summary .app-icon { width:15px; height:15px; }
+.validation-record summary::after { content:'+'; color:var(--brand); }
+.validation-record[open] summary::after { content:'−'; }
+.record-result { margin-left:auto; }
+.validation-record dl { margin:0 0 12px; padding:12px; border-radius:12px; background:var(--page); font-size:12px; }
+.validation-record dt { color:var(--muted); }
+.validation-record dd { margin:4px 0 0; overflow-wrap:anywhere; }
+.risk-note { margin:8px 0; padding:10px 12px; border-radius:12px; background:var(--warning-soft); color:var(--warning); font-size:12px; line-height:1.6; }
+.danger-note { color:var(--danger); background:var(--danger-soft); }
+.credential-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.credential-actions button { min-height:44px; padding:8px 12px; font-size:12px; white-space:normal; }
+@media(max-width:600px) { .credential-card { padding:16px; border-radius:20px; } .credential-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); } .credential-actions button { width:100%; } }
 </style>

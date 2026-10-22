@@ -152,8 +152,6 @@ if(activeSection.value==='agent')void checkAgentService();
     <button type="button" class="text-button ticket-filter-all" @click="planDateFilter=''">全部日期</button>
     <div class="ticket-filter-meta"><span class="ticket-filter-count">{{ visiblePlans.length+visibleQueuePlans.length }} 份计划</span><button type="button" class="text-button" :disabled="saving||queueState.dateLocked" aria-label="重新读取抢票计划" @click="refresh();queueState.refreshList()"><AppIcon name="refresh" /></button></div>
    </div>
-   <BookingExecutionSettings v-if="credentialApi" :api="credentialApi" />
-   <BookingSuccessPanel :api="api" :session="session" />
 
    <section v-if="visiblePlans.length||listStatus==='loading'||listStatus==='error'" class="panel" aria-labelledby="plans-list-title"><div class="plan-section-heading"><h2 id="plans-list-title">Agent 意向</h2><button data-testid="refresh-plans" class="secondary-button" type="button" :disabled="saving || listStatus==='loading'" @click="refresh();queueState.refreshList()" aria-label="刷新计划" title="刷新计划"><AppIcon name="refresh" /></button></div>
     <p v-if="listStatus==='loading'" class="muted" role="status">正在读取计划…</p>
@@ -162,6 +160,10 @@ if(activeSection.value==='agent')void checkAgentService();
    <div v-if="pendingDeletePlan" class="ticket-delete-plan"><span>删除“{{ pendingDeletePlan.intent.venue_preference }}”？历史会保留。</span><button type="button" class="danger-button" :disabled="saving" @click="remove(pendingDeletePlan);pendingDeletePlan=null">确认删除</button><button type="button" class="text-button" @click="pendingDeletePlan=null">取消</button></div>
    </section>
    <TicketQueuePlans :queues="queueState.queues" :date-filter="planDateFilter" :calendar-state="defaultWindow" :court-names="courtOptions" :api="api" :session="session" :busy="queueState.dateLocked" @changed="queueChanged" @select="selectQueue" @history="queueState.showHistory" />
+   <p v-if="listStatus==='ready'&&!visiblePlans.length&&!visibleQueuePlans.length" class="plan-empty-state">暂无抢票计划。<button type="button" class="text-button" @click="changeSection('manual')">选择预约</button></p>
+   <details v-if="credentialApi" class="disclosure-panel execution-settings-disclosure"><summary>执行设置<small>复核、校时与付款延迟</small></summary><div class="disclosure-body"><BookingExecutionSettings :api="credentialApi" /></div></details>
+   <BookingSuccessPanel :api="api" :session="session" />
+
    <section v-if="queueState.history" class="panel queue-history"><div class="plan-section-heading"><h2>队列版本历史</h2><button type="button" class="text-button" @click="queueState.history=null">关闭历史</button></div><details v-for="revision in queueState.history" :key="revision.revision_id"><summary>版本 {{ revision.revision_number }} · {{ revision.target_date }}{{ revision.deleted?' · 已删除':'' }}</summary><ManualQueuePreview :entries="queueEntries(revision)" readonly /></details></section><p v-if="queueState.historyError" class="form-error" role="alert">{{ queueState.historyError }}</p>
    <PlanHistory v-if="historyPlanId" :revisions="history" :status="historyStatus" @close="closeHistory" @retry="showHistory(historyPlanId)" />
    </section>
@@ -191,4 +193,18 @@ if(activeSection.value==='agent')void checkAgentService();
 
 <style scoped>
 .ticket-filter-bar{display:grid;grid-template-columns:minmax(360px,380px) minmax(170px,200px) max-content minmax(100px,1fr);gap:8px;align-items:center;padding:8px 16px;border:1px solid var(--line);border-radius:8px;background:var(--surface);margin-bottom:16px;min-width:0}.ticket-filter-credential,.ticket-filter-date{min-width:0}.ticket-filter-bar :deep(.plan-credential-control){max-width:100%;min-width:0}.ticket-filter-bar :deep(.credential-popover>summary){min-height:var(--control-height)}.ticket-filter-bar :deep(.credential-popover>summary span){max-width:160px}.ticket-filter-date{display:flex;align-items:center;gap:8px;min-width:0;color:var(--muted)}.ticket-filter-bar input{min-height:var(--control-height);width:100%;min-width:0;padding:8px 8px;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--surface);font:inherit;font-size:14px}.ticket-filter-bar .ticket-filter-all,.ticket-filter-meta button{min-height:var(--control-height);font-size:13px;padding:8px 8px;white-space:nowrap}.ticket-filter-meta{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0}.ticket-filter-count{font-size:13px;color:var(--muted);white-space:nowrap}.ticket-delete-plan{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px}.plan-card{padding:8px 0}.plan-card h3{font-size:15px;margin:8px 0}.plan-card p{font-size:12px}.plan-actions button{min-height:var(--control-height);padding:8px 8px;font-size:12px}@media(max-width:1100px){.ticket-filter-bar{grid-template-columns:minmax(0,1fr) minmax(170px,1fr)}.ticket-filter-meta{grid-column:1/-1;justify-content:flex-end}}@media(max-width:460px){.ticket-filter-bar{grid-template-columns:minmax(0,1fr);padding:8px;gap:8px}.ticket-filter-credential,.ticket-filter-date,.ticket-filter-all,.ticket-filter-meta{grid-column:1}.ticket-filter-bar :deep(.plan-credential-control){flex-wrap:wrap}.ticket-filter-meta{justify-content:space-between}}
+.execution-settings-disclosure { margin:12px 0; }.execution-settings-disclosure :deep(.execution-settings) { margin:0; padding:0; border:0; box-shadow:none; }
+.plan-empty-state { display:flex; align-items:center; justify-content:center; gap:8px; margin:12px 0; padding:20px; border:1px dashed var(--line); border-radius:20px; color:var(--muted); background:var(--surface); font-size:13px; }
+@media(max-width:600px) {
+ .ticket-filter-bar { grid-template-columns:minmax(0,1fr) auto auto; gap:8px; padding:12px; }
+ .ticket-filter-credential { grid-column:1/-1; }
+ .ticket-filter-date { grid-column:1; min-width:0; }
+ .ticket-filter-all { grid-column:2; width:auto; }
+ .ticket-filter-meta { grid-column:3; width:auto; gap:4px; margin-left:auto; }
+}
+@media(max-width:360px) {
+ .ticket-filter-bar { grid-template-columns:minmax(0,1fr) auto; }
+ .ticket-filter-date { grid-column:1; }
+ .ticket-filter-meta { grid-column:1/-1; }
+}
 </style>

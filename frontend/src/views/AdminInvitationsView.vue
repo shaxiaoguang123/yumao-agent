@@ -141,11 +141,10 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="admin-page" aria-labelledby="admin-invitations-title">
-    <PageHeader title-id="admin-invitations-title" eyebrow="管理员工具" title="创建注册邀请码" description="为受邀用户提供安全的账户入口。邀请码明文只临时显示一次。" />
+    <PageHeader title-id="admin-invitations-title" title="创建注册邀请码" />
     <div class="admin-grid"><div class="panel admin-invitations-panel"><span class="section-icon"><AppIcon name="ticket" /></span><h2 class="invitation-create-heading">新建邀请码</h2>
     <p class="muted">
-      邀请码有效期为 24 小时，且只能注册一个账户。创建后请立即复制并安全地交给受邀用户。
-      邀请码只在本页临时显示一次。
+      24 小时有效 · 仅注册一个账户 · 明文只显示一次，请及时复制。
     </p>
 
     <p v-if="!isAuthorized" class="form-error" role="alert">
@@ -212,7 +211,7 @@ onBeforeUnmount(() => {
     </section>
 
     <RouterLink class="action-link back-link" :to="{ name: 'home' }">返回首页</RouterLink>
-    </div><aside class="invitation-guide"><p class="eyebrow">邀请流程</p><h2>一个入口，三步完成</h2><ol><li><strong>创建</strong><span>管理员创建一个有效期为 24 小时的邀请码。</span></li><li><strong>安全分享</strong><span>复制后，通过可信渠道交给受邀用户。离开页面后无法再次查看明文。</span></li><li><strong>完成注册</strong><span>受邀用户填写邀请码、用户名与密码。一个邀请码仅注册一个账户。</span></li></ol><p class="security-caption"><AppIcon name="shield" />页面不会自动重试创建请求。</p></aside></div>
+    </div><details class="invitation-guide disclosure-panel"><summary>邀请流程</summary><div class="disclosure-body"><ol><li><strong>创建</strong><span>管理员创建一个有效期为 24 小时的邀请码。</span></li><li><strong>安全分享</strong><span>复制后，通过可信渠道交给受邀用户。离开页面后无法再次查看明文。</span></li><li><strong>完成注册</strong><span>受邀用户填写邀请码、用户名与密码。一个邀请码仅注册一个账户。</span></li></ol></div></details></div>
   </section>
 </template>
 
@@ -383,4 +382,5 @@ onBeforeUnmount(() => {
   width:100%;
 }
 }
+.admin-grid{grid-template-columns:minmax(0,1fr);max-width:640px;margin:0 auto}.admin-invitations-panel>.section-icon{display:none}.invitation-create-heading{margin-top:0}.invitation-guide{padding:0!important}.invitation-guide ol{margin-top:0}.admin-invitations-panel .form-stack{margin-top:16px}
 </style>

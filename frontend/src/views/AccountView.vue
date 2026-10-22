@@ -72,7 +72,7 @@ async function logout() {
       </button>
     </template>
     <template v-else>
-    <PageHeader title-id="account-title" eyebrow="个人空间" title="账户设置" description="管理账户访问与密码，让每次登录都更安心。" />
+    <PageHeader title-id="account-title" title="账户设置" />
     <div v-if="sessionStore.user" class="account-identity"><span class="section-icon"><AppIcon name="user" /></span><div><span class="eyebrow">当前账户</span><p>{{ sessionStore.user.username }}</p></div><span class="state-pill state-enabled">{{ sessionStore.user.role === 'admin' ? '管理员' : '用户' }}</span></div>
     <p v-if="passwordMessage" :class="passwordSucceeded ? 'form-success' : 'form-error'" role="status">
       {{ passwordMessage }}
@@ -83,7 +83,7 @@ async function logout() {
 
     <div class="account-grid">
     <form v-if="sessionStore.status === 'authenticated'" class="form-stack panel account-password" :aria-busy="passwordSubmitting" @submit.prevent="changePassword">
-      <h2>修改密码</h2><p class="muted account-section-description">成功修改后会退出当前会话，请使用新密码重新登录。</p>
+      <h2>修改密码</h2><p class="muted account-section-description">修改成功后需重新登录。</p>
       <label class="field">
         当前密码
         <input v-model="currentPassword" type="password" autocomplete="current-password" :disabled="passwordSubmitting" required />
@@ -101,7 +101,7 @@ async function logout() {
     </form>
 
     <div v-if="sessionStore.status === 'authenticated'" class="form-stack panel account-session">
-      <span class="section-icon"><AppIcon name="shield" /></span><h2>登录状态</h2><p class="muted account-section-description">当前账户已登录。完成管理后，可主动结束本次会话。</p>
+      <h2>当前会话</h2>
       <p v-if="sessionStore.logoutUnconfirmed" role="alert">{{ sessionStore.logoutMessage }}</p>
       <button data-testid="logout" class="secondary-button" type="button" :disabled="passwordSubmitting" @click="logout">退出登录</button>
     </div>
@@ -111,67 +111,20 @@ async function logout() {
 </template>
 
 <style scoped>
-.account-identity {
-  display:flex;
-  align-items:center;
-  gap:16px;
-  margin:0 0 24px;
-  padding-bottom:24px;
-  border-bottom:1px solid var(--line);
-
-}
-
-.account-identity > div {
-  min-width:0;
-  flex:1;
-
-}
-
-.account-identity p {
-  margin:8px 0 0;
-  font-size:17px;
-  font-weight:650;
-
-}
-
-.account-identity .eyebrow {
-  font-size:10px;
-
-}
-
-.account-grid {
-  display:grid;
-  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
-  gap:16px;
-  align-items:start;
-  max-width:880px;
-
-}
-
-.account-grid .form-stack {
-  margin:0;
-
-}
-
-.account-section-description {
-  margin:0;
-  font-size:12px;
-
-}
-
-.account-password > button {
-  margin-top:8px;
-
-}
-
-.account-session > button {
-  margin-top:8px;
-
-} @media(max-width:700px) {
-  .account-grid {
-  grid-template-columns:1fr;
-  gap:16px;
-
-}
-}
+.account-page { max-width:760px; margin:0 auto; }
+.account-identity { display:flex; align-items:center; gap:12px; margin:0 0 16px; }
+.account-identity > div { min-width:0; flex:1; }
+.account-identity p { margin:2px 0 0; font-size:15px; font-weight:600; }
+.account-identity .eyebrow { font-size:12px; }
+.account-grid { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; }
+.account-grid .form-stack { margin:0; }
+.account-password { grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.account-password h2,.account-section-description,.account-password > p[role] { grid-column:1/-1; }
+.account-section-description { margin:-8px 0 0; color:var(--muted); font-size:13px; }
+.account-password > button { justify-self:start; }
+.account-session { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; box-shadow:none; }
+.account-session h2 { font-size:14px; }
+.account-session > p { flex-basis:100%; }
+.account-session > button { margin-left:auto; }
+@media(max-width:600px) { .account-password { grid-template-columns:minmax(0,1fr); gap:12px; } }
 </style>

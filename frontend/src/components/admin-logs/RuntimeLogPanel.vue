@@ -81,7 +81,7 @@ onBeforeUnmount(() => { listGeneration += 1; listController?.abort(); closeDetai
 <template>
   <div v-if="permitted" class="runtime-log-workspace">
     <section class="panel log-controls"><RuntimeLogFilters :busy="status === 'loading'" @apply="value => load(value)" /></section>
-    <section v-if="collection" class="panel collection-health" aria-label="日志采集状态"><div class="collection-heading"><strong>{{ collection.state === 'ready' ? '日志采集已就绪' : '日志采集需要关注' }}</strong><span>保留 {{ collection.retention_days }} 天 · 写入为异步，最新事件可能稍有延迟</span></div><div class="collector-facts"><span>当前 Web 队列 {{ collection.queue_depth }}</span><span :class="{ 'collection-warning': collection.dropped_events || collection.failed_events }">丢弃 {{ collection.dropped_events }} · 写入失败 {{ collection.failed_events }}</span></div><ul><li v-for="item in processStates" :key="`${item.role}-${item.pid}`"><strong>{{ item.label }} · PID {{ item.pid }}</strong><span>{{ item.stale ? '近期未收到心跳' : '近期已收到心跳' }} · {{ logTime(item.seen_at_utc_ms) }}</span><span>丢弃 {{ item.dropped_events }} · 写入失败 {{ item.failed_events }}</span></li></ul><p class="muted">心跳仅代表日志采集器状态；执行结果请核对具体任务记录。</p></section>
+    <details v-if="collection" class="collection-health disclosure-panel" aria-label="日志采集状态" :open="collection.state !== 'ready' || Boolean(collection.dropped_events || collection.failed_events) || processStates.some(item => item.stale || item.dropped_events || item.failed_events)"><summary><span><i class="availability-dot" />{{ collection.state === 'ready' ? '日志采集已就绪' : '日志采集需要关注' }}</span><small>队列 {{ collection.queue_depth }} · 丢失 {{ collection.dropped_events }}</small></summary><div class="disclosure-body"><div class="collection-heading"><strong>{{ collection.state === 'ready' ? '日志采集已就绪' : '日志采集需要关注' }}</strong><span>保留 {{ collection.retention_days }} 天 · 写入为异步，最新事件可能稍有延迟</span></div><div class="collector-facts"><span>当前 Web 队列 {{ collection.queue_depth }}</span><span :class="{ 'collection-warning': collection.dropped_events || collection.failed_events }">丢弃 {{ collection.dropped_events }} · 写入失败 {{ collection.failed_events }}</span></div><ul><li v-for="item in processStates" :key="`${item.role}-${item.pid}`"><strong>{{ item.label }} · PID {{ item.pid }}</strong><span>{{ item.stale ? '近期未收到心跳' : '近期已收到心跳' }} · {{ logTime(item.seen_at_utc_ms) }}</span><span>丢弃 {{ item.dropped_events }} · 写入失败 {{ item.failed_events }}</span></li></ul><p class="muted">心跳仅反映日志采集；预约结果请核对任务记录。</p></div></details>
     <div class="log-results-heading"><p>已载入 <strong>{{ events.length }}</strong> 条 · 错误 {{ visibleCounts.error }} · 警告 {{ visibleCounts.warning }}<span v-if="queriedAt"> · 查询于 {{ logTime(queriedAt) }}</span></p><button class="secondary-button" type="button" :disabled="status === 'loading'" @click="load()">刷新日志</button></div>
     <p v-if="message" class="form-error log-message" role="alert">{{ message }}</p>
     <p v-if="status === 'loading'" class="muted" role="status">正在读取运行日志…</p>
@@ -97,5 +97,25 @@ onBeforeUnmount(() => { listGeneration += 1; listController?.abort(); closeDetai
   </div>
 </template>
 <style scoped>
-.runtime-log-workspace{display:grid;gap:16px;min-width:0}.log-controls{padding:20px}.collection-health{padding:18px;display:grid;gap:10px;min-width:0}.collection-heading,.collector-facts{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}.collection-heading strong{font-size:13px}.collection-heading span,.collector-facts,.collection-health p{font-size:12px;color:var(--muted)}.collection-health p{margin:0}.collection-health ul{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;list-style:none;margin:0;padding:0}.collection-health li{display:grid;gap:5px;padding:12px;background:var(--page);border-radius:10px;min-width:0;font-size:11px;overflow-wrap:anywhere;color:var(--muted)}.collection-health li strong{font-weight:500;color:var(--ink)}.collection-warning{color:var(--danger)}.log-results-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.log-results-heading p{margin:0;font-size:12px;color:var(--muted)}.log-message{overflow-wrap:anywhere}.log-detail-state{grid-column:1/-1;margin:0;padding:8px;border-radius:8px;background:var(--surface);font-size:12px}.log-empty{padding:24px;color:var(--muted);font-size:13px}.load-logs{justify-self:center;min-height:44px}@media(max-width:650px){.log-controls{padding:16px}.collection-health ul{grid-template-columns:minmax(0,1fr)}.log-results-heading button{min-height:44px}}
+.runtime-log-workspace { display:grid; gap:12px; min-width:0; }
+.log-controls { padding:16px; }
+.collection-health { min-width:0; }
+.collection-health > summary { min-height:48px; }
+.collection-health > summary span { min-width:0; font-size:12px; }
+.collection-health > summary small { font-size:11px; }
+.collection-heading,.collector-facts { display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; font-size:12px; }
+.collection-heading span,.collector-facts,.collection-health p { color:var(--muted); font-size:12px; }
+.collection-health p { margin:10px 0 0; }
+.collection-health ul { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:12px 0 0; padding:0; list-style:none; }
+.collection-health li { display:grid; gap:4px; min-width:0; padding:10px; border-radius:12px; background:var(--page); font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+.collection-warning { color:var(--danger); }
+.log-results-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.log-results-heading p { margin:0; color:var(--muted); font-size:12px; }
+.log-results-heading p > span { display:none; }
+.log-results-heading button { flex:none; }
+.log-message { overflow-wrap:anywhere; }
+.log-detail-state { grid-column:1/-1; margin:0; padding:8px; font-size:12px; }
+.log-empty { padding:20px; color:var(--muted); font-size:13px; }
+.load-logs { justify-self:center; }
+@media(max-width:600px) { .collection-health > summary { padding-inline:12px; gap:6px; } .collection-health ul { grid-template-columns:minmax(0,1fr); } }
 </style>

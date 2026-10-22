@@ -22,8 +22,10 @@ describe('manual queue interactions',()=>{
  it('renders 09:00–22:00 and adds or cancels continuous hour candidates',async()=>{
   const wrapper=mount(ManualQueueGrid,{props:{courtNames:['已占用观察场','活动观察场'],entries:[],duration:120,scopeLabel:'羽毛球'}});
   expect(wrapper.findAll('tbody tr')).toHaveLength(13);
-  expect(wrapper.find('tbody tr:first-child th').text()).toBe('09:00–10:00');
-  expect(wrapper.find('tbody tr:last-child th').text()).toBe('21:00–22:00');
+  expect(wrapper.find('tbody tr:first-child th').attributes('title')).toBe('09:00–10:00');
+  expect(wrapper.find('tbody tr:last-child th').attributes('title')).toBe('21:00–22:00');
+  expect(wrapper.find('tbody tr:first-child th').text()).toBe('09–10');
+  expect(wrapper.find('tbody tr:last-child th').text()).toBe('21–22');
   await wrapper.get('[data-testid="queue-cell-9-0"]').trigger('click');
   expect(wrapper.emitted('change')[0][0]).toEqual([entry('已占用观察场')]);
   await wrapper.setProps({entries:[entry('已占用观察场')]});

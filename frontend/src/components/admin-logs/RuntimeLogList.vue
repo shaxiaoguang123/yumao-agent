@@ -14,5 +14,32 @@ const emit = defineEmits(['select']);
   </ol>
 </template>
 <style scoped>
-.runtime-events{list-style:none;padding:0;margin:0;display:grid;gap:10px;min-width:0}.runtime-event{display:grid;grid-template-columns:132px minmax(0,1fr) auto;align-items:center;gap:16px;padding:16px;border:1px solid var(--line);border-left:3px solid var(--line);border-radius:12px;background:var(--surface);min-width:0}.runtime-event.level-warning{border-left-color:var(--warning)}.runtime-event.level-error{border-left-color:var(--danger)}.runtime-event.is-selected{background:var(--brand-soft);border-color:var(--brand)}.event-time{display:grid;gap:8px;justify-items:start}.event-time time{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}.event-level{padding:2px 7px;border-radius:5px;background:var(--page);font-size:11px}.level-warning .event-level{color:var(--warning)}.level-error .event-level{color:var(--danger)}.event-content{min-width:0}.event-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.event-title strong{font-size:14px}.event-title span,.event-title small{color:var(--muted);font-size:12px}.event-code{display:block;margin-top:6px;font-size:12px;overflow-wrap:anywhere;color:var(--ink)}.event-context{display:flex;gap:12px;flex-wrap:wrap;margin:6px 0 0;font-size:11px;color:var(--muted);overflow-wrap:anywhere}.runtime-event button{min-height:44px;font-size:12px}.runtime-event> :deep(.log-detail-state),.runtime-event> :deep(.log-detail){grid-column:1/-1}@media(max-width:650px){.runtime-event{grid-template-columns:minmax(0,1fr);gap:8px;padding:10px}.event-time{display:flex;align-items:center;justify-content:space-between}.runtime-event button{justify-self:start;min-height:44px}.event-title{gap:8px}}
+.runtime-events { display:grid; gap:0; min-width:0; margin:0; padding:0; list-style:none; border:1px solid var(--line); border-radius:20px; background:var(--surface); }
+.runtime-event { display:grid; grid-template-columns:132px minmax(0,1fr) auto; align-items:center; gap:12px; min-width:0; padding:10px 14px; border-bottom:1px solid var(--line); border-left:3px solid transparent; }
+.runtime-event:first-child { border-radius:20px 20px 0 0; }
+.runtime-event:last-child { border-bottom:0; border-radius:0 0 20px 20px; }
+.runtime-event.level-warning { border-left-color:var(--warning); }
+.runtime-event.level-error { border-left-color:var(--danger); }
+.runtime-event.is-selected { background:var(--brand-soft); }
+.event-time { display:grid; gap:4px; justify-items:start; }
+.event-time time { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+.event-level { padding:1px 6px; border-radius:6px; background:var(--page); font-size:11px; }
+.level-warning .event-level { color:var(--warning); }
+.level-error .event-level { color:var(--danger); }
+.event-content { min-width:0; }
+.event-title { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; }
+.event-title strong { font-size:13px; font-weight:600; }
+.event-title span,.event-title small { color:var(--muted); font-size:12px; }
+.event-code { display:block; margin-top:4px; color:var(--ink); font-size:12px; overflow-wrap:anywhere; }
+.event-context { display:flex; flex-wrap:wrap; gap:4px 10px; margin:4px 0 0; color:var(--muted); font-size:11px; }
+.event-context span { max-width:210px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.runtime-event > button { min-height:44px; padding:8px 12px; font-size:12px; }
+.runtime-event > :deep(.log-detail-state),.runtime-event > :deep(.log-detail) { grid-column:1/-1; }
+@media(max-width:650px) {
+ .runtime-event { grid-template-columns:minmax(0,1fr) auto; gap:4px 8px; padding:10px; }
+ .event-time { grid-column:1/-1; display:flex; align-items:center; justify-content:space-between; }
+ .event-title { gap:4px 8px; }
+ .runtime-event > button { grid-column:2; align-self:center; }
+ .event-context span { max-width:190px; }
+}
 </style>

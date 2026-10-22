@@ -336,6 +336,20 @@ describe('Credential management view', () => {
     expect(api.create).not.toHaveBeenCalled();
   });
 
+  it('clears sensitive create drafts when the add disclosure is closed', async () => {
+    const api = makeApi({ credentials: [credential()] });
+    const { wrapper } = await mountView(api);
+    const disclosure = wrapper.get('.credential-add');
+    disclosure.element.open = true;
+    await wrapper.get('[data-testid="credential-token"]').setValue('synthetic-cancelled-token');
+    await wrapper.get('[data-testid="credential-payment-password"]').setValue('synthetic-payment-password');
+    disclosure.element.open = false;
+    await disclosure.trigger('toggle');
+    expect(wrapper.get('[data-testid="credential-token"]').element.value).toBe('');
+    expect(wrapper.get('[data-testid="credential-payment-password"]').element.value).toBe('');
+    expect(api.create).not.toHaveBeenCalled();
+  });
+
   it('sets a separate encrypted payment password and clears the in-memory field', async () => {
     const api = makeApi({ credentials: [credential()] });
     const { wrapper } = await mountView(api);
