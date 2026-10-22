@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 _MIGRATION_NAME_RE = re.compile(r"\A(?P<version>[0-9]{4})_[a-z0-9_]+\.sql\Z")
 
 _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
@@ -57,6 +57,13 @@ _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
         "booking_by_time_delay_ms", "get_user_info_delay_ms", "get_children_delay_ms",
         "get_pay_price_delay_ms", "create_booking_delay_ms",
         "open_platform_pay_order_delay_ms", "payment_verify_delay_ms", "updated_at_utc_ms",
+    }),
+    "user_booking_execution_settings": frozenset({
+        "user_id", "version", "reconciliation_time", "clock_calibration_lead_ms",
+        "start_offset_ms", "booking_node_delay_ms", "booking_by_time_delay_ms",
+        "get_user_info_delay_ms", "get_pay_price_delay_ms", "create_booking_delay_ms",
+        "open_platform_pay_order_delay_ms", "payment_verify_delay_ms",
+        "payment_verify_interval_ms", "candidate_interval_ms", "updated_at_utc_ms",
     }),
     "booking_execution_runs": frozenset({
         "run_id", "user_id", "credential_id", "target_date", "source_plan_id",
@@ -242,6 +249,7 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
         and (schema_version >= 8 or name not in {
             "booking_execution_settings", "booking_execution_runs", "booking_execution_stages",
         })
+        and (schema_version >= 12 or name != "user_booking_execution_settings")
         and (schema_version >= 9 or name != "planning_conversations")
         and (schema_version >= 2 or name not in {
             "credentials",

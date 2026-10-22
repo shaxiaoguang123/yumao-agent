@@ -93,7 +93,7 @@ class QueuePlanningGraph:
         decision = evaluated.decision
         trace = _trace(
             state, "应用更新并校验",
-            f"有效候选 {evaluated.turn_trace['candidate_count']}/{evaluated.turn_trace['candidate_limit']}；"
+            f"有效候选 {evaluated.turn_trace['candidate_count']}；"
             f"待确认：{FIELD_LABELS.get(decision.asking, '修改内容' if evaluated.dialogue['pending_edit'] else '无')}。",
         )
         return {"evaluated": evaluated, "workflow_trace": trace}

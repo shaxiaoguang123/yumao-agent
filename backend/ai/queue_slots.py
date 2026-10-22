@@ -7,7 +7,7 @@ from datetime import date
 from backend.ai import queue_text as text
 from backend.ai.conversation import PRIORITY, Reason, Slot, SlotStatus
 from backend.ai.nlu.windows import clock
-from backend.ai.queue_draft import MAX_ENTRIES, ONE, TWO, Draft, entry_count, overlapping_pairs
+from backend.ai.queue_draft import ONE, TWO, Draft, overlapping_pairs
 
 _DONE = {SlotStatus.PROPOSED, SlotStatus.VERIFIED}
 _GROUPS = ((TWO, "2h"), (ONE, "1h"))
@@ -98,23 +98,6 @@ def build_slots(draft: Draft, today: date, unresolved: dict | None = None) -> di
         field = f"windows_{tag}"
         text_duration = f"{duration // 60}小时{duration % 60}分钟" if duration % 60 else f"{duration // 60}小时"
         slots[field] = _slot(field, SlotStatus.AMBIGUOUS, detail=text.issue_detail(minutes, "unsupported_duration", text_duration))
-    counts = entry_count(draft)
-    total = sum(counts.values())
-    if total > MAX_ENTRIES:
-        minutes = max(counts, key=counts.get)
-        field = f"courts_{dict(_GROUPS)[minutes]}"
-        breakdown = "、".join(f"{text.HOURS[m]} {count}项" for m, count in counts.items())
-        window_total = sum(len(draft.groups[m].windows) for m in counts)
-        if window_total <= MAX_ENTRIES:
-            court_limit = MAX_ENTRIES // window_total
-            if len(counts) == 1:
-                suggestion = f"例如只留1～{court_limit}号场，可降到上限内。"
-            else:
-                suggestion = f"例如两组都只留1～{court_limit}号场，可降到上限内。"
-        else:
-            suggestion = "请先减少候选时段。"
-        detail = f"当前候选：{breakdown}，共{total}项，最多 {MAX_ENTRIES} 项。{suggestion}"
-        slots[field] = _slot(field, SlotStatus.INVALID, slots[field].value, slots[field].display, detail)
     for field, issue in (unresolved or {}).items():
         slot = slots[field]
         active = slot.active or field.startswith("overlap_") and draft.effective(ONE if field.endswith("_1h") else TWO)

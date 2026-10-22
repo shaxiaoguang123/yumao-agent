@@ -259,10 +259,10 @@ function formatHistoryDate(value) {
 .trace-item time { white-space:nowrap; }
 .proposal-chat :deep(button:focus-visible), .proposal-chat :deep(summary:focus-visible), .proposal-chat :deep(a:focus-visible) { outline:3px solid var(--brand); outline-offset:2px; }
 @keyframes chat-pulse { 50% { opacity:.35; } }
-@media (max-width:760px) {
+@media (max-width:1024px) {
   .proposal-chat.has-queue-preview .proposal-chat-body { grid-template-columns:minmax(0, 1fr); }
   .proposal-chat-messages { min-height:260px; max-height:52vh; }
-  .queue-preview { order:2; }
+  .queue-preview { order:-1; }
 }
 @media (max-width:600px) {
   .proposal-chat-heading { align-items:flex-start; flex-wrap:wrap; }

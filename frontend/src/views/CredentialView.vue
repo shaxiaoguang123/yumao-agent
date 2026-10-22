@@ -521,5 +521,5 @@ onUnmounted(() => {
 
 }
 @media(min-width:1050px){.credential-workspace{grid-template-columns:minmax(270px,310px) minmax(0,1fr)}}
-@media(max-width:640px){.credential-workspace{gap:8px}.credential-add{padding:16px}.credential-cards{grid-template-columns:minmax(0,1fr)}.credential-toolbar{flex-wrap:wrap}.search-field{flex-basis:100%}.filter-field{width:100%}.filter-field select{width:100%}}
+@media(max-width:640px){.credential-workspace{gap:8px}.credential-add{padding:16px}.credential-cards{grid-template-columns:minmax(0,1fr)}.credential-cards :deep(.credential-facts){grid-template-columns:minmax(0,1fr)}.credential-toolbar{flex-wrap:wrap}.search-field{flex-basis:100%}.filter-field{width:100%}.filter-field select{width:100%}.credential-create-grid>.credential-actions{display:grid;grid-template-columns:minmax(0,1fr)}.credential-create-grid>.credential-actions button{width:100%}.rotation-form>.credential-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.rotation-form>.credential-actions button{width:100%}}
 </style>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time as clock_time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -46,9 +47,18 @@ class BookingScheduler:
         target_date = (business_date + timedelta(days=2)).isoformat()
         opening_at = self._at_local(business_date, 7, 30)
         reconciled = executed = 0
+        execution_jobs: list[tuple[str, str, str]] = []
+        settings_by_user: dict[str, dict | None] = {}
         for user_id, credential_id in self.settings.list_active_credentials():
+            if user_id not in settings_by_user:
+                try:
+                    settings_by_user[user_id] = self.settings.get(user_id)
+                except Exception:
+                    settings_by_user[user_id] = None
+            settings_dto = settings_by_user[user_id]
+            if settings_dto is None:
+                continue
             try:
-                settings_dto = self.settings.get(user_id, credential_id)
                 setting_values = settings_dto["settings"]
                 queue = self.plans.get_manual_queue(user_id, target_date, credential_id)
             except Exception:
@@ -87,8 +97,24 @@ class BookingScheduler:
             if current_run and current_run["state"] == "calibrated":
                 effective_now = int(self._clock()) + (current_run.get("clock_offset_ms") or 0)
                 if effective_now >= self.engine.execution_start_utc_ms(current_run, {}):
-                    self.engine.execute(current_run["run_id"], user_id, credential_id)
-                    executed += 1
+                    execution_jobs.append((current_run["run_id"], user_id, credential_id))
+        if len(execution_jobs) == 1:
+            self.engine.execute(*execution_jobs[0])
+        elif execution_jobs:
+            # shortcut: cap one-process concurrency at eight Tokens until production load is measured.
+            with ThreadPoolExecutor(
+                max_workers=min(8, len(execution_jobs)),
+                thread_name_prefix="booking-token",
+            ) as executor:
+                futures = [executor.submit(self.engine.execute, *job) for job in execution_jobs]
+                for future in futures:
+                    try:
+                        future.result()
+                    except Exception:
+                        # Each run owns its durable state; one unexpected Token failure must
+                        # not prevent the remaining due Tokens from starting.
+                        pass
+        executed = len(execution_jobs)
         return {"worker_enabled": True, "target_date": target_date,
                 "reconciled": reconciled, "executed": executed}
 
@@ -99,9 +125,18 @@ class BookingScheduler:
         target_date = (business_date + timedelta(days=2)).isoformat()
         candidates = [now + 30_000]
         opening_at = self._at_local(business_date, 7, 30)
+        settings_by_user: dict[str, dict | None] = {}
         for user_id, credential_id in self.settings.list_active_credentials():
+            if user_id not in settings_by_user:
+                try:
+                    settings_by_user[user_id] = self.settings.get(user_id)
+                except Exception:
+                    settings_by_user[user_id] = None
+            settings_dto = settings_by_user[user_id]
+            if settings_dto is None:
+                continue
             try:
-                setting_values = self.settings.get(user_id, credential_id)["settings"]
+                setting_values = settings_dto["settings"]
                 queue = self.plans.get_manual_queue(user_id, target_date, credential_id)
             except Exception:
                 continue

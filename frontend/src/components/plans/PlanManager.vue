@@ -12,6 +12,7 @@ import TicketQueuePlans from './TicketQueuePlans.vue';
 import ManualQueuePreview from './ManualQueuePreview.vue';
 import PlanCredentialControl from './PlanCredentialControl.vue';
 import BookingExecutionSettings from '../BookingExecutionSettings.vue';
+import BookingSuccessPanel from './BookingSuccessPanel.vue';
 import { useManualQueue, queueEntries } from '../../composables/useManualQueue.js';
 import { usePlans } from '../../composables/usePlans.js';
 import { visibleIntentPlans, visibleManualQueuePlans } from '../../utils/planQueueVisibility.js';
@@ -135,7 +136,8 @@ if(activeSection.value==='agent')void checkAgentService();
     <button type="button" class="text-button ticket-filter-all" @click="planDateFilter=''">全部日期</button>
     <div class="ticket-filter-meta"><span class="ticket-filter-count">{{ visiblePlans.length+visibleQueuePlans.length }} 份计划</span><button type="button" class="text-button" :disabled="saving||queueState.dateLocked" aria-label="重新读取抢票计划" @click="refresh();queueState.refreshList()"><AppIcon name="refresh" /></button></div>
    </div>
-   <BookingExecutionSettings v-if="credentialApi" :api="credentialApi" :credential-id="selectedCredentialId" />
+   <BookingExecutionSettings v-if="credentialApi" :api="credentialApi" />
+   <BookingSuccessPanel :api="api" :session="session" />
 
    <section v-if="visiblePlans.length||listStatus==='loading'||listStatus==='error'" class="panel" aria-labelledby="plans-list-title"><div class="plan-section-heading"><h2 id="plans-list-title">Agent 意向</h2><button data-testid="refresh-plans" class="secondary-button" type="button" :disabled="saving || listStatus==='loading'" @click="refresh();queueState.refreshList()" aria-label="刷新计划" title="刷新计划"><AppIcon name="refresh" /></button></div>
     <p v-if="listStatus==='loading'" class="muted" role="status">正在读取计划…</p>

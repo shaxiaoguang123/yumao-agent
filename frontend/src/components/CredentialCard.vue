@@ -302,20 +302,24 @@ function riskClass(credential) {
 }
 
 .credential-facts {
+  grid-template-columns:minmax(0,1fr);
+  gap:12px;
+
+}
+
+.credential-actions {
+  display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
-  gap:16px;
-
 }
-
-.credential-facts > div:nth-child(3) {
-  grid-column:1/-1;
-
-}
-
 .credential-actions button {
+  width:100%;
   font-size:12px;
+  white-space:normal;
 
 }
+}
+@media(max-width:380px) {
+  .credential-actions { grid-template-columns:minmax(0,1fr); }
 }
 .fact-state {
   font-weight:600;

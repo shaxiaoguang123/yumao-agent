@@ -179,9 +179,8 @@ def scenarios():
             ('场地再加4号场',{'target_date':'2026-10-22','courts_2h':[1,4]},local_ms(22,0,1)),
             ('日期换成后天',{'target_date':'2026-10-24'},local_ms(22,0,2)),
         ]),
-        ('repair_candidate_limit',[
-            ('2026年10月26日只抢2小时，10-12、12-14、14-16、16-18，场地1到10号场。',{'status':'needs_input','asking':'courts_2h'}),
-            ('去掉9号和10号场',{'status':'ready','count':32}),
+        ('large_candidate_queue',[
+            ('2026年10月26日只抢2小时，10-12、12-14、14-16、16-18，场地1到10号场。',{'status':'ready','count':40}),
         ]),
         ('repair_invalid_court_range',[
             ('2026年10月26日只抢2小时，14-16，1到11号场。',{'status':'needs_input','asking':'courts_2h'}),

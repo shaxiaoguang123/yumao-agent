@@ -13,13 +13,10 @@ from backend.ai.nlu import courts as court_nlu
 from backend.ai.nlu import dates as date_nlu
 from backend.ai.nlu.text import prep
 from backend.ai.nlu.windows import judge, resolve_start, scan_windows
-from backend.ai.queue_policy import MAX_CANDIDATES, MAX_INVALID_WINDOWS_PER_GROUP
+from backend.ai.queue_policy import MAX_INVALID_WINDOWS_PER_GROUP
 
 TWO, ONE = 120, 60
 TAG = {TWO: "2h", ONE: "1h"}
-MAX_ENTRIES = MAX_CANDIDATES
-
-
 @dataclass
 class Group:
     minutes: int
@@ -193,8 +190,9 @@ def _preceding_window(scan, pos: int):
 def _apply_courts(draft: Draft, turn: str, field_name: str | None) -> None:
     scan = scan_windows(_mask_courts_in_court_answer(turn, field_name))
     text = prep(turn)
+    explicit_court_text = any(marker in text for marker in ("场地", "球场", "号场"))
     mentions = (court_nlu.scan_bare_courts(turn)
-                if field_name and field_name.startswith("courts_") else [])
+                if field_name and field_name.startswith("courts_") or explicit_court_text else [])
     if not mentions:
         mentions = court_nlu.scan_courts(turn)
     mentions += [court_nlu.CourtMention(m.group(), tuple(range(1, 11)), False, m.start())

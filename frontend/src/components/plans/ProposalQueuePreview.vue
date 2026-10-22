@@ -82,4 +82,6 @@ function candidates(minutes) {
 .queue-candidate-list strong { white-space: nowrap; }
 .queue-preview-note { margin: 0; padding: 0 8px 8px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .queue-preview :deep(summary:focus-visible) { outline: 3px solid var(--brand); outline-offset: 2px; }
+@media(max-width:1024px){.queue-preview-details{background:var(--brand-soft)}.queue-preview-details>summary{min-height:56px}.queue-preview-count{padding:4px 8px;border-radius:999px;background:var(--surface)}}
+@media(max-width:420px){.queue-preview-details>summary{align-items:flex-start;flex-direction:column}.queue-preview-count{align-self:flex-start}.queue-candidate-list li{align-items:flex-start;flex-direction:column}}
 </style>

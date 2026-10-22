@@ -5,74 +5,58 @@ import BookingExecutionSettings from './BookingExecutionSettings.vue';
 const base = {
   reconciliation_time: '00:30', clock_calibration_lead_ms: 1000, start_offset_ms: 0,
   booking_node_delay_ms: 0, booking_by_time_delay_ms: 0, get_user_info_delay_ms: 0,
-  get_children_delay_ms: 0, get_pay_price_delay_ms: 0, create_booking_delay_ms: 0,
+  get_pay_price_delay_ms: 0, create_booking_delay_ms: 0,
   open_platform_pay_order_delay_ms: 0, payment_verify_delay_ms: 0,
+  payment_verify_interval_ms: 3000, candidate_interval_ms: 0,
 };
 
-function result(credentialId, version = 0, settings = base) {
-  return { credential_id: credentialId, version, settings: { ...settings }, worker_enabled: true };
+function result(version = 0, settings = base) {
+  return { version, settings: { ...settings }, worker_enabled: true };
 }
 
 describe('BookingExecutionSettings', () => {
-  it('loads and saves schedule controls for the selected credential with version fencing', async () => {
+  it('loads and saves one shared schedule profile with version fencing', async () => {
     const api = {
-      executionSettings: vi.fn(async id => result(id)),
-      updateExecutionSettings: vi.fn(async (id, version, settings) => result(id, version + 1, settings)),
+      executionSettings: vi.fn(async () => result()),
+      updateExecutionSettings: vi.fn(async (version, settings) => result(version + 1, settings)),
     };
-    const wrapper = mount(BookingExecutionSettings, {
-      props: { api, credentialId: 'credential-a' },
-    });
+    const wrapper = mount(BookingExecutionSettings, { props: { api } });
     await flushPromises();
-    expect(api.executionSettings).toHaveBeenCalledWith('credential-a');
+    expect(api.executionSettings).toHaveBeenCalledOnce();
     expect(wrapper.text()).toContain('执行器已启用');
     await wrapper.get('input[type="time"]').setValue('01:15');
     await wrapper.get('input[type="number"]').setValue('850');
     await wrapper.get('form').trigger('submit');
     await flushPromises();
     expect(api.updateExecutionSettings).toHaveBeenCalledWith(
-      'credential-a', 0, { ...base, reconciliation_time: '01:15', clock_calibration_lead_ms: 850 },
+      0, { ...base, reconciliation_time: '01:15', clock_calibration_lead_ms: 850 },
     );
-    expect(wrapper.text()).toContain('已保存；非空队列会按这些设置处理并执行。');
+    expect(wrapper.text()).toContain('名下所有 Token 会在下次复核时使用这组设置');
   });
 
   it('discloses when the scheduled worker has not been enabled', async () => {
     const api = {
-      executionSettings: vi.fn(async id => ({ ...result(id), worker_enabled: false })),
+      executionSettings: vi.fn(async () => ({ ...result(), worker_enabled: false })),
       updateExecutionSettings: vi.fn(),
     };
-    const wrapper = mount(BookingExecutionSettings, {
-      props: { api, credentialId: 'credential-b' },
-    });
+    const wrapper = mount(BookingExecutionSettings, { props: { api } });
     await flushPromises();
     expect(wrapper.text()).toContain('执行器未启用');
   });
 
-  it('fences a settings response after switching to another credential', async () => {
-    let finish;
+  it('explains every configurable delay and exposes all timing inputs', async () => {
     const api = {
-      executionSettings: vi.fn(id => id === 'credential-a'
-        ? new Promise(resolve => { finish = resolve; })
-        : Promise.resolve(result(id))),
+      executionSettings: vi.fn(async () => result()),
       updateExecutionSettings: vi.fn(),
     };
-    const wrapper = mount(BookingExecutionSettings, {
-      props: { api, credentialId: 'credential-a' },
-    });
-    await wrapper.setProps({ credentialId: 'credential-b' });
+    const wrapper = mount(BookingExecutionSettings, { props: { api } });
     await flushPromises();
-    finish(result('credential-a', 9, { ...base, reconciliation_time: '06:00' }));
-    await flushPromises();
-    expect(wrapper.get('input[type="time"]').element.value).toBe('00:30');
-  });
-
-  it('keeps settings out of the editor until a plan credential is selected', async () => {
-    const api = { executionSettings: vi.fn(), updateExecutionSettings: vi.fn() };
-    const wrapper = mount(BookingExecutionSettings, { props: { api, credentialId: '' }, global: { stubs: { RouterLink: { template: '<a><slot /></a>' } } } });
-    await flushPromises();
-    expect(wrapper.text()).toContain('在计划页上方选择一个预约 Token');
-    expect(api.executionSettings).not.toHaveBeenCalled();
-    await wrapper.setProps({ credentialId: 'credential-a' });
-    await flushPromises();
-    expect(api.executionSettings).toHaveBeenCalledWith('credential-a');
+    expect(wrapper.get('[aria-label="查看执行时间和延迟说明"]').attributes('aria-describedby')).toBe('execution-help-content');
+    expect(wrapper.get('#execution-help-content').text()).toContain('预约人数固定填写 5');
+    expect(wrapper.get('#execution-help-content').text()).toContain('两次查询之间的等待');
+    expect(wrapper.findAll('input[type="number"]')).toHaveLength(11);
+    expect(wrapper.get('input[name="open_platform_pay_order_delay_ms"]').attributes('max')).toBe('120000');
+    expect(wrapper.find('input[name="payment_verify_interval_ms"]').exists()).toBe(true);
+    expect(wrapper.find('input[name="candidate_interval_ms"]').exists()).toBe(true);
   });
 });

@@ -16,7 +16,7 @@ const credentials=[
 function apiFixture(overrides={}){
  const queuesByCredential={'credential-a':[queue('2026-10-17'),queue('2026-10-20','credential-a',[candidate('2号场','19:00',60)])],'credential-b':[queue('2026-10-16','credential-b')]};
  return {
-  list:vi.fn(async()=>({plans:[]})),options:vi.fn(async()=>({context})),window:vi.fn(async()=>bookingWindow),
+  list:vi.fn(async()=>({plans:[]})),options:vi.fn(async()=>({context})),window:vi.fn(async()=>bookingWindow),executionSuccesses:vi.fn(async()=>({successes:[],worker_enabled:false})),
   queues:vi.fn(async(id)=>({queues:queuesByCredential[id]||[]})),
   queue:vi.fn(async(date,id)=>({queue:(queuesByCredential[id]||[]).find(item=>item.target_date===date)||{target_date:date,credential_id:id,version:0,candidates:[]}})),
   saveQueue:vi.fn(async(date,version,entries,id)=>({queue:{...queue(date,id,entries.map(item=>candidate(item.court_preference,item.start_time,item.duration_minutes,item.scope_label))),version:version+1}})),
@@ -27,8 +27,8 @@ function apiFixture(overrides={}){
 async function mountPlans(api=apiFixture(),extraProvide={},startPath='/plans'){
  const router=createRouter({history:createMemoryHistory(),routes:[{path:'/plans',name:'plans',component:PlansView},{path:'/ai-models',name:'ai-models',component:{template:'<div />'}},{path:'/credentials',name:'credentials',component:{template:'<div />'}},{path:'/login',name:'login',component:{template:'<div />'}}]});await router.push(startPath);await router.isReady();
  const session=reactive({status:'authenticated',user:{user_id:'owner',username:'Owner'},csrfToken:'csrf-a',invalidationEpoch:0});
- const executionSettings=(credentialId)=>({credential_id:credentialId,version:0,settings:{reconciliation_time:'00:30',clock_calibration_lead_ms:1000,start_offset_ms:0,booking_node_delay_ms:0,booking_by_time_delay_ms:0,get_user_info_delay_ms:0,get_children_delay_ms:0,get_pay_price_delay_ms:0,create_booking_delay_ms:0,open_platform_pay_order_delay_ms:0,payment_verify_delay_ms:0},worker_enabled:false});
- const credentialApi={list:vi.fn(async()=>({credentials})),executionSettings:vi.fn(async id=>executionSettings(id)),updateExecutionSettings:vi.fn(async(id,version,settings)=>({credential_id:id,version:version+1,settings,worker_enabled:false}))};
+ const executionSettings=()=>({version:0,settings:{reconciliation_time:'00:30',clock_calibration_lead_ms:1000,start_offset_ms:0,booking_node_delay_ms:0,booking_by_time_delay_ms:0,get_user_info_delay_ms:0,get_pay_price_delay_ms:0,create_booking_delay_ms:0,open_platform_pay_order_delay_ms:0,payment_verify_delay_ms:0,payment_verify_interval_ms:3000,candidate_interval_ms:0},worker_enabled:false});
+ const credentialApi={list:vi.fn(async()=>({credentials})),executionSettings:vi.fn(async()=>executionSettings()),updateExecutionSettings:vi.fn(async(version,settings)=>({version:version+1,settings,worker_enabled:false}))};
  const liveApi={
   options:vi.fn(async()=>({enabled:true,min_read_interval_ms:0})),
   categories:vi.fn(async()=>({data_state:'live_observed_unverified',source:'official_read_only',options:[{reference:'scope-a',label:'羽毛球',physical_venue_verified:false}]})),
@@ -76,12 +76,12 @@ describe('reservation plan workspace',()=>{
   expect(wrapper.find('#plan-panel-current [aria-labelledby="execution-settings-title"]').exists()).toBe(true);
   expect(wrapper.find('#plan-panel-current [aria-labelledby="execution-settings-title"] h2').text()).toBe('自动执行时间');
  });
- it('loads the execution schedule for whichever Token is selected in the plan list',async()=>{
+ it('loads one user execution schedule and does not reload it when switching Token',async()=>{
   const {wrapper,credentialApi}=await mountPlans();await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');await flushPromises();
-  expect(credentialApi.executionSettings).toHaveBeenCalledWith('credential-a');
+  expect(credentialApi.executionSettings).toHaveBeenCalledOnce();
   const credentialDisclosure=wrapper.get('#plan-panel-current .credential-popover');credentialDisclosure.element.open=true;await credentialDisclosure.trigger('toggle');await flushPromises();
   await wrapper.get('#plan-panel-current [data-testid="selection-credential"]').setValue('credential-b');await flushPromises();
-  expect(credentialApi.executionSettings).toHaveBeenLastCalledWith('credential-b');
+  expect(credentialApi.executionSettings).toHaveBeenCalledOnce();
  });
 
  it('opens manual selection on the confirmed date when the assistant hands over',async()=>{

@@ -23,7 +23,7 @@ class StubService:
             prepared=prepared, interpreted=interpreted,
             dialogue={"next_action":"ask", "pending_edit":None},
             decision=SimpleNamespace(phase=self.phase, asking=asking),
-            turn_trace={"candidate_count": 4, "candidate_limit": 32},
+            turn_trace={"candidate_count": 4},
         )
 
     @staticmethod

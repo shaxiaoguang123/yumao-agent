@@ -158,10 +158,10 @@ onBeforeUnmount(() => {
           <tbody>
             <tr v-for="user in users" :key="user.user_id">
               <th scope="row">{{ user.username }}<span v-if="user.user_id === session.user.user_id" class="admin-user-self">当前账户</span></th>
-              <td>{{ user.role === 'admin' ? '管理员' : '用户' }}</td>
-              <td><span class="admin-user-status" :class="user.status === 'active' ? 'is-active' : 'is-disabled'">{{ user.status === 'active' ? '正常使用' : '已停用' }}</span></td>
-              <td>{{ formatCreatedAt(user.created_at_utc_ms) }}</td>
-              <td>
+              <td data-label="角色">{{ user.role === 'admin' ? '管理员' : '用户' }}</td>
+              <td data-label="状态"><span class="admin-user-status" :class="user.status === 'active' ? 'is-active' : 'is-disabled'">{{ user.status === 'active' ? '正常使用' : '已停用' }}</span></td>
+              <td data-label="创建时间">{{ formatCreatedAt(user.created_at_utc_ms) }}</td>
+              <td data-label="操作">
                 <button v-if="user.status === 'active'" class="danger-button" type="button" :disabled="Boolean(busyUserId) || user.user_id === session.user.user_id || (user.role === 'admin' && summary.active_admins <= 1)" @click="setUserEnabled(user)">停用</button>
                 <button v-else class="secondary-button" type="button" :disabled="Boolean(busyUserId)" @click="setUserEnabled(user)">重新启用</button>
               </td>
@@ -206,5 +206,13 @@ onBeforeUnmount(() => {
 .admin-user-pagination>div{display:flex;gap:8px}
 .admin-user-pagination button{min-height:36px}
 @media(max-width:850px){.admin-user-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.admin-user-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.admin-user-search{grid-column:1/-1}}
-@media(max-width:520px){.admin-user-pagination{align-items:flex-start;flex-direction:column}.admin-user-table{min-width:600px}}
+@media(max-width:640px){
+  .admin-user-filters{grid-template-columns:minmax(0,1fr)}.admin-user-search{grid-column:auto}.admin-user-filters button{width:100%}
+  .admin-user-table-scroll{overflow:visible}.admin-user-table,.admin-user-table tbody{display:block}.admin-user-table thead{display:none}
+  .admin-user-table tr{display:grid;gap:0;margin-bottom:12px;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--page)}
+  .admin-user-table th[scope=row]{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 0 12px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+  .admin-user-table td{display:grid;grid-template-columns:minmax(88px,.8fr) minmax(0,1.2fr);align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--line);text-align:right;overflow-wrap:anywhere}
+  .admin-user-table td:last-child{border-bottom:0;padding-bottom:0}.admin-user-table td::before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:600;text-align:left}
+  .admin-user-table td button{width:100%;min-height:44px}.admin-user-pagination{align-items:stretch;flex-direction:column}.admin-user-pagination>div{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.admin-user-pagination button{min-height:44px}
+}
 </style>

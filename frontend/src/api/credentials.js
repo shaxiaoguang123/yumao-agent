@@ -53,11 +53,11 @@ export function createCredentialApi(client) {
         body: { expected_credential_version: expectedCredentialVersion },
       });
     },
-    executionSettings(credentialId) {
-      return client.request(`/api/booking-execution/credentials/${encodeURIComponent(credentialId)}/settings`);
+    executionSettings() {
+      return client.request('/api/booking-execution/settings');
     },
-    updateExecutionSettings(credentialId, expectedVersion, settings) {
-      return client.request(`/api/booking-execution/credentials/${encodeURIComponent(credentialId)}/settings`, {
+    updateExecutionSettings(expectedVersion, settings) {
+      return client.request('/api/booking-execution/settings', {
         method: 'PUT',
         body: { expected_version: expectedVersion, settings },
       });

@@ -19,7 +19,8 @@ const fixtures = [
 ];
 const viewports = [
   { name: 'desktop', width: 1440, height: 900 }, { name: 'tablet', width: 768, height: 1024 },
-  { name: 'phone', width: 390, height: 844 }, { name: 'narrow-phone', width: 320, height: 700 },
+  { name: 'phone', width: 390, height: 844 }, { name: 'compact-phone', width: 375, height: 812 },
+  { name: 'wide-tablet', width: 1024, height: 900 },
 ];
 
 export { SYNTHETIC_CSRF, SYNTHETIC_CODE, SYNTHETIC_PASSWORD, SYNTHETIC_TOKEN, clone, credential, fixtures, viewports };

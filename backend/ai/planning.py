@@ -26,7 +26,7 @@ from backend.ai.nlu.windows import scan_windows
 from backend.ai.queue_draft import ONE, TWO, Draft, entry_count, fold
 from backend.ai.queue_draft import deserialize_draft, reconcile_legacy_slots, serialize_draft
 from backend.ai.queue_slots import build_entries, build_slots, question, strip, window_summary
-from backend.ai.queue_policy import FIELD_LABELS, MAX_CANDIDATES, WORKFLOW_CONTEXT, eligible_fields
+from backend.ai.queue_policy import FIELD_LABELS, WORKFLOW_CONTEXT, eligible_fields
 from backend.ai.queue_turn import SENSITIVE_TEXT as _SECRET, SYSTEM_PROMPT as TURN_PROMPT, parse_turn_decision
 from backend.ai.queue_updates import apply_updates
 from backend.ai.queue_dialogue import empty_dialogue, load_dialogue, begin_control, finish_updates, public_dialogue, field_value
@@ -703,8 +703,7 @@ class PlanningService:
             "staged_facts": _staged_facts(draft),
             "workflow_context": WORKFLOW_CONTEXT,
             "dialogue_state": public_dialogue(dialogue),
-            "candidate_counts": {"by_duration": counts, "total": sum(counts.values()),
-                                 "maximum": MAX_CANDIDATES},
+            "candidate_counts": {"by_duration": counts, "total": sum(counts.values())},
         }
         messages = _queue_context_messages(payload, turns, assistant_history)
         validation_reason = None
@@ -759,7 +758,7 @@ class PlanningService:
         elif state.phase is Phase.READY:
             summary += "必需信息已齐全，等待队列复核。"
         if total:
-            summary += f"当前候选 {total} 项（上限 {MAX_CANDIDATES}）。"
+            summary += f"当前候选 {total} 项。"
         suggested = interpreted.get("next_field") if interpreted else None
         if suggested and suggested != state.asking and state.asking:
             summary += f"模型建议先确认{HEADING.get(suggested, suggested)}；流程门槛要求先确认{HEADING.get(state.asking, state.asking)}。"
@@ -773,7 +772,7 @@ class PlanningService:
                 "model_choice_accepted": state.model_choice_accepted,
                 "normalization_notes": normalizations,
                 "operations": (interpreted or {}).get("updates", []),
-                "candidate_count": total, "candidate_limit": MAX_CANDIDATES, "summary": summary}
+                "candidate_count": total, "summary": summary}
 
     def render_clarification(self, evaluated: EvaluatedQueueTurn) -> dict:
         ctx, state, slots = evaluated.context, evaluated.decision, evaluated.slots

@@ -10,6 +10,9 @@ from backend.plans.service import PlanError
 
 plans_bp = Blueprint("plans", __name__, url_prefix="/api/plans")
 MAX_PLAN_BODY_BYTES = 16 * 1024
+# A complete legal 1h + 2h grid for ten courts is about 30 KiB. Keep a
+# transport bound without reintroducing a candidate-count limit.
+MAX_MANUAL_QUEUE_BODY_BYTES = 64 * 1024
 
 
 def _now_utc_ms():
@@ -155,7 +158,11 @@ def manual_queue(target_date):
 @require_session
 @require_csrf
 def save_manual_queue(target_date):
-    body = _body({"base_version", "entries"}, {"credential_id"})
+    body = _body(
+        {"base_version", "entries"},
+        {"credential_id"},
+        max_body_bytes=MAX_MANUAL_QUEUE_BODY_BYTES,
+    )
     credential_id = _credential_scope(body.get("credential_id"))
     return jsonify({"queue": _service().save_manual_queue(_user_id(), _queue_date(target_date), body["base_version"], body["entries"], _now_utc_ms(), credential_id)})
 

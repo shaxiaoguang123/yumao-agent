@@ -53,7 +53,13 @@ def intent(court, start, duration, scope="羽毛球"):
 
 class ExecutionReconciliationTests(unittest.TestCase):
     def test_preopening_filter_ignores_global_clock_gate_but_removes_explicit_blockers(self):
-        raw = envelope(statuses={2: "1"}, conflicts=["0-1-7"])
+        raw = envelope(
+            statuses={2: "1"},
+            conflicts=[
+                *(f"{court}-{row}-7" for court in range(2) for row in range(5)),
+                "0-1-6",
+            ],
+        )
         snapshot, summary = reconcile_queue(
             [
                 intent("1号场", "09:00", 60),
@@ -74,6 +80,21 @@ class ExecutionReconciliationTests(unittest.TestCase):
             "scope_query_missing": 1,
         })
         self.assertEqual(summary["availability_claim"], "none_pre_open; every candidate requires a fresh 07:30 query")
+
+    def test_fresh_opening_query_keeps_type_seven_as_an_explicit_blocker(self):
+        candidate = {
+            "scope_label": "羽毛球", "court_preference": "1号场", "start_time": "09:00",
+            "end_time": "10:00", "duration_minutes": 60,
+        }
+        coordinates, reason = candidate_coordinates(
+            candidate,
+            envelope(conflicts=["0-0-7"]),
+            target_date=DATE,
+            timezone_name=ZONE,
+            captured_at_utc_ms=at(7, 30),
+        )
+        self.assertIsNone(coordinates)
+        self.assertEqual(reason, "explicit_conflict")
 
     def test_two_hour_candidates_require_exact_adjacent_hour_rows(self):
         raw = envelope()

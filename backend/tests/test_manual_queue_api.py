@@ -65,6 +65,18 @@ class ManualQueueTests(unittest.TestCase):
         self.assertEqual(self.app.test_client().get('/api/plans/manual-queues').status_code,401)
         self.network.assert_not_called()
 
+    def test_full_legal_grid_can_be_saved_without_candidate_count_cap(self):
+        entries = [
+            entry(f'{court}号场', f'{hour:02d}:00', duration)
+            for duration, hours in ((120, range(9, 21)), (60, range(9, 22)))
+            for hour in hours
+            for court in range(1, 11)
+        ]
+        response = self.save_queue(entries)
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(len(response.get_json()['queue']['candidates']), 250)
+        self.network.assert_not_called()
+
     def test_archive_delete_is_owned_versioned_and_preserves_history(self):
         q=self.save_queue([entry()]).get_json()['queue']
         url='/api/plans/manual-queues/2026-10-20'
