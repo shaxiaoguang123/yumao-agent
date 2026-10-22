@@ -13,6 +13,7 @@ from backend.auth.passwords import hash_password, verify_password
 from backend.auth.rate_limit import RateLimitBucket
 from backend.auth.sessions import SessionCredentialChangedError
 from backend.db import connect_database
+from backend.diagnostics import set_diagnostic_identity
 
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
@@ -56,6 +57,8 @@ def require_session(view: Callable):
             return _error("session_invalid", 401)
         g.session_id = session_id
         g.session_context = context
+        set_diagnostic_identity(user_id=context.user.user_id,
+                                credential_id=(request.view_args or {}).get("credential_id"))
         return view(*args, **kwargs)
 
     return wrapped

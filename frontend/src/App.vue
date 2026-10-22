@@ -16,6 +16,7 @@ const sessionStore = inject('sessionStore');
     <RouterLink v-if="sessionStore?.user" :to="{name:'credentials'}"><AppIcon name="shield" />预约凭据</RouterLink>
     <RouterLink v-if="sessionStore?.user" :to="{name:'plans'}"><AppIcon name="clock" />预约计划</RouterLink>
     <RouterLink v-if="sessionStore?.user?.role==='admin'" data-testid="admin-users-link" :to="{name:'admin-users'}"><AppIcon name="user" />用户管理</RouterLink>
+    <RouterLink v-if="sessionStore?.user?.role==='admin'" data-testid="admin-logs-link" :to="{name:'admin-logs'}"><AppIcon name="clock" />运行日志</RouterLink>
     <RouterLink v-if="sessionStore?.user?.role==='admin'" data-testid="admin-invitations-link" :to="{name:'admin-invitations'}"><AppIcon name="ticket" />邀请码管理</RouterLink>
     <RouterLink v-if="sessionStore?.user" :to="{name:'account'}"><AppIcon name="user" />账户</RouterLink>
     <RouterLink v-if="sessionStore?.user" :to="{name:'ai-models'}"><AppIcon name="settings" />设置 · AI模型</RouterLink>

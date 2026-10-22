@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import AccountView from './views/AccountView.vue';
 import AdminInvitationsView from './views/AdminInvitationsView.vue';
 import AdminUsersView from './views/AdminUsersView.vue';
+import AdminLogsView from './views/AdminLogsView.vue';
 import CredentialView from './views/CredentialView.vue';
 import HomeView from './views/HomeView.vue';
 import InviteRegisterView from './views/InviteRegisterView.vue';
@@ -46,6 +47,7 @@ export function createAppRouter(sessionStore, history = createWebHistory(), { cr
         component: AdminInvitationsView,
         meta: { requiresAuth: true, requiresAdmin: true },
       },
+      { path: '/admin/logs', name: 'admin-logs', component: AdminLogsView, meta: { requiresAuth: true, requiresAdmin: true } },
       { path: '/plans', name:'plans', component:PlansView, meta:{requiresAuth:true,requiresPlanSetup:true} },
       { path: '/settings/ai-models', name:'ai-models', component:AIModelsView, meta:{requiresAuth:true} },
       { path: '/:pathMatch(.*)*', redirect: { name: 'home' } },

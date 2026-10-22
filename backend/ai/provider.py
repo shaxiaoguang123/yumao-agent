@@ -14,8 +14,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 
 class ProviderFailure(Exception):
-    def __init__(self, code: str, status: int = 502):
+    def __init__(self, code: str, status: int = 502, *, upstream_status=None):
         self.code, self.status = code, status
+        self.upstream_status = upstream_status
         super().__init__(code)
 
 
@@ -205,7 +206,7 @@ class PinnedChatCompletionsTransport:
                     category = "provider_request_rejected"
                 elif 500 <= response.status <= 599:
                     category = "provider_server_error"
-                raise ProviderFailure(category)
+                raise ProviderFailure(category, upstream_status=response.status)
             return b"".join(chunks)
         except ProviderFailure:
             raise

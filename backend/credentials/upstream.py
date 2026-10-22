@@ -1,4 +1,6 @@
 from __future__ import annotations
+from backend.diagnostics import record_event
+from urllib.parse import urlsplit
 
 import json
 import time
@@ -80,6 +82,21 @@ class UpstreamHttpTransport:
         self._clock = time.monotonic if clock is None else clock
 
     def post_json(
+        self, url: str, *, headers: dict[str, str], json_body: dict,
+    ) -> BoundedHttpResponse:
+        started = time.monotonic_ns()
+        response = self._post_json(url, headers=headers, json_body=json_body)
+        name = urlsplit(url).path.rsplit("/",1)[-1]
+        stage = name if name in {"getUserInfo","getBookingNode","bookingByTime","getChildren","getPayPrice",
+                                 "createBookingBytime","openPlatFormPayOrder","payOrderForPhone","payOrderDetails"} else "other"
+        failed = response.error_code is not None or response.status_code != 200
+        record_event("upstream", "upstream.request", stage=stage, upstream_status=response.status_code,
+                     code=response.error_code or (f"upstream_http_{response.status_code}" if failed else None),
+                     level="warning" if failed else "info", outcome="failed" if failed else "success",
+                     elapsed_ms=(time.monotonic_ns()-started)//1_000_000)
+        return response
+
+    def _post_json(
         self,
         url: str,
         *,
@@ -164,7 +181,8 @@ class UpstreamHttpTransport:
                 "complete",
                 server_date_header,
             )
-        except (requests.RequestException, OSError, TimeoutError, ValueError):
+        except (requests.RequestException, OSError, TimeoutError, ValueError) as exc:
+            record_event("upstream", "upstream.transport_error", level="warning", code="upstream_transport_error", exception=exc)
             return BoundedHttpResponse(
                 status_code, None, retry_after, "upstream_transport_error", "uncertain"
             )

@@ -17,11 +17,13 @@ export class HttpError extends Error {
     sessionInvalid = false,
     cause = undefined,
     retryAfterSeconds = null,
+    requestId = '',
   } = {}) {
     super(message, { cause });
     this.name = 'HttpError';
     this.status = status;
     this.code = code;
+    this.requestId = /^[a-f0-9]{32}$/.test(requestId) ? requestId : '';
     this.kind = kind;
     this.fields = fields;
     this.retryAfterSeconds = Number.isSafeInteger(retryAfterSeconds) && retryAfterSeconds > 0 && retryAfterSeconds <= 900 ? retryAfterSeconds : null;
@@ -106,6 +108,7 @@ export function createHttpClient({
         fields: payload?.fields || {},
         retryAfterSeconds: payload?.retry_after_seconds,
         sessionInvalid: isSessionInvalid,
+        requestId: response.headers?.get?.('X-Request-ID') || '',
       });
     }
     return payload;
