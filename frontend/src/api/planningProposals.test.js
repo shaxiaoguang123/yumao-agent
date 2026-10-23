@@ -6,7 +6,7 @@ const api=()=>{const client={request:vi.fn(async()=>({status:'ready'}))};return 
 describe('planning proposal API',()=>{
  it('sends only the message and the credential on the first turn',async()=>{
   const {client,api:proposals}=api();await proposals.generate({message:'后天 14-16',credentialId:'cred-1'});
-  expect(client.request).toHaveBeenCalledWith('/api/planning/queue-proposals',{method:'POST',body:{message:'后天 14-16',credential_id:'cred-1'}});
+  expect(client.request).toHaveBeenCalledWith('/api/planning/queue-proposals',{method:'POST',timeoutMs:80_000,body:{message:'后天 14-16',credential_id:'cred-1'}});
  });
  it('keeps the server conversation id on later turns and can restore or close it',async()=>{
   const {client,api:proposals}=api();

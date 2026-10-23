@@ -4,9 +4,11 @@ export function createPlanningProposalApi(client) {
   return {
     generate: ({message, credentialId, answers, askedFields, scopeLabel, conversationId, regenerate}) => client.request('/api/planning/queue-proposals', {
       method:'POST',
+      timeoutMs:80_000,
       body:{message,credential_id:credentialId,...(conversationId?{conversation_id:conversationId}:{}),...(answers?.length?{answers,asked_fields:askedFields}:{}),...(scopeLabel?{scope_label:scopeLabel}:{}),...(regenerate?{regenerate:true}:{})},
     }),
     restore: (credentialId,conversationId) => client.request(scopedPath(conversationId?`/api/planning/queue-conversations/${encodeURIComponent(conversationId)}`:'/api/planning/queue-conversations',credentialId)),
+    history: (credentialId) => client.request(scopedPath('/api/planning/queue-conversations/history',credentialId)),
     resume: (conversationId,credentialId) => client.request(scopedPath(`/api/planning/queue-conversations/${encodeURIComponent(conversationId)}/resume`,credentialId),{method:'POST',body:{}}),
     close: (conversationId,credentialId,outcome) => client.request(scopedPath(`/api/planning/queue-conversations/${encodeURIComponent(conversationId)}/close`,credentialId),{method:'POST',body:outcome?{outcome}:{}}),
   };

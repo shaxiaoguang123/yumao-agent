@@ -1,14 +1,15 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import AccountView from './views/AccountView.vue';
-import AdminInvitationsView from './views/AdminInvitationsView.vue';
-import AdminUsersView from './views/AdminUsersView.vue';
-import AdminLogsView from './views/AdminLogsView.vue';
-import CredentialView from './views/CredentialView.vue';
-import HomeView from './views/HomeView.vue';
-import InviteRegisterView from './views/InviteRegisterView.vue';
-import LoginView from './views/LoginView.vue';
-import PlansView from './views/PlansView.vue';
-import AIModelsView from './views/AIModelsView.vue';
+import { shallowRef } from 'vue';
+const AccountView = () => import('./views/AccountView.vue');
+const AdminInvitationsView = () => import('./views/AdminInvitationsView.vue');
+const AdminUsersView = () => import('./views/AdminUsersView.vue');
+const AdminLogsView = () => import('./views/AdminLogsView.vue');
+const CredentialView = () => import('./views/CredentialView.vue');
+const HomeView = () => import('./views/HomeView.vue');
+const InviteRegisterView = () => import('./views/InviteRegisterView.vue');
+const LoginView = () => import('./views/LoginView.vue');
+const PlansView = () => import('./views/PlansView.vue');
+const AIModelsView = () => import('./views/AIModelsView.vue');
 import { planSetupRequirement } from './utils/credentialReadiness.js';
 
 export function createAppRouter(sessionStore, history = createWebHistory(), { credentialApi } = {}) {
@@ -54,7 +55,13 @@ export function createAppRouter(sessionStore, history = createWebHistory(), { cr
     ],
   });
 
+  router.navigationPending = shallowRef(false);
+  let pendingTarget;
+  router.afterEach(to => { if (to === pendingTarget) router.navigationPending.value = false; });
+  router.onError(() => { router.navigationPending.value = false; });
   router.beforeEach(async (to) => {
+    pendingTarget = to;
+    router.navigationPending.value = true;
     if (!sessionStore.initialRefreshComplete) {
       try {
         await sessionStore.refresh();

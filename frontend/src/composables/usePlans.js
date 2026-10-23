@@ -1,37 +1,43 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { copy, newIntent } from '../utils/planForm.js';
 
-export function usePlans(api, session, targetCredentialId=()=>null) {
+export function usePlans(api, session, targetCredentialId=()=>null, { requireCredential = false } = {}) {
   const plans=ref([]), context=shallowRef(null), defaultWindow=shallowRef(null), catalog=shallowRef(null), source=shallowRef(null);
   const listStatus=shallowRef('idle'), metadataError=shallowRef(''), saving=shallowRef(false), message=shallowRef('');
   const saveError=shallowRef(''), fields=shallowRef({}), conflict=shallowRef(false), latest=shallowRef(null), latestError=shallowRef('');
   const history=ref([]), historyPlanId=shallowRef(null), historyStatus=shallowRef('idle');
+  const historyBefore=shallowRef(null);
   const windowState=shallowRef(null), windowError=shallowRef(''), uncertain=shallowRef(false);
   const authorized=computed(()=>session?.status==='authenticated' && Boolean(session.user?.user_id));
   const credentialId=computed(()=>typeof targetCredentialId==='function'?targetCredentialId():targetCredentialId?.value||targetCredentialId||null);
   const canCreate=computed(()=>authorized.value && context.value && defaultWindow.value && !saving.value);
   let alive=true, epoch=0, sourceSelectionSequence=0, listSequence=0, windowSequence=0, historySequence=0, latestSequence=0;
   let suspendedDraft=null,recoveryUserId=null,lastInvalidationEpoch=session?.invalidationEpoch??0;
+  let metadataRequest=null,metadataEpoch=0;
   const valid=(generation)=>alive && generation===epoch && authorized.value;
   function clearFeedback() { message.value='';saveError.value='';fields.value={};conflict.value=false;latest.value=null;latestError.value='';uncertain.value=false;latestSequence++; }
-  function clearAll() {
+  function clearAll({ keepMetadata = false } = {}) {
     sourceSelectionSequence++;
-    plans.value=[];context.value=null;defaultWindow.value=null;catalog.value=null;source.value=null;listStatus.value='idle';metadataError.value='';saving.value=false;
-    history.value=[];historyPlanId.value=null;historyStatus.value='idle';windowState.value=null;windowError.value='';clearFeedback();
+    plans.value=[];source.value=null;listStatus.value='idle';saving.value=false;
+    if(!keepMetadata){context.value=null;defaultWindow.value=null;catalog.value=null;metadataError.value='';}
+    history.value=[];historyBefore.value=null;historyPlanId.value=null;historyStatus.value='idle';windowState.value=null;windowError.value='';clearFeedback();
     listSequence++;windowSequence++;historySequence++;
   }
   async function refresh() {
-    if (!authorized.value || saving.value) return;
+    if (!authorized.value || saving.value || (requireCredential && !credentialId.value)) return;
     const generation=epoch, sequence=++listSequence;
     listStatus.value='loading';
     try { const result=credentialId.value?await api.list(credentialId.value):await api.list();if(valid(generation)&&sequence===listSequence){plans.value=result.plans;listStatus.value='ready';} }
     catch {if(valid(generation)&&sequence===listSequence){plans.value=[];listStatus.value='error';}}
   }
   async function initialize() {
-    const generation=epoch;
+    const generation=metadataEpoch;
+    const metadataValid=()=>alive&&generation===metadataEpoch&&authorized.value;
+    if (!metadataRequest) metadataRequest=Promise.all([api.options(),api.window()]);
     await Promise.all([refresh(), (async()=>{
-      try { const [options,window]=await Promise.all([api.options(),api.window()]);if(valid(generation)){context.value=options.context;defaultWindow.value=window;catalog.value=options;metadataError.value='';} }
-      catch {if(valid(generation))metadataError.value='计划配置读取失败，请重新读取后再新建。';}
+      try { const [options,window]=await metadataRequest;if(metadataValid()){context.value=options.context;defaultWindow.value=window;catalog.value=options;metadataError.value='';} }
+      catch {if(metadataValid())metadataError.value='计划配置读取失败，请重新读取后再新建。';}
+      finally {if(metadataValid())metadataRequest=null;}
     })()]);
   }
   function setSource(plan) {
@@ -90,15 +96,17 @@ export function usePlans(api, session, targetCredentialId=()=>null) {
     catch {if(valid(generation)&&sequence===latestSequence)latestError.value='最新版本读取失败，请重试；表单内容已保留。';}
   }
   function adoptLatest(){if(latest.value&&!saving.value)setSource(latest.value);}
-  async function showHistory(planId) {
+  async function showHistory(planId, { more = false } = {}) {
     if(!authorized.value)return;
+    if(more && (!historyBefore.value||historyStatus.value==='loading'))return;
     const generation=epoch,sequence=++historySequence;
-    historyPlanId.value=planId;history.value=[];historyStatus.value='loading';
+    historyPlanId.value=planId;if(!more){history.value=[];historyBefore.value=null;}historyStatus.value='loading';
     const plan=plans.value.find(item=>item.plan_id===planId);
-    try {const result=plan?.credential_id?await api.revisions(planId,plan.credential_id):await api.revisions(planId);if(valid(generation)&&sequence===historySequence){history.value=result.revisions;historyStatus.value='ready';}}
+    try {const result=await api.revisions(planId,plan?.credential_id,more?historyBefore.value:undefined);if(valid(generation)&&sequence===historySequence){history.value=more?[...history.value,...result.revisions]:result.revisions;historyBefore.value=result.next_before_version||null;historyStatus.value='ready';}}
     catch {if(valid(generation)&&sequence===historySequence)historyStatus.value='error';}
   }
-  function closeHistory(){historyPlanId.value=null;history.value=[];historySequence++;}
+  function closeHistory(){historyPlanId.value=null;history.value=[];historyBefore.value=null;historySequence++;}
+  const loadMoreHistory=()=>showHistory(historyPlanId.value,{more:true});
   async function remove(plan){
     if(!authorized.value||saving.value)return;
     const generation=epoch;saving.value=true;saveError.value='';message.value='';
@@ -110,7 +118,13 @@ export function usePlans(api, session, targetCredentialId=()=>null) {
     finally{if(valid(generation))saving.value=false;}
   }
   function acknowledgeUncertain(){if(authorized.value)uncertain.value=false;}
-  watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken,session?.invalidationEpoch,credentialId.value],()=>{
+  watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken,session?.invalidationEpoch,credentialId.value],(values,previous)=>{
+    if(previous && values.slice(0,4).every((value,index)=>value===previous[index])) {
+      ++epoch; clearAll({keepMetadata:true}); suspendedDraft=null;
+      void refresh(); return;
+    }
+    metadataEpoch++;
+    metadataRequest=null;
     const userId=session?.user?.user_id||null;
     const invalidationEpoch=session?.invalidationEpoch??0;
     const invalidated=invalidationEpoch!==lastInvalidationEpoch;
@@ -145,7 +159,7 @@ export function usePlans(api, session, targetCredentialId=()=>null) {
     }
   },{immediate:true,flush:'sync'});
   onBeforeUnmount(()=>{alive=false;epoch++;clearAll();});
-  return {plans,context,defaultWindow,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,remove,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain,rememberDraft};
+  return {plans,context,defaultWindow,catalog,source,listStatus,metadataError,saving,message,saveError,fields,conflict,latest,latestError,history,historyPlanId,historyStatus,historyBefore,loadMoreHistory,windowState,windowError,uncertain,authorized,canCreate,refresh,initialize,startNew,edit,cancel,updateWindow,save,remove,viewLatest,adoptLatest,showHistory,closeHistory,acknowledgeUncertain,rememberDraft};
 }
 
 function typeOfDraft(value){return value&&typeof value==='object'&&!Array.isArray(value)?'object':typeof value;}

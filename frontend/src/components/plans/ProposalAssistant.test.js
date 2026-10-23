@@ -147,14 +147,16 @@ describe('queue assistant: asking',()=>{
   let finishClose;
   const config=fixture({result:{...ready(),conversation_id:'conversation-to-archive-123'}});
   config.proposalApi.close=vi.fn(()=>new Promise(resolve=>{finishClose=resolve;}));
-  const {wrapper}=await mountAssistant(config);
+  const {wrapper,proposalApi}=await mountAssistant(config);
   await send(wrapper,'我想订场');
+  const readsBefore=proposalApi.restore.mock.calls.length;
   await wrapper.get('[data-testid="restart-conversation"]').trigger('click');
   await flushPromises();
   expect(wrapper.get('[data-testid="proposal-answer"]').element.disabled).toBe(true);
   expect(wrapper.get('[data-testid="continue-proposal"]').element.disabled).toBe(true);
   finishClose();
   await flushPromises();
+  expect(proposalApi.restore.mock.calls.length-readsBefore).toBe(1);
   expect(wrapper.get('[data-testid="proposal-message"]').element.disabled).toBe(false);
   expect(wrapper.get('[data-testid="proposal-message"]').element.value).toBe('');
  });

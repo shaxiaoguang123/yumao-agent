@@ -7,6 +7,7 @@ import PageHeader from '../components/PageHeader.vue';
 const api = inject('adminUsersApi');
 const session = inject('sessionStore');
 const users = ref([]);
+const systemOverviewVisited = ref(false);
 const summary = ref(null);
 const status = ref('idle');
 const errorMessage = ref('');
@@ -175,7 +176,7 @@ onBeforeUnmount(() => {
         <div><button class="secondary-button" type="button" :disabled="offset === 0 || status === 'loading'" @click="load(Math.max(0, offset - pageSize))">上一页</button><button class="secondary-button" type="button" :disabled="offset + pageSize >= total || status === 'loading'" @click="load(offset + pageSize)">下一页</button></div>
       </footer>
     </section>
-    <details v-if="authorized" class="disclosure-panel admin-runtime-overview"><summary>全站运行概览<small>预约执行与异常趋势</small></summary><div class="disclosure-body"><ActivityOverview system /></div></details>
+    <details v-if="authorized" class="disclosure-panel admin-runtime-overview" @toggle="systemOverviewVisited ||= $event.target.open"><summary>全站运行概览<small>预约执行与异常趋势</small></summary><div class="disclosure-body"><ActivityOverview v-if="systemOverviewVisited" system /></div></details>
   </section>
 </template>
 

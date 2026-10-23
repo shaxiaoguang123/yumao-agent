@@ -37,7 +37,7 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
     requestRecords.set(request, record);
     const scopedPlanRead = url.pathname === '/api/plans'
       || /^\/api\/plans\/manual-queues(?:\/\d{4}-\d{2}-\d{2})?$/.test(url.pathname);
-    const scopedPlanningConversationRead = url.pathname === '/api/planning/queue-conversations';
+    const scopedPlanningConversationRead = ['/api/planning/queue-conversations','/api/planning/queue-conversations/history'].includes(url.pathname);
     const adminUserRead = url.pathname === '/api/admin/users' && request.method() === 'GET';
     const adminLogRead = url.pathname === '/api/admin/logs' && request.method() === 'GET';
     const adminLogQueryAllowed = adminLogRead && [...url.searchParams.keys()].every(key => ['hours','since','until','limit','before','level','module','user_id','code','request_id','conversation_id','run_id'].includes(key));
@@ -45,7 +45,7 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
       && [...url.searchParams.keys()].every((key) => ['q', 'role', 'status', 'limit', 'offset'].includes(key));
     const queryAllowed = adminLogQueryAllowed || adminUserQueryAllowed || ((scopedPlanRead || scopedPlanningConversationRead)
       && request.method() === 'GET'
-      && [...url.searchParams.keys()].every((key) => key === 'credential_id')
+      && [...url.searchParams.keys()].every((key) => key === 'credential_id' || (scopedPlanRead && key === 'view' && url.searchParams.get(key) === 'current'))
       && (scopedPlanningConversationRead
         ? url.searchParams.getAll('credential_id').length === 1 && state.credentials.some((item) => item.credential_id === url.searchParams.get('credential_id'))
         : url.searchParams.getAll('credential_id').length <= 1));
@@ -134,9 +134,9 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
       await reply(order ? 200 : 404, order ? { order, queried_at_utc_ms: Date.UTC(2026, 9, 22, 4, 36) } : { error: 'order_not_found' }); return;
     }
     if (url.pathname === '/api/plans' && record.method === 'GET') { await reply(200, { plans: [] }); return; }
-    if (scopedPlanningConversationRead && record.method === 'GET') { await reply(200, { conversation: null }); return; }
+    if (scopedPlanningConversationRead && record.method === 'GET') { await reply(200, url.pathname.endsWith('/history') ? { conversations: [] } : { conversation: null, conversations: [] }); return; }
     if (url.pathname === '/api/plans/options' && record.method === 'GET') {
-      await reply(200, { venues: [], catalog_version: null, context: { timezone_name: 'Asia/Shanghai', currency_code: 'CNY', currency_minor_unit_exponent: 2, preference_verification: 'unverified_manual', catalog_version: null, venue_binding: null } }); return;
+      await reply(200, { venues: [], catalog_version: null, manual_queue_court_labels:Array.from({length:10},(_,index)=>`${index+1}号场`), context: { timezone_name: 'Asia/Shanghai', currency_code: 'CNY', currency_minor_unit_exponent: 2, preference_verification: 'unverified_manual', catalog_version: null, venue_binding: null } }); return;
     }
     if (url.pathname === '/api/booking-window' && record.method === 'GET') {
       await reply(200, { business_timezone_name: 'Asia/Shanghai', business_date: '2026-10-15', default_target_date: '2026-10-17', queryable_target_dates: ['2026-10-15', '2026-10-16', '2026-10-17'], can_query: false, can_book: false, can_pay: false, can_create_job: false }); return;
@@ -147,7 +147,17 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
       const credentialId = url.searchParams.get('credential_id') || '';
       await reply(200, { queue: { target_date: selectedQueueRoute[1], credential_id: credentialId, version: 0, candidates: [] } }); return;
     }
-    if (url.pathname === '/api/availability/live/options' && record.method === 'GET') { await reply(200, { enabled: false, min_read_interval_ms: 0 }); return; }
+    if (url.pathname === '/api/availability/live/options' && record.method === 'GET') { await reply(200, { enabled: Boolean(state.liveEnabled), min_read_interval_ms: 0 }); return; }
+    if (url.pathname === '/api/availability/live/categories' && record.method === 'POST' && state.liveEnabled) {
+      await reply(200, {data_state:'live_observed_unverified',source:'official_read_only',options:[{reference:'synthetic-scope',label:'羽毛球',physical_venue_verified:false}]});return;
+    }
+    if (url.pathname === '/api/availability/live/grid' && record.method === 'POST' && state.liveEnabled) {
+      const body=request.postDataJSON(),barrier=state.nextGridBarrier;
+      state.nextGridBarrier=null;
+      if(barrier){record.expectedCancellation=true;await barrier;}
+      const now=Date.now();
+      await reply(200,{grid_version:'official-bookingByTime-live-observation-v1',data_state:'live_observed_unverified',simulation:false,target_date:body.target_date,timezone_name:'Asia/Shanghai',query_scope:{display_name:'羽毛球',physical_venue_verified:false},can_select:false,can_select_intent:false,can_match:false,can_bind:false,can_book:false,can_pay:false,can_create_job:false,client_selection_window:'open',source:{data_state:'live_observed_unverified',trust_state:'display_only_unverified',price_state:'displayed_unit_unverified',captured_at_utc_ms:now,ui_stale_after_utc_ms:now+60000},courts:[{display_name:'1号场'}],rows:[{time_label:'09:00',time_status_code:'0',cells:[{state:'observed_unknown',price_display:'20',selectable:false,intent_selectable:false}]}]});return;
+    }
     if (url.pathname === '/api/credentials' && record.method === 'POST') {
       await delay(state.createDelay);
       if (state.createError) await reply(409, { error: 'credential_account_already_configured' });
@@ -249,7 +259,8 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
     const record = requestRecords.get(request);
     const reason = request.failure()?.errorText;
     const category = String(record?.status).startsWith('MOCK_') ? 'injected network failure'
-      : record?.status === 204 && reason === 'net::ERR_ABORTED' ? '204 lifecycle cancellation' : 'unexpected';
+      : record?.status === 204 && reason === 'net::ERR_ABORTED' ? '204 lifecycle cancellation'
+      : record?.expectedCancellation && reason === 'net::ERR_ABORTED' ? 'obsolete availability cancellation' : 'unexpected';
     report.requestFailures.push({ scenario: name, path: new URL(request.url()).pathname, reason, category });
   });
   return { browser, context, page, state, name, viewport, pendingRoutes };

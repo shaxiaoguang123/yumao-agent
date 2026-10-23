@@ -11,6 +11,32 @@ async function loadCredentialApi() {
 }
 
 describe('Credential API helpers', () => {
+  it('prefers an in-flight fresh check to a cached snapshot and discards the snapshot on failure', async () => {
+    const createCredentialApi=await loadCredentialApi();let fail;
+    const client={request:vi.fn().mockResolvedValueOnce({credentials:[]}).mockImplementationOnce(()=>new Promise((_,reject)=>{fail=reject;})).mockResolvedValue({credentials:[]})};
+    const api=createCredentialApi(client);await api.list();const fresh=api.list();
+    expect(api.list({reuse:true})).toBe(fresh);
+    const failure=expect(fresh).rejects.toThrow('synthetic');fail(new Error('synthetic'));await failure;
+    await api.list({reuse:true});expect(client.request).toHaveBeenCalledTimes(3);
+  });
+  it('does not repopulate the snapshot from a read that started before a mutation', async () => {
+    const createCredentialApi=await loadCredentialApi();let finish;
+    const client={request:vi.fn().mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;})).mockResolvedValue({credentials:[]})};
+    const api=createCredentialApi(client),old=api.list();
+    await api.update('owned',{enabled:false});finish({credentials:[{credential_id:'stale'}]});await old;
+    const fresh=await api.list({reuse:true});expect(fresh.credentials).toEqual([]);expect(client.request).toHaveBeenCalledTimes(3);
+  });
+  it('coalesces owner reads, reuses only a recent UI snapshot and refreshes after mutations', async () => {
+    const createCredentialApi = await loadCredentialApi();
+    const client={user:{user_id:'owner-a'},csrfToken:'csrf-a',invalidationEpoch:0,request:vi.fn(async()=>({credentials:[]}))};
+    const api=createCredentialApi(client);
+    await Promise.all([api.list(),api.list()]);expect(client.request).toHaveBeenCalledOnce();
+    await api.list({reuse:true});expect(client.request).toHaveBeenCalledOnce();
+    await api.list();expect(client.request).toHaveBeenCalledTimes(2);
+    client.user={user_id:'owner-b'};await api.list({reuse:true});expect(client.request).toHaveBeenCalledTimes(3);
+    client.invalidationEpoch++;await api.list({reuse:true});expect(client.request).toHaveBeenCalledTimes(4);
+    await api.update('owned', {enabled:false});await api.list({reuse:true});expect(client.request).toHaveBeenCalledTimes(6);
+  });
   it('requires a configured HTTP client instead of a global client without Session CSRF', async () => {
     const createCredentialApi = await loadCredentialApi();
 

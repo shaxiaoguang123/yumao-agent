@@ -5,6 +5,7 @@ from contextlib import closing
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -65,6 +66,18 @@ def _keyring(prefix: bytes, active: str = "v1", include_v2: bool = False) -> Cre
 
 
 class CredentialServiceTests(unittest.TestCase):
+    def test_list_builds_equivalent_owned_dtos_in_one_select(self):
+        credential = self._create()
+        service = self._require_service()
+        expected = service.get_for_user('user-a', credential.credential_id)
+        statements = []
+        connection = connect_database(self.database_path, BUSY_TIMEOUT_MS)
+        connection.set_trace_callback(statements.append)
+        with patch('backend.credentials.service.connect_database', return_value=connection):
+            self.assertEqual(service.list_for_user('user-a'), [expected])
+        self.assertEqual(len([sql for sql in statements if sql.lstrip().upper().startswith('SELECT')]), 1)
+        self.assertEqual(service.list_for_user('user-b'), [])
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="credential-service-")
         self.addCleanup(self.temp_dir.cleanup)

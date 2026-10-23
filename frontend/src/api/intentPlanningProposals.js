@@ -3,6 +3,7 @@ export function createIntentPlanningProposalApi(client) {
   return {
     generate: (message, plan_id, base_version, answers, follow_up_questions, credential_id, conversation_id) => client.request('/api/planning/proposals', {
       method: 'POST',
+      timeoutMs: 80_000,
       body: {message, plan_id, base_version, ...(answers?.length ? {answers} : {}),
         ...(follow_up_questions?.length ? {follow_up_questions} : {}), ...(credential_id ? {credential_id} : {}),
         ...(conversation_id ? {conversation_id} : {})},

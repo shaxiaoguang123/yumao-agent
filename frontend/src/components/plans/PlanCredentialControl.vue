@@ -9,7 +9,7 @@ let generation=0,alive=true,sequence=0;
 const selected=computed(()=>credentials.value.find(c=>c.credential_id===props.modelValue)||null);
 const authenticated=()=>props.session?.status==='authenticated'&&Boolean(props.session.user?.user_id);
 const valid=epoch=>alive&&epoch===generation&&authenticated();
-async function load(){if(!props.api||!authenticated())return;const epoch=generation,seq=++sequence;try{const result=await props.api.list();if(!valid(epoch)||seq!==sequence)return;credentials.value=result.credentials;if(!credentials.value.some(c=>c.credential_id===props.modelValue))emit('update:modelValue',(credentials.value.find(c=>c.enabled&&c.last_confirmed_validation_state==='confirmed_valid'&&c.account_binding_state==='confirmed'&&!c.requires_revalidation&&c.expiry_state!=='expired')||credentials.value[0])?.credential_id||'');}catch{if(valid(epoch)&&seq===sequence)error.value='凭据读取失败。';}}
+async function load(){if(!props.api||!authenticated())return;const epoch=generation,seq=++sequence;try{const result=await props.api.list({reuse:true});if(!valid(epoch)||seq!==sequence)return;credentials.value=result.credentials;if(!credentials.value.some(c=>c.credential_id===props.modelValue))emit('update:modelValue',(credentials.value.find(c=>c.enabled&&c.last_confirmed_validation_state==='confirmed_valid'&&c.account_binding_state==='confirmed'&&!c.requires_revalidation&&c.expiry_state!=='expired')||credentials.value[0])?.credential_id||'');}catch{if(valid(epoch)&&seq===sequence)error.value='凭据读取失败。';}}
 function clear(){token.value='';success.value='';error.value='';}
 watch(()=>props.modelValue,clear,{flush:'sync'});
 watch(open,value=>{if(!value)clear();});

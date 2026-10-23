@@ -45,7 +45,7 @@ async function load() {
   }
 
   try {
-    const result = await props.api.list();
+    const result = await props.api.list({ reuse: true });
     if (!alive || current !== sequence) return;
     const credentials = Array.isArray(result?.credentials) ? result.credentials : [];
     if (!credentials.length) {

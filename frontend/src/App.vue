@@ -1,10 +1,11 @@
 <script setup>
 import { inject, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { RouterLink, RouterView, useRoute } from 'vue-router';
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
 import AppIcon from './components/AppIcon.vue';
 import './styles/design-system.css';
 const sessionStore = inject('sessionStore');
 const route = useRoute();
+const navigationPending = useRouter().navigationPending || ref(false);
 const navElement = ref(null);
 async function revealActiveNavigationItem() {
  await nextTick();
@@ -66,7 +67,11 @@ onUnmounted(() => window.removeEventListener('resize', revealActiveNavigationIte
    </div>
   </header>
   <div class="workspace">
-   <main id="main-content" class="page-content" tabindex="-1"><RouterView /></main>
+   <p v-if="navigationPending" class="navigation-progress" role="status">正在切换页面…</p>
+   <main id="main-content" class="page-content" tabindex="-1" :aria-busy="navigationPending"><RouterView /></main>
   </div>
  </div>
 </template>
+<style scoped>
+.navigation-progress{position:fixed;top:76px;left:50%;transform:translateX(-50%);z-index:80;margin:0;padding:8px 16px;border:1px solid var(--line);border-radius:999px;background:var(--surface);box-shadow:var(--shadow);color:var(--muted);font-size:13px;pointer-events:none}
+</style>

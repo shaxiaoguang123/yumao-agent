@@ -8,8 +8,8 @@ describe('read-only availability API', () => {
     await api.grid({ credentialId: 'owned-credential', scopeReference: 'opaque-ref', targetDate: '2026-10-15' });
     expect(client.request.mock.calls).toEqual([
       ['/api/availability/live/options'],
-      ['/api/availability/live/categories', { method: 'POST', body: { credential_id: 'owned-credential' } }],
-      ['/api/availability/live/grid', { method: 'POST', body: { credential_id: 'owned-credential', scope_reference: 'opaque-ref', target_date: '2026-10-15' } }],
+      ['/api/availability/live/categories', { timeoutMs: 15_000, method: 'POST', body: { credential_id: 'owned-credential' } }],
+      ['/api/availability/live/grid', { timeoutMs: 15_000, method: 'POST', body: { credential_id: 'owned-credential', scope_reference: 'opaque-ref', target_date: '2026-10-15' } }],
     ]);
   });
 });

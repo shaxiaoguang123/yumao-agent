@@ -16,7 +16,7 @@ const credentials=[
 function apiFixture(overrides={}){
  const queuesByCredential={'credential-a':[queue('2026-10-17'),queue('2026-10-20','credential-a',[candidate('2号场','19:00',60)])],'credential-b':[queue('2026-10-16','credential-b')]};
  return {
-  list:vi.fn(async()=>({plans:[]})),options:vi.fn(async()=>({context})),window:vi.fn(async()=>bookingWindow),executionSuccesses:vi.fn(async()=>({successes:[],worker_enabled:false})),
+  list:vi.fn(async()=>({plans:[]})),options:vi.fn(async()=>({context,manual_queue_court_labels:Array.from({length:10},(_,index)=>`${index+1}号场`)})),window:vi.fn(async()=>bookingWindow),executionSuccesses:vi.fn(async()=>({successes:[],worker_enabled:false})),
   queues:vi.fn(async(id)=>({queues:queuesByCredential[id]||[]})),
   queue:vi.fn(async(date,id)=>({queue:(queuesByCredential[id]||[]).find(item=>item.target_date===date)||{target_date:date,credential_id:id,version:0,candidates:[]}})),
   saveQueue:vi.fn(async(date,version,entries,id)=>({queue:{...queue(date,id,entries.map(item=>candidate(item.court_preference,item.start_time,item.duration_minutes,item.scope_label))),version:version+1}})),
@@ -40,6 +40,40 @@ async function mountPlans(api=apiFixture(),extraProvide={},startPath='/plans'){
 }
 
 describe('reservation plan workspace',()=>{
+ it.each([true,false])('reuses a pending model probe across tab changes (return before response: %s)',async early=>{
+  let finish;
+  const modelId=`pending-probe-${early}`,probe=vi.fn(()=>new Promise(resolve=>{finish=resolve;}));
+  const aiModelsApi={list:vi.fn(async()=>({effective_model_id:modelId,models:[{id:modelId,version:1,auth_mode:'bearer',has_api_key:true}]})),test:probe};
+  const planningProposalApi={restore:vi.fn(async()=>({conversation:null,conversations:[]})),generate:vi.fn()};
+  const {wrapper}=await mountPlans(apiFixture(),{aiModelsApi,planningProposalApi});
+  await wrapper.get('[data-testid="plan-tab-agent"]').trigger('click');await flushPromises();
+  await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');
+  if(early)await wrapper.get('[data-testid="plan-tab-agent"]').trigger('click');
+  finish({ok:true});await flushPromises();
+  if(!early){expect(planningProposalApi.restore).not.toHaveBeenCalled();await wrapper.get('[data-testid="plan-tab-agent"]').trigger('click');await flushPromises();}
+  expect(probe).toHaveBeenCalledOnce();expect(wrapper.find('[data-testid="proposal-message"]').exists()).toBe(true);
+ });
+ it('loads shared metadata once and defers manual queues, settings and results until needed',async()=>{
+  const {wrapper,api,credentialApi}=await mountPlans();
+  expect(api.options).toHaveBeenCalledOnce();expect(api.window).toHaveBeenCalledOnce();expect(api.list).toHaveBeenCalledOnce();
+  expect(api.queue).not.toHaveBeenCalled();expect(api.executionSuccesses).not.toHaveBeenCalled();expect(credentialApi.executionSettings).not.toHaveBeenCalled();
+  await wrapper.get('[data-testid="plan-tab-manual"]').trigger('click');await flushPromises();expect(api.queue).toHaveBeenCalledOnce();
+  await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');await flushPromises();expect(api.executionSuccesses).toHaveBeenCalledOnce();
+  const disclosure=wrapper.get('#plan-panel-current .credential-popover');disclosure.element.open=true;await disclosure.trigger('toggle');await flushPromises();
+  await wrapper.get('#plan-panel-current [data-testid="selection-credential"]').setValue('credential-b');await flushPromises();
+  expect(api.options).toHaveBeenCalledOnce();expect(api.window).toHaveBeenCalledOnce();expect(credentialApi.executionSettings).not.toHaveBeenCalled();
+ });
+ it('prepares the category for a direct Agent entry without querying hidden venue inventory',async()=>{
+  const {wrapper,liveApi}=await mountPlans(apiFixture(),{},'/plans?tab=agent');
+  expect(liveApi.categories).toHaveBeenCalledOnce();expect(liveApi.grid).not.toHaveBeenCalled();
+  await wrapper.get('[data-testid="plan-tab-manual"]').trigger('click');await flushPromises();
+  expect(wrapper.findAll('#plan-panel-manual thead th')).toHaveLength(11);expect(liveApi.grid).not.toHaveBeenCalled();
+  await wrapper.get('[data-testid="plan-tab-query"]').trigger('click');await new Promise(resolve=>setTimeout(resolve,20));await flushPromises();
+  expect(liveApi.grid).toHaveBeenCalledOnce();
+  await wrapper.get('[data-testid="plan-tab-manual"]').trigger('click');await flushPromises();
+  expect(wrapper.findAll('#plan-panel-manual thead th')).toHaveLength(11);
+  expect(wrapper.get('#plan-panel-manual thead th:nth-child(2)').text()).toBe('1号场');
+ });
  it('keeps the existing work areas and adds read-only order queries',async()=>{
   const {wrapper}=await mountPlans();
   expect(wrapper.findAll('[role="tab"]').map(tab=>tab.text().replace(/\s+/g,''))).toEqual(['查询场地','选择预约','Agent预约','抢票计划2','查询订单']);
@@ -75,7 +109,7 @@ describe('reservation plan workspace',()=>{
   expect(wrapper.findAll('.manual-queue-grid tbody tr')).toHaveLength(13);
   expect(wrapper.get('.manual-queue-grid tbody tr:first-child th').text()).toBe('09–10');
   expect(wrapper.get('.manual-queue-grid tbody tr:last-child th').text()).toBe('21–22');
-  await wrapper.get('[data-testid="queue-cell-1-0"]').trigger('click');
+  await wrapper.get('[aria-label="羽毛球 6号场 10:00开始 两小时候选"]').trigger('click');
   await new Promise(resolve=>setTimeout(resolve,500));await flushPromises();
   expect(api.saveQueue).toHaveBeenCalledWith('2026-10-17',3,[{court_preference:'6号场',start_time:'18:00',end_time:'20:00',duration_minutes:120,scope_label:'羽毛球'},{court_preference:'6号场',start_time:'10:00',end_time:'12:00',duration_minutes:120,scope_label:'羽毛球'}],'credential-a');
  });
@@ -94,11 +128,14 @@ describe('reservation plan workspace',()=>{
   expect(wrapper.find('.ticket-filter-bar .ticket-filter-date input[type="date"]').exists()).toBe(true);
   expect(wrapper.find('.ticket-filter-meta button[aria-label="重新读取抢票计划"]').exists()).toBe(true);
   expect(wrapper.find('.ticket-queue-plans form').exists()).toBe(false);
-  expect(wrapper.find('#plan-panel-current [aria-labelledby="execution-settings-title"]').exists()).toBe(true);
+  expect(wrapper.find('#plan-panel-current [aria-labelledby="execution-settings-title"]').exists()).toBe(false);
+  const settings=wrapper.get('.execution-settings-disclosure');settings.element.open=true;await settings.trigger('toggle');await flushPromises();
   expect(wrapper.find('#plan-panel-current [aria-labelledby="execution-settings-title"] h2').text()).toBe('自动执行时间');
  });
  it('loads one user execution schedule and does not reload it when switching Token',async()=>{
   const {wrapper,credentialApi}=await mountPlans();await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');await flushPromises();
+  expect(credentialApi.executionSettings).not.toHaveBeenCalled();
+  const settings=wrapper.get('.execution-settings-disclosure');settings.element.open=true;await settings.trigger('toggle');await flushPromises();
   expect(credentialApi.executionSettings).toHaveBeenCalledOnce();
   const credentialDisclosure=wrapper.get('#plan-panel-current .credential-popover');credentialDisclosure.element.open=true;await credentialDisclosure.trigger('toggle');await flushPromises();
   await wrapper.get('#plan-panel-current [data-testid="selection-credential"]').setValue('credential-b');await flushPromises();

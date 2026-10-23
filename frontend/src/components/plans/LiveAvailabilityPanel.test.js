@@ -18,9 +18,16 @@ async function setup(overrides={},credentialOverrides={}){
  await settle();return {api,credentialApi,session,wrapper};
 }
 describe('badminton date-driven observation flow',()=>{
+ it('coalesces newer dates and continues after the bounded old read times out',async()=>{
+  const read=vi.fn().mockImplementationOnce(()=>new Promise((_,reject)=>{setTimeout(()=>reject(new DOMException('Synthetic timeout','TimeoutError')),50);})).mockImplementation(async({targetDate})=>grid(targetDate));
+  const {wrapper}=await setup({grid:read});
+  await wrapper.setProps({targetDate:'2026-10-13'});await wrapper.setProps({targetDate:'2026-10-14'});await settle(20);
+  expect(read).toHaveBeenCalledTimes(1);await settle(30);expect(read).toHaveBeenCalledTimes(2);
+  expect(wrapper.get('[data-testid="live-availability-grid"]').text()).toContain('2026-10-14');
+ });
  it('automatically resolves badminton, omits the category box and disables unknown cells',async()=>{
-  const {wrapper,api}=await setup();expect(api.categories).toHaveBeenCalledWith('a');
-  expect(api.grid).toHaveBeenCalledWith({credentialId:'a',scopeReference:'badminton-ref',targetDate:'2026-10-15'});
+  const {wrapper,api}=await setup();expect(api.categories).toHaveBeenCalledWith('a',expect.objectContaining({signal:expect.anything()}));
+  expect(api.grid).toHaveBeenCalledWith({credentialId:'a',scopeReference:'badminton-ref',targetDate:'2026-10-15'},expect.objectContaining({signal:expect.anything()}));
   expect(wrapper.find('[data-testid="live-category"]').exists()).toBe(false);expect(wrapper.get('[data-testid="live-cell-0-0"]').element.disabled).toBe(true);expect(wrapper.get('.observation-price').text()).toBe('20');expect(wrapper.text()).toContain('价格按官方响应原样显示');
  });
  it('keeps settings named and collapsed without another read',async()=>{

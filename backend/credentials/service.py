@@ -716,15 +716,6 @@ class CredentialService:
         ).fetchone()
         if row is None:
             return None
-        expires_at = row["token_expires_at_utc_ms"]
-        if expires_at is None:
-            expiry_state = "expiry_unknown"
-        elif expires_at <= now_utc_ms:
-            expiry_state = "expired"
-        elif expires_at <= now_utc_ms + self.token_expiring_soon_window_seconds * 1000:
-            expiry_state = "expiring_soon"
-        else:
-            expiry_state = "expiry_ok"
         latest = connection.execute(
             """SELECT validation_attempt_id, operation_kind,
                       current_token_revision_snapshot_id, token_revision_id,
@@ -741,6 +732,18 @@ class CredentialService:
                WHERE user_id=? AND credential_id=?""",
             (user_id, credential_id),
         ).fetchone()
+        return self._dto_from_row(row, now_utc_ms, latest_projection, payment_secret)
+
+    def _dto_from_row(self, row, now_utc_ms, latest_projection, payment_secret):
+        expires_at = row["token_expires_at_utc_ms"]
+        if expires_at is None:
+            expiry_state = "expiry_unknown"
+        elif expires_at <= now_utc_ms:
+            expiry_state = "expired"
+        elif expires_at <= now_utc_ms + self.token_expiring_soon_window_seconds * 1000:
+            expiry_state = "expiring_soon"
+        else:
+            expiry_state = "expiry_ok"
         return CredentialDTO(
             credential_id=row["credential_id"],
             label=row["label"],
@@ -774,17 +777,26 @@ class CredentialService:
         now = self._now()
         connection = connect_database(self.database_path, self.busy_timeout_ms)
         try:
+            fields = ("validation_attempt_id", "operation_kind", "current_token_revision_snapshot_id", "token_revision_id",
+                      "started_at_utc_ms", "completed_at_utc_ms", "attempt_result", "account_binding_outcome", "apply_state")
+            projection = ", ".join(f"observation.{name} AS latest_{name}" for name in fields)
             rows = connection.execute(
-                """SELECT credential_id FROM credentials
-                   WHERE user_id=? AND deleted_at_utc_ms IS NULL
-                   ORDER BY created_at_utc_ms, credential_id""",
+                f"""SELECT credential.*, revision.token_expires_at_utc_ms, payment.secret_revision, {projection}
+                    FROM credentials credential
+                    JOIN credential_token_revisions revision ON revision.revision_id=credential.current_token_revision_id
+                      AND revision.user_id=credential.user_id AND revision.credential_id=credential.credential_id
+                    LEFT JOIN credential_payment_secrets payment ON payment.user_id=credential.user_id AND payment.credential_id=credential.credential_id
+                    LEFT JOIN credential_validation_observations observation ON observation.validation_attempt_id=(
+                      SELECT validation_attempt_id FROM credential_validation_observations
+                      WHERE user_id=credential.user_id AND credential_id=credential.credential_id
+                      ORDER BY validation_attempt_id DESC LIMIT 1)
+                    WHERE credential.user_id=? AND credential.deleted_at_utc_ms IS NULL
+                    ORDER BY credential.created_at_utc_ms, credential.credential_id""",
                 (user_id,),
             ).fetchall()
-            return [
-                dto
-                for row in rows
-                if (dto := self._dto_from_id(connection, user_id, row["credential_id"], now)) is not None
-            ]
+            return [self._dto_from_row(row, now,
+                    {name: row[f"latest_{name}"] for name in fields} if row["latest_validation_attempt_id"] is not None else None,
+                    {"secret_revision": row["secret_revision"]} if row["secret_revision"] is not None else None) for row in rows]
         finally:
             connection.close()
 

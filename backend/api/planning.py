@@ -230,6 +230,16 @@ def active_queue_conversation():
                     "conversations": store.list_recent(user_id, credential_id)})
 
 
+@planning_bp.get("/queue-conversations/history")
+@require_session
+def queue_conversation_history():
+    credential_id = request.args.get("credential_id", "")
+    user_id = g.session_context.user.user_id
+    if not credential_id or current_app.extensions["credential_service"].get_for_user(user_id, credential_id) is None:
+        raise PlanError("credential_not_found", 404)
+    return jsonify({"conversations": current_app.extensions["planning_conversation_store"].list_recent(user_id, credential_id)})
+
+
 @planning_bp.get("/queue-conversations/<conversation_id>")
 @require_session
 def queue_conversation(conversation_id):

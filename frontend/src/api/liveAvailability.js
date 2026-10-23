@@ -6,14 +6,18 @@ export function createLiveAvailabilityApi(client) {
     options() {
       return client.request('/api/availability/live/options');
     },
-    categories(credentialId) {
+    categories(credentialId, options = {}) {
       return client.request('/api/availability/live/categories', {
+        timeoutMs: 15_000,
+        ...options,
         method: 'POST',
         body: { credential_id: credentialId },
       });
     },
-    grid({ credentialId, scopeReference, targetDate }) {
+    grid({ credentialId, scopeReference, targetDate }, options = {}) {
       return client.request('/api/availability/live/grid', {
+        timeoutMs: 15_000,
+        ...options,
         method: 'POST',
         body: {
           credential_id: credentialId,

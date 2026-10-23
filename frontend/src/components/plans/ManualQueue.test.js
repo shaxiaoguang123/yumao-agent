@@ -19,6 +19,24 @@ async function setup(overrides={},account=session()){
 }
 
 describe('manual queue interactions',()=>{
+ it('waits for an in-flight autosave and flushes newer edits before leaving',async()=>{
+  vi.useFakeTimers();const finishes=[];
+  const {state,api}=await setup({saveQueue:vi.fn(()=>new Promise(resolve=>{finishes.push(resolve);}))});
+  state.change([entry('1号场')]);await vi.advanceTimersByTimeAsync(450);
+  let left=false;const leaving=state.flush().then(()=>{left=true;});await flushPromises();expect(left).toBe(false);
+  state.change([entry('2号场')]);finishes[0]({queue:queue([entry('1号场')],1)});await flushPromises();
+  expect(left).toBe(false);expect(api.saveQueue).toHaveBeenCalledTimes(2);
+  finishes[1]({queue:queue([entry('2号场')],2)});await leaving;
+  expect(left).toBe(true);expect(state.dirty).toBe(false);expect(state.version).toBe(2);
+ });
+ it('appends bounded history pages and resets the cursor when Token changes',async()=>{
+  const queueRevisions=vi.fn().mockResolvedValueOnce({revisions:[{revision_id:'r3',revision_number:3}],next_before_version:3}).mockResolvedValueOnce({revisions:[{revision_id:'r2',revision_number:2}],next_before_version:null});
+  const {state,credential}=await setup({queueRevisions});
+  await state.showHistory('2026-10-20');await state.loadMoreHistory();
+  expect(queueRevisions).toHaveBeenLastCalledWith('2026-10-20','credential-a',3);
+  expect(state.history.map(row=>row.revision_number)).toEqual([3,2]);
+  credential.value='credential-b';await flushPromises();expect(state.history).toBeNull();expect(state.historyCursor).toBeNull();
+ });
  it('renders 09:00–22:00 and adds or cancels continuous hour candidates',async()=>{
   const wrapper=mount(ManualQueueGrid,{props:{courtNames:['已占用观察场','活动观察场'],entries:[],duration:120,scopeLabel:'羽毛球'}});
   expect(wrapper.findAll('tbody tr')).toHaveLength(13);
