@@ -33,22 +33,13 @@ const choices = [
 </template>
 
 <style scoped>
-.proposal-mode-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; margin-top:16px; }
-.proposal-mode-card { display: flex; align-items: flex-start; gap:8px; min-width: 0; min-height:0; padding:8px; text-align: left; border: 1px solid var(--line); border-radius:var(--control-radius); background: var(--surface); color: var(--ink); cursor: pointer; }
-.proposal-mode-card:hover:not(:disabled) { border-color: var(--brand); }
-.proposal-mode-card.is-selected { border-color: var(--brand); background: var(--brand-soft); }
-.proposal-mode-card:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
-.proposal-mode-card:disabled { opacity: .6; cursor: not-allowed; }
-.proposal-mode-card > .app-icon { flex: none; margin-top:8px; color: var(--brand); }
-.proposal-mode-card strong, .proposal-mode-card small { display: block; }
-.proposal-mode-card strong { font-size: 15px; font-weight: 600; line-height: 1.35; }
-.proposal-mode-card small { margin-top:8px; color: var(--muted); font-size: 13px; line-height: 1.4; }
-@media (max-width:600px) {
-  .proposal-mode-picker { margin:8px; gap:4px; padding:4px; border-radius:12px; background:var(--page); }
-  .proposal-mode-card { min-height:44px; align-items:center; justify-content:center; gap:6px; padding:6px; border-color:transparent; background:transparent; }
-  .proposal-mode-card.is-selected { background:var(--surface); border-color:var(--line); }
-  .proposal-mode-card > .app-icon { width:16px; height:16px; margin:0; }
-  .proposal-mode-card strong { font-size:13px; }
-  .proposal-mode-card small { display:none; }
-}
+.proposal-mode-picker { display:flex; gap:4px; width:fit-content; max-width:100%; padding:4px; border:1px solid var(--line); border-radius:980px; background:var(--page); }
+.proposal-mode-card { display:flex; align-items:center; justify-content:center; gap:6px; min-height:44px; min-width:0; padding:8px 14px; border:1px solid transparent; border-radius:980px; color:var(--muted); background:transparent; font:inherit; cursor:pointer; }
+.proposal-mode-card.is-selected { color:var(--ink); background:var(--surface); border-color:var(--line); box-shadow:0 1px 4px rgba(0,0,0,.03); }
+.proposal-mode-card:hover:not(:disabled) { color:var(--brand); }
+.proposal-mode-card strong { display:block; font-size:13px; font-weight:500; }
+.proposal-mode-card small { display:none; }
+.proposal-mode-card .app-icon { width:16px; height:16px; }
+.proposal-mode-card:disabled { opacity:.5; cursor:not-allowed; }
+@media(max-width:600px) { .proposal-mode-picker { margin:0; width:100%; border:0; border-bottom:1px solid var(--line); border-radius:20px 20px 0 0; padding:4px 8px; } .proposal-mode-card { flex:1; padding:6px; } }
 </style>

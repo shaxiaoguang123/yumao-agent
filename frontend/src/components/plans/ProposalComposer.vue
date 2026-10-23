@@ -105,7 +105,7 @@ function submit() {
           rows="2"
           maxlength="4000"
           :disabled="busy || locked || blocked"
-          :placeholder="mode === 'edit' ? '例如：把优先场地改成4号场，时间保持不变' : '例如：后天 14-16 和 18-20，1号和4号场'"
+          :placeholder="mode === 'edit' ? '例如：把优先场地改成4号场，时间保持不变' : '例如：后天14–16，1号或4号场'"
           @input="emit('update:message', $event.target.value)"
           @keydown.enter.exact.prevent="submit"
           @keydown.ctrl.enter.prevent="submit"
@@ -191,6 +191,6 @@ function submit() {
   .proposal-composer { padding:8px; }
   .proposal-compose-meta { gap:4px 12px; }
   .proposal-input-box textarea { font-size: 16px; }
-  .proposal-field-options { grid-template-columns:1fr; }
+  .proposal-field-options { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 </style>

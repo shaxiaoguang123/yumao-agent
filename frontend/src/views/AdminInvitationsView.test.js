@@ -62,7 +62,7 @@ describe('admin invitation management view', () => {
     const { wrapper } = await mountView(invitationApi());
 
     expect(wrapper.text()).toContain('24 小时');
-    expect(wrapper.text()).toContain('且只能注册一个账户');
+    expect(wrapper.text()).toContain('仅注册一个账户');
     expect(wrapper.find('[data-testid="invitation-expiry-days"]').exists()).toBe(false);
   });
 

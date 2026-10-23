@@ -37,6 +37,7 @@ export async function runDiagnostics(qa) {
       check(ctx.name, 'a log-storage failure is distinguishable from an empty list and preserves login', new URL(ctx.page.url()).pathname === '/admin/logs' && (await ctx.page.getByRole('alert').innerText()).includes('日志暂时不可用'));
       await layout(ctx); await screenshot(ctx, ctx.name + '-unavailable');
       await ctx.page.getByRole('link', { name: '全站运行概览', exact: true }).click();
+      await ctx.page.locator('.admin-runtime-overview > summary').click();
       await ctx.page.getByText('123 ms', { exact: true }).waitFor();
       check(ctx.name, 'administrator overview includes actual error trend and request metrics', await ctx.page.getByRole('heading', { name: '近七天异常趋势', exact: true }).count() === 1 && ctx.state.requests.some(request => request.path === '/api/admin/metrics'));
       if (viewport.width > 850) {

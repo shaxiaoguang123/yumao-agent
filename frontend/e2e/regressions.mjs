@@ -1,7 +1,7 @@
-import { SYNTHETIC_PASSWORD, credential, viewports } from './fixtures.mjs';
+import { SYNTHETIC_TOKEN, SYNTHETIC_PASSWORD, credential, viewports } from './fixtures.mjs';
 
 async function textGeometry(locator) {
-  return locator.evaluateAll((elements) => elements.map((element) => {
+  return locator.evaluateAll((elements) => elements.filter(element => element.checkVisibility()).map((element) => {
     const rect = element.getBoundingClientRect();
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
     const tops = new Set();
@@ -41,10 +41,12 @@ export async function runRegressions(qa) {
         await ctx.page.getByRole('heading', { name: `你好，visual_${role}` }).waitFor();
         const links = [['首页', '/'], ['预约凭据', '/credentials'], ...(role === 'admin' ? [['邀请码管理', '/admin/invitations']] : []), ['账户', '/account']];
         for (const [label, route] of links) {
-          const link = ctx.page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: label, exact: true });
+          const link = ctx.page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: label, exact: true, includeHidden: true });
+          if (!(await link.isVisible())) await ctx.page.locator('.nav-group > summary').filter({ hasText: route.startsWith('/admin') ? '管理' : '设置' }).click();
           await link.click();
-          check(ctx.name, `F1 click ${label} reaches its route`, new URL(ctx.page.url()).pathname === route && await link.isVisible());
-          const nav = await textGeometry(ctx.page.locator('.topbar nav a'));
+          const activeGroup = ctx.page.locator('.nav-group.is-active > summary');
+          check(ctx.name, `F1 click ${label} reaches its route`, new URL(ctx.page.url()).pathname === route && await link.getAttribute('aria-current') === 'page' && (await link.isVisible() || await activeGroup.isVisible()));
+          const nav = await textGeometry(ctx.page.locator('.topbar nav a, .nav-group > summary'));
           const brand = await textGeometry(ctx.page.locator('.brand-title'));
           check(ctx.name, 'brand name stays complete beside its intentional subtitle', brand.length === 1 && brand[0].lines === 1, { brand });
           check(ctx.name, `F1 complete labels on ${route}`, nav.every((n) => n.lines === 1), { nav });
@@ -55,6 +57,8 @@ export async function runRegressions(qa) {
         await ctx.page.locator('.brand').click();
         await ctx.page.getByRole('heading', { name: `你好，visual_${role}` }).waitFor();
         const management = ctx.page.getByRole('link', { name: '管理凭据', exact: true });
+        const activity = await ctx.page.locator('.activity-heading').boundingBox();
+        check(ctx.name, 'home activity begins in the first phone viewport', viewport.width > 600 || activity.y < viewport.height, { activity });
         const geometry = await textGeometry(management);
         check(ctx.name, 'F6 home link is complete and touchable', geometry[0].lines === 1 && geometry[0].width >= 44 && geometry[0].height >= 44, { geometry });
         await tabs(ctx);
@@ -160,6 +164,30 @@ export async function runRegressions(qa) {
       await screenshot(ctx, `${ctx.name}-success`);
     }, { listError: failure === '503', listNetworkError: failure === 'network' }, viewports[2]);
   }
+  await scenario('regression-credential-add-failure-feedback', 'user', async ctx => {
+    await ctx.page.goto(BASE + '/credentials');
+    await waitCredentials(ctx.page);
+    const disclosure = ctx.page.locator('.credential-add');
+    await disclosure.locator('summary').click();
+    await ctx.page.getByTestId('credential-label').fill('合成重复凭据');
+    await ctx.page.getByTestId('credential-token').fill(SYNTHETIC_TOKEN);
+    await ctx.page.getByTestId('credential-payment-password').fill(SYNTHETIC_PASSWORD);
+    const collapsed = disclosure.evaluate(node => new Promise(resolve => {
+      const onToggle = () => { if (!node.open) { node.removeEventListener('toggle', onToggle); resolve(); } };
+      node.addEventListener('toggle', onToggle);
+    }));
+    await ctx.page.locator('[data-testid="credential-create"] button[type="submit"]').click();
+    await collapsed;
+    await ctx.page.getByRole('alert').waitFor();
+    check(ctx.name, 'a failed add retains safe feedback after automatic secret cleanup', (await ctx.page.getByRole('alert').innerText()).includes('此上游账户已绑定') && count(ctx, '/api/credentials') === 1 && await ctx.page.getByTestId('credential-token').inputValue() === '' && await ctx.page.getByTestId('credential-payment-password').inputValue() === '');
+    await screenshot(ctx, ctx.name);
+    await disclosure.locator('summary').click();
+    await ctx.page.getByTestId('credential-token').fill(SYNTHETIC_TOKEN);
+    await ctx.page.getByTestId('credential-payment-password').fill(SYNTHETIC_PASSWORD);
+    await disclosure.locator('summary').click();
+    check(ctx.name, 'manual collapse still clears secret drafts without another POST', await ctx.page.getByTestId('credential-token').inputValue() === '' && await ctx.page.getByTestId('credential-payment-password').inputValue() === '' && count(ctx, '/api/credentials') === 1);
+  }, { createError: true }, viewports[2]);
+
   await scenario('regression-credential-stale-refresh', 'user', async (ctx) => {
     await ctx.page.goto(BASE + '/credentials');
     await waitCredentials(ctx.page);

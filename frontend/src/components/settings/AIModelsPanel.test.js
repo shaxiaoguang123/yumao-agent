@@ -12,7 +12,7 @@ describe('AI models settings',()=>{
  it('describes the service default accurately when no personal model is configured',async()=>{
   const {wrapper}=await mountPanel(fixture({list:vi.fn(async()=>({models:[],service_default:{...model,id:'service_default'},selected_model_id:null,default_model_id:null,effective_model_id:'service_default'}))}));
   expect(wrapper.text()).toContain('已接入服务默认模型');expect(wrapper.text()).not.toContain('还没有配置可用模型');expect(wrapper.text()).toContain('服务提供');expect(wrapper.findAll('option').some(option=>option.text().includes('服务默认'))).toBe(true);
-  expect(wrapper.text()).toContain('会连续调用模型进行多轮对话、候选纠正、复核和时间/场地边界验证，可能产生服务商用量');
+  expect(wrapper.text()).toContain('能力测试会产生模型用量，不保存队列或执行预约、付款');
  });
  it('prefills verified provider presets without sending a model request and clears a typed key on provider change',async()=>{
   const {wrapper,api}=await mountPanel();await wrapper.get('[data-testid="preset-deepseek"]').trigger('click');
@@ -54,7 +54,7 @@ describe('AI models settings',()=>{
   const {wrapper,api}=await mountPanel();
   await wrapper.get('.add-model').trigger('click');await wrapper.get('[name="name"]').setValue('New provider');await wrapper.get('[name="base_url"]').setValue('https://new.test/v1');await wrapper.get('[name="model"]').setValue('new-chat');await wrapper.get('[name="api_key"]').setValue('do-not-echo-this');await wrapper.get('form').trigger('submit');await flushPromises();
   expect(api.create).toHaveBeenCalledWith({name:'New provider',base_url:'https://new.test/v1',model:'new-chat',auth_mode:'bearer',api_key:'do-not-echo-this'});expect(wrapper.text()).not.toContain('do-not-echo-this');
-  await wrapper.findAll('button').find(button=>button.text()==='编辑').trigger('click');expect(wrapper.get('[name="api_key"]').element.value).toBe('');expect(wrapper.text()).toContain('API Key 已配置（不会显示密钥）');
+  await wrapper.findAll('button').find(button=>button.text()==='编辑').trigger('click');expect(wrapper.get('[name="api_key"]').element.value).toBe('');expect(wrapper.text()).toContain('API Key 已配置');
  });
  it('opens an edit form inside the matching model row and keeps add form beside its entry point',async()=>{
   const second={...model,id:'model-2',name:'Second model',model:'second-chat'};

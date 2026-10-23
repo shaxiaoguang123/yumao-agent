@@ -8,6 +8,7 @@ export async function runRedesign(qa) {
  const {scenario,BASE,check,count,layout,screenshot,waitCredentials}=qa;
  for(const viewport of viewports) await scenario(`redesign-credential-discovery-${viewport.name}`,'user',async ctx=>{
   await ctx.page.goto(BASE+'/credentials');await waitCredentials(ctx.page);
+  check(ctx.name,'saved credentials precede the collapsed add form',await ctx.page.locator('.credential-add').getAttribute('open')===null&&await ctx.page.locator('.credential-card').first().evaluate(node=>Boolean(node.compareDocumentPosition(document.querySelector('.credential-add'))&Node.DOCUMENT_POSITION_FOLLOWING)));
   const reads=count(ctx,'/api/credentials','GET');
   await ctx.page.getByTestId('rotate-visual-confirmed').click();
   await ctx.page.getByTestId('rotation-token').fill('synthetic-hidden-draft');
@@ -33,6 +34,7 @@ export async function runRedesign(qa) {
   check(ctx.name,'Agent restores an empty conversation for the active credential',restoredConversation.ok()&&(await restoredConversation.json()).conversation===null);
   await ctx.page.getByTestId('plan-tab-current').click();
   const settings=ctx.page.locator('#plan-panel-current [aria-labelledby="execution-settings-title"]');
+  await ctx.page.locator('.execution-settings-disclosure > summary').click();
   await settings.locator('.execution-settings-form').waitFor();
   await settings.getByLabel('队列复核时间').fill('01:15');
   await settings.getByRole('button',{name:'保存执行设置'}).click();
@@ -45,6 +47,8 @@ export async function runRedesign(qa) {
   await ctx.page.goto(BASE+'/admin');
   await ctx.page.getByRole('heading',{name:'用户管理',exact:true}).waitFor();
   await ctx.page.locator('.admin-user-table').waitFor();
+  const firstUser=await ctx.page.locator('.admin-user-table tbody tr').first().boundingBox();
+  check(ctx.name,'users are visible before the collapsed runtime overview',await ctx.page.locator('.admin-runtime-overview').getAttribute('open')===null&&firstUser.y<viewport.height,{firstUser});
   if(viewport.width<=640){
    check(ctx.name,'admin users become readable cards on phones',await ctx.page.locator('.admin-user-table thead').evaluate(node=>getComputedStyle(node).display)==='none'&&await ctx.page.locator('.admin-user-table td[data-label]').count()>=4);
   }
@@ -67,6 +71,7 @@ export async function runRedesign(qa) {
   check(ctx.name,'Agent queue preview remains visible without horizontal squeeze',Boolean(previewGeometry)&&previewGeometry.preview.left>=0&&previewGeometry.preview.right<=previewGeometry.viewport+1&&(viewport.width>1024||previewGeometry.preview.top<=previewGeometry.messages.top),{previewGeometry});
   await layout(ctx);await screenshot(ctx,`${ctx.name}-plans-agent`);
   await ctx.page.getByTestId('plan-tab-current').click();
+  await ctx.page.locator('.execution-settings-disclosure > summary').click();
   const help=ctx.page.getByLabel('查看执行时间和延迟说明');
   await help.waitFor();await help.focus();
   check(ctx.name,'scheduler help opens from keyboard focus',await ctx.page.getByRole('tooltip').isVisible());

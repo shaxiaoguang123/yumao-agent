@@ -256,7 +256,9 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
 }
 async function screenshot(ctx, name, options = {}) {
   const file = path.join(OUT, 'screenshots', `${name}.png`);
-  await ctx.page.screenshot({ path: file, fullPage: true, animations: 'disabled', mask: [ctx.page.getByTestId('invitation-code'), ctx.page.locator('input[type=password]')], ...options });
+  // Keep sticky navigation at the top of full-page captures.
+  if (options.fullPage !== false) await ctx.page.evaluate(() => window.scrollTo(0, 0));
+  await ctx.page.screenshot({ path: file, fullPage: true, animations: 'disabled', maskColor: '#e5e5ea', mask: [ctx.page.getByTestId('invitation-code'), ctx.page.locator('input[type=password]')], ...options });
   report.screenshots.push({ name, file, route: new URL(ctx.page.url()).pathname, viewport: ctx.viewport.name, width: ctx.viewport.width, height: ctx.viewport.height, role: ctx.state.role });
 }
 async function layout(ctx) {

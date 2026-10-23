@@ -121,7 +121,7 @@ onUnmounted(() => { alive = false; epoch += 1; });
             </div>
           </div>
         </div>
-        <p>每个用户只设置一次，名下所有 Token 共用；复核时会把当时设置写入各自执行快照。</p>
+        <p>所有 Token 共用；复核时写入执行快照。</p>
       </div>
       <span class="execution-worker-state" :class="{ 'is-ready': workerEnabled }">
         {{ workerEnabled ? '执行器已启用' : '执行器未启用' }}
@@ -178,15 +178,15 @@ onUnmounted(() => { alive = false; epoch += 1; });
 .execution-settings{margin:0 0 16px;padding:16px;border:1px solid var(--line);border-radius:16px;background:var(--surface)}
 .execution-settings-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
 .execution-settings-title{min-width:0}.execution-title-line{display:flex;align-items:center;gap:8px}
-.execution-settings-heading h2{margin:0;font-size:18px}.execution-settings-heading p{margin:8px 0 0;color:var(--muted);font-size:13px;line-height:1.6}
+.execution-settings-heading h2{margin:0;font-size:16px}.execution-settings-heading p{margin:8px 0 0;color:var(--muted);font-size:13px;line-height:1.6}
 .execution-worker-state{flex:none;padding:6px 10px;border-radius:999px;background:var(--warning-soft);color:var(--warning);font-size:12px;white-space:nowrap}.execution-worker-state.is-ready{background:var(--success-soft);color:var(--success)}
 .execution-help{position:relative;display:inline-flex}.execution-help-trigger{width:44px;height:44px;padding:0;border:1px solid var(--line);border-radius:50%;background:var(--page);color:var(--brand);font-weight:700;cursor:help}
-.execution-help-popover{position:absolute;left:0;top:calc(100% + 8px);z-index:20;display:none;width:min(520px,calc(100vw - 48px));max-height:min(50vh,560px);overflow:auto;padding:16px;border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:var(--shadow);color:var(--ink);font-size:12px;line-height:1.55}
+.execution-help-popover{position:fixed;left:auto;right:max(24px,calc((100vw - 1120px)/2));top:auto;bottom:24px;z-index:20;display:none;width:min(520px,calc(100vw - 48px));max-height:min(65dvh,560px);overflow:auto;padding:16px;border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:var(--shadow);color:var(--ink);font-size:12px;line-height:1.55}
 .execution-help:hover .execution-help-popover,.execution-help:focus-within .execution-help-popover{display:block}.execution-help-popover ol{display:grid;gap:8px;margin:8px 0 0;padding-left:20px}.execution-help-popover b{color:var(--brand-dark)}
 .execution-settings-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:16px}.execution-settings-form .field{gap:8px}.execution-settings-form input{min-width:0}.execution-settings-form small{color:var(--muted);font-size:11px;line-height:1.5;font-weight:400}
-.execution-delays{grid-column:1/-1;border-top:1px solid var(--line);padding-top:8px}.execution-delays summary{min-height:var(--control-height);display:flex;align-items:center;cursor:pointer;font-size:14px;color:var(--ink);font-weight:600}.execution-delay-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:8px 0}
+.execution-delays{grid-column:1/-1;border-top:1px solid var(--line);padding-top:8px}.execution-delays summary{min-height:var(--control-height);display:flex;align-items:center;cursor:pointer;font-size:14px;color:var(--ink);font-weight:600}.execution-delays summary::after{content:'+';margin-left:auto;color:var(--muted);font-size:20px;font-weight:400}.execution-delays[open] summary::after{content:'−'}.execution-delay-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:8px 0}
 .execution-settings-actions{grid-column:1/-1;display:flex;align-items:center;gap:12px;flex-wrap:wrap}.execution-settings-actions span{font-size:12px;color:var(--warning)}
 @media(max-width:800px){.execution-settings-form,.execution-delay-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:560px){.execution-settings{padding:16px 12px}.execution-settings-heading{display:grid}.execution-worker-state{justify-self:start}.execution-settings-form,.execution-delay-grid{grid-template-columns:minmax(0,1fr)}.execution-settings-actions .primary-button{width:100%}}
+@media(max-width:560px){.execution-settings{padding:16px 12px}.execution-settings-heading{display:flex;flex-wrap:wrap;gap:8px}.execution-worker-state{justify-self:start}.execution-settings-form{grid-template-columns:minmax(0,1fr)}.execution-delay-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.execution-settings-actions .primary-button{width:auto}}
 @media(max-width:734px){.execution-help-popover{position:fixed;left:16px;right:16px;top:auto;bottom:max(16px,env(safe-area-inset-bottom));width:auto;max-height:65dvh}}
 </style>

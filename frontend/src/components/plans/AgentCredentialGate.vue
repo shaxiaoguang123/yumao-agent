@@ -127,4 +127,8 @@ onBeforeUnmount(() => {
 .agent-gate-status.is-ready { background: var(--success-soft); color: var(--success); }
 .agent-gate-actions { display: flex; flex-wrap: wrap; align-items: center; gap:8px; margin-top:8px; }
 .agent-gate-actions a, .agent-gate-actions button { min-height:var(--control-height); display: inline-flex; align-items: center; font-size: 15px; font-weight: 600; }
+.agent-credential-gate.is-ready { display:inline-flex; align-items:center; gap:5px; padding:0; border:0; background:transparent; }
+.agent-credential-gate.is-ready .agent-gate-heading { gap:0; }
+.agent-credential-gate.is-ready h3 { font-size:11px; font-weight:400; color:var(--muted); white-space:nowrap; }
+.agent-credential-gate.is-ready .agent-gate-status,.agent-credential-gate.is-ready p { display:none; }
 </style>

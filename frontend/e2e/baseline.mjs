@@ -73,6 +73,7 @@ export async function runBaseline(qa) {
     await ctx.page.getByTestId('rotate-visual-disabled').click(); await ctx.page.getByTestId('rotation-token').fill(SYNTHETIC_TOKEN); ctx.state.rotationError = true; await ctx.page.getByTestId('rotation-submit').click(); await ctx.page.getByText('替换 Token 与当前账户不匹配，原凭据保持不变。', { exact: true }).waitFor();
     check(ctx.name, 'failed rotation clears Token and retains version', await ctx.page.getByTestId('rotation-token').inputValue() === '' && ctx.state.credentials.find((c) => c.credential_id === 'visual-disabled').credential_version === 4);
     await screenshot(ctx, 'credential-rotation-error');
+    await ctx.page.locator('.credential-add > summary').click();
     await ctx.page.getByTestId('credential-token').fill(SYNTHETIC_TOKEN); await ctx.page.getByTestId('credential-label').fill('合成新凭据'); await ctx.page.getByTestId('credential-payment-password').fill('Synthetic-QA-payment-password'); ctx.state.createDelay = 550;
     await ctx.page.locator('[data-testid=credential-create]').evaluate((form) => { form.requestSubmit(); form.requestSubmit(); }); await ctx.page.getByText('验证并保存中…', { exact: true }).waitFor();
     check(ctx.name, 'create in-flight button disabled', await ctx.page.getByText('验证并保存中…', { exact: true }).isDisabled()); await ctx.page.getByText('凭据已添加。', { exact: true }).waitFor();
@@ -94,7 +95,7 @@ export async function runBaseline(qa) {
       await layout(ctx); await screenshot(ctx, `admin-result-${viewport.name}`);
       await ctx.page.getByTestId('dismiss-invitation').click(); check(ctx.name, 'dismiss clears invitation', await ctx.page.getByTestId('invitation-code').count() === 0);
       ctx.state.inviteDelay = 0; await ctx.page.getByTestId('create-invitation').click(); await ctx.page.getByTestId('invitation-code').waitFor();
-      await ctx.page.getByRole('link', { name: '首页', exact: true }).click(); await ctx.page.getByRole('heading', { name: '你好，visual_admin' }).waitFor(); await ctx.page.getByTestId('admin-invitations-link').click(); await ctx.page.getByTestId('create-invitation').waitFor();
+      await ctx.page.getByRole('link', { name: '首页', exact: true }).click(); await ctx.page.getByRole('heading', { name: '你好，visual_admin' }).waitFor(); await ctx.page.locator('.nav-group > summary').filter({ hasText: '管理' }).click(); await ctx.page.getByTestId('admin-invitations-link').click(); await ctx.page.getByTestId('create-invitation').waitFor();
       check(ctx.name, 'navigate away clears invitation without restoring or retrying', await ctx.page.getByTestId('invitation-code').count() === 0 && count(ctx, '/api/admin/invitations') === 2);
     }, { inviteDelay: 900 }, viewport);
   }
@@ -124,7 +125,7 @@ export async function runBaseline(qa) {
   await scenario('admin-pending-route-leave', 'admin', async (ctx) => {
     await ctx.page.goto(BASE + '/admin/invitations'); await ctx.page.getByTestId('create-invitation').click(); await ctx.page.getByText('正在创建…', { exact: true }).waitFor();
     await ctx.page.getByRole('link', { name: '首页', exact: true }).click(); await ctx.page.getByRole('heading', { name: '你好，visual_admin' }).waitFor();
-    await ctx.page.waitForTimeout(850); await ctx.page.getByTestId('admin-invitations-link').click(); await ctx.page.getByTestId('create-invitation').waitFor();
+    await ctx.page.waitForTimeout(850); await ctx.page.locator('.nav-group > summary').filter({ hasText: '管理' }).click(); await ctx.page.getByTestId('admin-invitations-link').click(); await ctx.page.getByTestId('create-invitation').waitFor();
     check(ctx.name, 'late success never restores unmounted plaintext', await ctx.page.getByTestId('invitation-code').count() === 0 && count(ctx, '/api/admin/invitations') === 1);
   }, { inviteDelay: 700 });
   await scenario('account-password-pending-and-logout', 'user', async (ctx) => {

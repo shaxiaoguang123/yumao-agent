@@ -87,6 +87,21 @@ describe('application navigation', () => {
     removeListener.mockRestore();
   });
 
+  it('keeps grouped destinations and closes the menu after navigation or Escape', async () => {
+    const { wrapper, router } = await mountApp('admin');
+    const menu = wrapper.get('.nav-group');
+    menu.element.open = true;
+    await router.push('/admin/logs');
+    await flushPromises();
+    expect(menu.classes()).toContain('is-active');
+    expect(menu.element.open).toBe(false);
+    expect(menu.get('[data-testid="admin-logs-link"]').attributes('aria-current')).toBe('page');
+    menu.element.open = true;
+    await menu.trigger('keydown', { key: 'Escape' });
+    expect(menu.element.open).toBe(false);
+    wrapper.unmount();
+  });
+
   it('updates role navigation without rebuilding the application when Session is cleared', async () => {
     const { wrapper, sessionStore } = await mountApp('admin');
     expect(wrapper.get('nav[aria-label="主导航"]').findAll('a').map((a) => a.text()))

@@ -8,7 +8,7 @@ const authorized = computed(() => session?.status === 'authenticated' && session
 </script>
 <template>
   <section class="admin-logs-page">
-    <PageHeader eyebrow="管理员工作台" title="运行日志" description="按请求、会话与执行任务追踪问题。日志只包含用于诊断的安全字段。"><RouterLink :to="{ name: 'admin-users' }" class="secondary-button">全站运行概览</RouterLink></PageHeader>
+    <PageHeader title="运行日志"><RouterLink :to="{ name: 'admin-users' }" class="secondary-button">全站运行概览</RouterLink></PageHeader>
     <RuntimeLogPanel v-if="authorized" /><p v-else class="form-error" role="alert">管理员登录状态已失效，请重新登录。</p>
   </section>
 </template>

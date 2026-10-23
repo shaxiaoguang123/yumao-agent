@@ -6,18 +6,19 @@ import { enableAutoUnmount } from '@vue/test-utils';
 import HomeView from './HomeView.vue';
 enableAutoUnmount(afterEach);
 async function home(list) {
- const router = createRouter({ history:createMemoryHistory(), routes:[{path:'/',name:'home',component:{template:'<div/>'}},{path:'/credentials',name:'credentials',component:{template:'<div/>'}},{path:'/account',name:'account',component:{template:'<div/>'}}] });
+ const router = createRouter({ history:createMemoryHistory(), routes:[{path:'/',name:'home',component:{template:'<div/>'}},{path:'/credentials',name:'credentials',component:{template:'<div/>'}},{path:'/account',name:'account',component:{template:'<div/>'}},{path:'/plans',name:'plans',component:{template:'<div/>'}}] });
  await router.push('/');
  const wrapper=mount(HomeView,{global:{plugins:[router],provide:{sessionStore:reactive({status:'authenticated',user:{username:'Synthetic User'}}),credentialApi:{list}}}});
  await flushPromises(); return wrapper;
 }
 describe('dashboard credential overview',()=>{
- it('derives counts and explains that execution depends on server configuration',async()=>{
+ it('derives counts, preserves credential risks and links to the guarded plan workspace',async()=>{
   const wrapper=await home(vi.fn().mockResolvedValue({credentials:[{enabled:true,expiry_state:'expiry_ok',account_binding_state:'confirmed',last_confirmed_validation_state:'confirmed_valid'},{enabled:false,expiry_state:'expired',account_binding_state:'needs_reconfirmation',last_confirmed_validation_state:'confirmed_invalid'}]}));
   expect(wrapper.get('[data-testid="total-credentials"]').text()).toBe('2');
   expect(wrapper.get('[data-testid="enabled-credentials"]').text()).toBe('1');
   expect(wrapper.get('[data-testid="attention-credentials"]').text()).toBe('1');
-  expect(wrapper.text()).toContain('按服务端配置');
+  expect(wrapper.text()).toContain('Token 已过期或已确认无效');
+  expect(wrapper.get('a.primary-button').attributes('href')).toBe('/plans');
   expect(wrapper.find('button[data-testid="start-booking"]').exists()).toBe(false);
  });
  it('does not claim zero or a healthy state while the request is pending',async()=>{

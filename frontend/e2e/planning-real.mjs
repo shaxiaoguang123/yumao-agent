@@ -92,7 +92,7 @@ try {
   await a.page.getByRole('link',{name:'模型设置',exact:true}).click();
   await a.page.getByRole('button',{name:'添加AI模型',exact:true}).click();
   await a.page.getByLabel('显示名称').fill('合成规划模型');await a.page.getByLabel('兼容接口地址').fill('https://model.example/v1');await a.page.getByLabel('模型名称',{exact:false}).fill('synthetic-planner');await a.page.getByLabel(/^API Key/).fill('Synthetic-model-key-only-42');
-  await a.page.getByRole('button',{name:'保存模型',exact:true}).click();await a.page.getByText('API Key 已配置（不会显示密钥）',{exact:false}).waitFor();
+  await a.page.getByRole('button',{name:'保存模型',exact:true}).click();await a.page.getByText('API Key 已配置',{exact:false}).waitFor();
   check('model config stores encrypted secret without echo',storage().plaintext_keys===0);
   await a.page.getByLabel('当前使用模型').selectOption({label:'合成规划模型 · synthetic-planner'});await a.page.getByLabel('默认模型').selectOption({label:'合成规划模型 · synthetic-planner'});await a.page.getByRole('button',{name:'保存模型选择'}).click();await a.page.getByText('当前模型与默认模型已更新。').waitFor();
   const selectedModel=a.page.locator('.model-row').filter({hasText:'合成规划模型'});
@@ -134,7 +134,7 @@ try {
   await a.page.getByTestId('regenerate').click();await a.page.getByTestId('queue-preview').waitFor();check('regeneration reads the latest queue version without a write',storage().revisions===3&&await a.page.getByTestId('confirm-save-proposal').isEnabled());await screenshot(a.page,'conflict-desktop');
 
   await generate(a.page,description+'不要自动付款');await a.page.getByTestId('queue-preview').waitFor();check('default payment authorization adds no extra preview gate',await a.page.getByTestId('confirm-save-proposal').isEnabled()&&storage().revisions===3);
-  const b=await context('B');await login(b.page,'plan_user_b');await b.page.getByTestId('plan-tab-current').click();check('B cannot see A queues',await b.page.locator('.ticket-queue-card').count()===0);await b.page.getByRole('link',{name:'设置 · AI模型',exact:true}).click();await b.page.getByRole('heading',{name:'B 合成模型',exact:true}).waitFor();check('B sees only its own model',await b.page.getByRole('heading',{name:'合成规划模型',exact:true}).count()===0);await b.page.getByRole('link',{name:'预约计划',exact:true}).click();
+  const b=await context('B');await login(b.page,'plan_user_b');await b.page.getByTestId('plan-tab-current').click();check('B cannot see A queues',await b.page.locator('.ticket-queue-card').count()===0);await b.page.locator('.nav-group > summary').filter({hasText:'设置'}).click();await b.page.getByRole('link',{name:'设置 · AI模型',exact:true}).click();await b.page.getByRole('heading',{name:'B 合成模型',exact:true}).waitFor();check('B sees only its own model',await b.page.getByRole('heading',{name:'合成规划模型',exact:true}).count()===0);await b.page.getByRole('link',{name:'预约计划',exact:true}).click();
   await generate(b.page,'下周六两种都抢，14-16选1号场，18-19选4号场，不用候选。');await b.page.getByTestId('queue-preview').waitFor();
   check('mixed duration slots keep their own courts',await b.page.locator('[data-testid="queue-entries"] li').count()===2&&storage().revisions===3);
   await generate(b.page,'下周六14-16打3小时，1号场，不要一小时，不用候选。');

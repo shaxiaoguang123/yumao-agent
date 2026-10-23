@@ -1,0 +1,38 @@
+:root {
+  --apple-background:#ffffff;
+  --apple-canvas:#f5f5f7;
+  --apple-ink:#1d1d1f;
+  --apple-secondary:#86868b;
+  --apple-muted:#6e6e73;
+  --apple-blue:#0071e3;
+  --apple-blue-hover:#0066cc;
+  --apple-blue-soft:#edf5ff;
+  --apple-line:rgba(0,0,0,.08);
+  --apple-shadow:0 4px 24px rgba(0,0,0,.04);
+  --apple-ease:cubic-bezier(.22,1,.36,1);
+  --apple-font:-apple-system,"SF Pro Display","PingFang SC",sans-serif;
+  --brand:var(--apple-blue);
+  --brand-dark:var(--apple-blue-hover);
+  --brand-soft:var(--apple-blue-soft);
+  --accent:#dbeafe;
+  --ink:var(--apple-ink);
+  --muted:var(--apple-muted);
+  --page:var(--apple-canvas);
+  --surface:var(--apple-background);
+  --line:var(--apple-line);
+  --shadow:var(--apple-shadow);
+  --focus:0 0 0 3px rgba(0,113,227,.25);
+  --danger:#b42318;
+  --danger-soft:#fff0ee;
+  --warning:#925a00;
+  --warning-soft:#fff6e8;
+  --success:#207a35;
+  --success-soft:#edf7ee;
+  --radius:24px;
+  --control-radius:14px;
+  font-family:var(--apple-font);
+  color:var(--ink);
+  background:var(--page);
+  font-synthesis:none;
+  text-rendering:optimizeLegibility;
+}

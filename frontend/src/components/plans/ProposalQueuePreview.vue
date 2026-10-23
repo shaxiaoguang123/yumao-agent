@@ -29,7 +29,7 @@ function candidates(minutes) {
     <details class="queue-preview-details">
       <summary>
         <span><strong>队列预览</strong><small>{{ dateLabel }} · {{ modeLabel }}</small></span>
-        <span class="queue-preview-count">{{ proposal ? `共 ${proposal.entry_count} 项` : (missingCount ? `还缺 ${missingCount} 项` : '已收集') }}</span>
+        <span class="queue-preview-count">{{ proposal ? `共 ${proposal.entry_count} 项` : (!slots.some(slot => slot.display) ? '待填写' : missingCount ? `还缺 ${missingCount} 项` : '已收集') }}</span>
       </summary>
       <div class="queue-preview-content">
         <section v-for="group in groups" :key="group.id" class="queue-preview-group" :aria-label="group.title">
@@ -53,7 +53,6 @@ function candidates(minutes) {
           </template>
         </section>
       </div>
-      <p class="queue-preview-note">1小时和2小时分别确认时段与场地。</p>
     </details>
   </aside>
 </template>
@@ -70,20 +69,20 @@ function candidates(minutes) {
 .queue-preview-details small { margin-top: 4px; color: var(--muted); font-size: 12px; }
 .queue-preview-count { margin-left:auto; flex: none; color: var(--brand); font-size: 12px; font-weight: 650; }
 .queue-preview-content { display: grid; gap: 8px; padding: 0 8px 8px; }
-.queue-preview-group { min-width: 0; padding: 8px; border-radius: 12px; background: var(--page); }
-.queue-preview-group header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.queue-preview-group { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; min-width:0; padding:10px; border-radius:12px; background:var(--page); }
+.queue-preview-group header { grid-column:1/-1; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .queue-preview-group h3 { margin: 0; font-size: 13px; }
 .queue-preview-group header > span { color: var(--muted); font-size: 11px; white-space: nowrap; }
-.queue-preview-field { display: grid; gap: 4px; margin-top: 8px; }
+.queue-preview-field { display:grid; gap:4px; min-width:0; }
 .queue-preview-field > span { color: var(--muted); font-size: 11px; }
 .queue-preview-chips { display: flex; gap: 6px; min-width: 0; overflow-x: auto; padding: 2px 0 4px; overscroll-behavior-inline: contain; scrollbar-width: thin; }
 .queue-preview-chip { flex: none; padding: 4px 8px; border-radius: 999px; background: var(--surface); color: var(--ink); font-size: 12px; white-space: nowrap; }
 .queue-preview-chips small { color: var(--muted); font-size: 12px; }
-.queue-candidate-list { display: grid; gap: 4px; max-height: 176px; overflow: auto; margin: 8px 0 0; padding: 0; list-style: none; }
+.queue-candidate-list { grid-column:1/-1; display: grid; gap: 4px; max-height: 176px; overflow: auto; margin: 8px 0 0; padding: 0; list-style: none; }
 .queue-candidate-list li { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 8px; background: var(--surface); font-size: 12px; font-variant-numeric: tabular-nums; }
 .queue-candidate-list strong { white-space: nowrap; }
 .queue-preview-note { margin: 0; padding: 0 8px 8px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .queue-preview :deep(summary:focus-visible) { outline: 3px solid var(--brand); outline-offset: 2px; }
-@media(max-width:1024px){.queue-preview-details{background:var(--brand-soft)}.queue-preview-details>summary{min-height:56px}.queue-preview-count{padding:4px 8px;border-radius:999px;background:var(--surface)}}
+@media(max-width:1024px){.queue-preview-details{background:var(--surface)}.queue-preview-details>summary{min-height:56px}.queue-preview-count{padding:4px 8px;border-radius:999px;background:var(--surface)}}
 @media(max-width:420px){.queue-preview-details>summary{padding:6px 10px}.queue-preview-details strong{font-size:14px}.queue-preview-count{padding:4px 6px}.queue-candidate-list li{align-items:flex-start;flex-direction:column}}
 </style>
