@@ -70,6 +70,9 @@ describe('reservation plan workspace',()=>{
   expect(wrapper.findAll('#plan-panel-manual thead th')).toHaveLength(11);expect(liveApi.grid).not.toHaveBeenCalled();
   await wrapper.get('[data-testid="plan-tab-query"]').trigger('click');await new Promise(resolve=>setTimeout(resolve,20));await flushPromises();
   expect(liveApi.grid).toHaveBeenCalledOnce();
+  await wrapper.get('[data-testid="plan-tab-manual"]').trigger('click');await flushPromises();
+  expect(wrapper.findAll('#plan-panel-manual thead th')).toHaveLength(11);
+  expect(wrapper.get('#plan-panel-manual thead th:nth-child(2)').text()).toBe('1号场');
  });
  it('keeps the existing work areas and adds read-only order queries',async()=>{
   const {wrapper}=await mountPlans();
@@ -106,7 +109,7 @@ describe('reservation plan workspace',()=>{
   expect(wrapper.findAll('.manual-queue-grid tbody tr')).toHaveLength(13);
   expect(wrapper.get('.manual-queue-grid tbody tr:first-child th').text()).toBe('09–10');
   expect(wrapper.get('.manual-queue-grid tbody tr:last-child th').text()).toBe('21–22');
-  await wrapper.get('[data-testid="queue-cell-1-0"]').trigger('click');
+  await wrapper.get('[aria-label="羽毛球 6号场 10:00开始 两小时候选"]').trigger('click');
   await new Promise(resolve=>setTimeout(resolve,500));await flushPromises();
   expect(api.saveQueue).toHaveBeenCalledWith('2026-10-17',3,[{court_preference:'6号场',start_time:'18:00',end_time:'20:00',duration_minutes:120,scope_label:'羽毛球'},{court_preference:'6号场',start_time:'10:00',end_time:'12:00',duration_minutes:120,scope_label:'羽毛球'}],'credential-a');
  });

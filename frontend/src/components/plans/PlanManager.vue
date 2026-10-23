@@ -31,7 +31,7 @@ const currentVisited=shallowRef(activeSection.value==='current'),executionSettin
 const leaving=shallowRef(0);
 let agentCheckSequence=0;
 const {plans,catalog,defaultWindow,listStatus,metadataError,saving,message,saveError,history,historyPlanId,historyStatus,historyBefore,loadMoreHistory,authorized,refresh,initialize,remove,showHistory,closeHistory}=usePlans(api,session,()=>selectedCredentialId.value,{requireCredential:true});
-watch(catalog,value=>{if(!courtOptions.value.length&&Array.isArray(value?.manual_queue_court_labels))courtOptions.value=[...value.manual_queue_court_labels];},{immediate:true});
+watch(catalog,value=>{if(Array.isArray(value?.manual_queue_court_labels))courtOptions.value=[...value.manual_queue_court_labels];},{immediate:true});
 const visiblePlans=computed(()=>visibleIntentPlans(plans.value,{dateFilter:planDateFilter.value,businessDate:defaultWindow.value?.business_date||''}));
 function queueChanged(date){queueState.refreshList();if(date===manualDate.value&&!queueState.dateLocked)queueState.load();}
 function selectQueue(date,credentialId=selectedCredentialId.value){if(queueState.dateLocked||!credentialId)return;if(credentialId!==selectedCredentialId.value)selectedCredentialId.value=credentialId;manualDate.value=date;activeSection.value='manual';}
@@ -59,7 +59,7 @@ function openManualFromAgent({target_date}={}){
  if(typeof target_date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(target_date))manualDate.value=target_date;
  activeSection.value='manual';
 }
-function rememberCourtLabels(names){const labels=names.length?names:(catalog.value?.manual_queue_court_labels||[]);if(JSON.stringify(courtOptions.value)!==JSON.stringify(labels))courtOptions.value=[...labels];}
+function rememberCourtLabels(names){const labels=catalog.value?.manual_queue_court_labels||names;if(JSON.stringify(courtOptions.value)!==JSON.stringify(labels))courtOptions.value=[...labels];}
 function rememberQueueScope(label){queueScopeLabel.value=typeof label==='string'?label:'';}
 function redirectToModelSettings(reason){
  clearAgentModelReady();
