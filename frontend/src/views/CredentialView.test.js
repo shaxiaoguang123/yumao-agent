@@ -343,11 +343,28 @@ describe('Credential management view', () => {
     disclosure.element.open = true;
     await wrapper.get('[data-testid="credential-token"]').setValue('synthetic-cancelled-token');
     await wrapper.get('[data-testid="credential-payment-password"]').setValue('synthetic-payment-password');
-    disclosure.element.open = false;
-    await disclosure.trigger('toggle');
+    await disclosure.get('summary').trigger('click');
     expect(wrapper.get('[data-testid="credential-token"]').element.value).toBe('');
     expect(wrapper.get('[data-testid="credential-payment-password"]').element.value).toBe('');
     expect(api.create).not.toHaveBeenCalled();
+  });
+
+  it('preserves a failed add message when secret cleanup closes the disclosure', async () => {
+    const api = makeApi({ credentials: [credential()], create: vi.fn().mockRejectedValue({ code: 'credential_account_already_configured' }) });
+    const { wrapper } = await mountView(api);
+    const disclosure = wrapper.get('.credential-add');
+    disclosure.element.open = true;
+    await wrapper.get('[data-testid="credential-label"]').setValue('Duplicate');
+    await wrapper.get('[data-testid="credential-token"]').setValue('synthetic-failed-add-token');
+    await wrapper.get('[data-testid="credential-payment-password"]').setValue('synthetic-payment-password');
+    await wrapper.get('[data-testid="credential-create"]').trigger('submit');
+    await flushPromises();
+    expect(disclosure.element.open).toBe(false);
+    await disclosure.trigger('toggle');
+    expect(wrapper.get('[role="alert"]').text()).toContain('此上游账户已绑定');
+    expect(wrapper.get('[data-testid="credential-token"]').element.value).toBe('');
+    expect(wrapper.get('[data-testid="credential-payment-password"]').element.value).toBe('');
+    expect(api.create).toHaveBeenCalledTimes(1);
   });
 
   it('sets a separate encrypted payment password and clears the in-memory field', async () => {

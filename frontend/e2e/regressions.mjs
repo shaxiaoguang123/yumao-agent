@@ -1,4 +1,4 @@
-import { SYNTHETIC_PASSWORD, credential, viewports } from './fixtures.mjs';
+import { SYNTHETIC_TOKEN, SYNTHETIC_PASSWORD, credential, viewports } from './fixtures.mjs';
 
 async function textGeometry(locator) {
   return locator.evaluateAll((elements) => elements.filter(element => element.checkVisibility()).map((element) => {
@@ -164,6 +164,30 @@ export async function runRegressions(qa) {
       await screenshot(ctx, `${ctx.name}-success`);
     }, { listError: failure === '503', listNetworkError: failure === 'network' }, viewports[2]);
   }
+  await scenario('regression-credential-add-failure-feedback', 'user', async ctx => {
+    await ctx.page.goto(BASE + '/credentials');
+    await waitCredentials(ctx.page);
+    const disclosure = ctx.page.locator('.credential-add');
+    await disclosure.locator('summary').click();
+    await ctx.page.getByTestId('credential-label').fill('合成重复凭据');
+    await ctx.page.getByTestId('credential-token').fill(SYNTHETIC_TOKEN);
+    await ctx.page.getByTestId('credential-payment-password').fill(SYNTHETIC_PASSWORD);
+    const collapsed = disclosure.evaluate(node => new Promise(resolve => {
+      const onToggle = () => { if (!node.open) { node.removeEventListener('toggle', onToggle); resolve(); } };
+      node.addEventListener('toggle', onToggle);
+    }));
+    await ctx.page.locator('[data-testid="credential-create"] button[type="submit"]').click();
+    await collapsed;
+    await ctx.page.getByRole('alert').waitFor();
+    check(ctx.name, 'a failed add retains safe feedback after automatic secret cleanup', (await ctx.page.getByRole('alert').innerText()).includes('此上游账户已绑定') && count(ctx, '/api/credentials') === 1 && await ctx.page.getByTestId('credential-token').inputValue() === '' && await ctx.page.getByTestId('credential-payment-password').inputValue() === '');
+    await screenshot(ctx, ctx.name);
+    await disclosure.locator('summary').click();
+    await ctx.page.getByTestId('credential-token').fill(SYNTHETIC_TOKEN);
+    await ctx.page.getByTestId('credential-payment-password').fill(SYNTHETIC_PASSWORD);
+    await disclosure.locator('summary').click();
+    check(ctx.name, 'manual collapse still clears secret drafts without another POST', await ctx.page.getByTestId('credential-token').inputValue() === '' && await ctx.page.getByTestId('credential-payment-password').inputValue() === '' && count(ctx, '/api/credentials') === 1);
+  }, { createError: true }, viewports[2]);
+
   await scenario('regression-credential-stale-refresh', 'user', async (ctx) => {
     await ctx.page.goto(BASE + '/credentials');
     await waitCredentials(ctx.page);

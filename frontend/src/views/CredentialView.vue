@@ -390,8 +390,8 @@ onUnmounted(() => {
       </CredentialCard>
       </div>
     </section>
-    <details class="credential-add disclosure-panel" :open="!credentials.length || Boolean(planSetupNotice) || creating || Boolean(createToken)" @toggle="!$event.currentTarget.open && cancelCreate()">
-      <summary><span>添加预约凭据</span><small>Token 与支付密码</small></summary>
+    <details class="credential-add disclosure-panel" :open="!credentials.length || Boolean(planSetupNotice) || creating || Boolean(createToken)">
+      <summary @click="$event.currentTarget.parentElement.open && cancelCreate()"><span>添加预约凭据</span><small>Token 与支付密码</small></summary>
       <div class="disclosure-body">
       <header class="credential-add-heading">
 
