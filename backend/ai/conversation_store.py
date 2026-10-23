@@ -59,21 +59,22 @@ class PlanningConversationStore:
     def list_recent(self, user_id: str, credential_id: str, kind: str = "queue", limit: int = 50) -> list[dict]:
         with closing(connect_database(self._database_path, self._busy_timeout_ms)) as db:
             rows = db.execute(
-                "SELECT conversation_id, business_date, version, status, updated_at_utc_ms, state_json, response_history_json "
+                "SELECT conversation_id, business_date, version, status, updated_at_utc_ms, "
+                "json_extract(state_json,'$.message') message, "
+                "json_extract(response_history_json,'$[#-1]') latest_json "
                 "FROM planning_conversations WHERE user_id=? AND credential_id IS ? AND conversation_kind=? "
                 "ORDER BY updated_at_utc_ms DESC, conversation_id DESC LIMIT ?",
                 (user_id, credential_id, kind, min(max(limit, 1), 100)),
             ).fetchall()
         result = []
         for row in rows:
-            state, history = json.loads(row["state_json"]), json.loads(row["response_history_json"])
-            latest = history[-1] if history else {}
+            latest = json.loads(row["latest_json"]) if row["latest_json"] else {}
             slots = {item.get("field"): item for item in (latest.get("conversation") or {}).get("slots", [])}
             target = slots.get("target_date", {}).get("display")
             mode = slots.get("booking_mode", {}).get("display")
             title = " · ".join(value for value in (target, mode) if value)
             if not title:
-                title = " ".join(str(state.get("message", "")).split())[:56] or "预约对话"
+                title = " ".join(str(row["message"] or "").split())[:56] or "预约对话"
             workflow_state = latest.get("workflow_state")
             if workflow_state == "saved":
                 preview = "队列已保存"

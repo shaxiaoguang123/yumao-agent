@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+afterEach(() => vi.useRealTimers());
 
 async function loadHttpClient() {
   const module = await import('./http.js').catch(() => null);
@@ -16,6 +18,44 @@ function response(status, body = {}) {
 }
 
 describe('HTTP helper', () => {
+  it.each(['fetch', 'body'])('bounds a stalled %s without retrying or invalidating the Session', async (stage) => {
+    vi.useFakeTimers();
+    const createHttpClient = await loadHttpClient();
+    const waiting = new Promise(() => {});
+    const fetchImpl = vi.fn(() => stage === 'fetch' ? waiting : Promise.resolve({ ...response(200), json: () => waiting }));
+    const onSessionInvalid = vi.fn();
+    const client = createHttpClient({ fetchImpl, onSessionInvalid });
+    const result = expect(client.request('/api/credentials', { timeoutMs: 50 })).rejects.toMatchObject({ kind: 'timeout' });
+    await vi.advanceTimersByTimeAsync(50);
+    await result;
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl.mock.calls[0][1].signal.aborted).toBe(true);
+    expect(onSessionInvalid).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch an already cancelled request', async () => {
+    const createHttpClient = await loadHttpClient();
+    const controller = new AbortController();
+    controller.abort();
+    const fetchImpl = vi.fn();
+    const client = createHttpClient({ fetchImpl });
+    await expect(client.request('/api/credentials', { signal: controller.signal })).rejects.toMatchObject({ kind: 'timeout' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('forwards cancellation and ignores a late invalid-session response', async () => {
+    const createHttpClient = await loadHttpClient();
+    let finish;
+    const fetchImpl = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    const onSessionInvalid = vi.fn(), controller = new AbortController();
+    const client = createHttpClient({ fetchImpl, onSessionInvalid });
+    const result = expect(client.request('/api/credentials', { signal: controller.signal })).rejects.toMatchObject({ kind: 'timeout' });
+    controller.abort();
+    await result;
+    finish(response(401, { error: 'session_invalid' }));
+    await Promise.resolve();
+    expect(onSessionInvalid).not.toHaveBeenCalled();
+  });
   it('sends credentials on GET and ordinary requests', async () => {
     const createHttpClient = await loadHttpClient();
     const fetchImpl = vi.fn()

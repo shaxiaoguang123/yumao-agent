@@ -21,7 +21,7 @@ function toggle(row,court){
  <div class="manual-queue-grid">
   <div class="queue-grid-heading"><span>09:00–22:00 · {{ duration===120?'连续两小时':'一小时' }}</span><span v-if="scopeLabel">预约类别：{{ scopeLabel }}</span></div>
   <p v-if="error" class="form-error" role="alert">{{ error }}</p>
-  <p v-if="!scopeLabel" class="muted">请先在“查询场地”读取当前 Token 的真实预约类别和场地；未读取前不能加入执行队列。</p>
+  <p v-if="!scopeLabel" class="muted">预约类别尚未就绪，请到“查询场地”读取或重试。</p>
   <p v-else-if="!courts.length" class="muted">读取到预约类别后，请先查询场地，再选择预约意向。</p>
   <div v-else class="queue-table-scroll" tabindex="0" aria-label="场地与时间偏好网格，可横向滚动"><table><thead><tr><th scope="col">时间</th><th v-for="court in courts" :key="court" scope="col">{{ court }}</th></tr></thead><tbody><tr v-for="(row,index) in rows" :key="row.start"><th scope="row" :title="`${clock(row.start)}–${clock(row.end)}`">{{ String(row.start).padStart(2,'0') }}–{{ String(row.end).padStart(2,'0') }}</th><td v-for="(court,column) in courts" :key="court"><button type="button" class="queue-cell" :class="{'is-selected':selected(row,court)}" :data-testid="`queue-cell-${index}-${column}`" :aria-label="`${scopeLabel} ${court} ${clock(row.start)}开始 ${duration===120?'两小时':'一小时'}候选`" :aria-pressed="selected(row,court)" :disabled="disabled||!scopeLabel" @click="toggle(row,court)"><span v-if="selected(row,court)">✓</span></button></td></tr></tbody></table></div>
   <p v-if="courts.length" class="grid-scroll-hint" aria-hidden="true">左右滑动查看更多场地</p>

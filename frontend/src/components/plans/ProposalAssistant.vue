@@ -102,7 +102,8 @@ function hydrateConversation(saved){
 }
 async function refreshConversationHistory(){
  if(!authorized()||!props.credentialId||typeof props.proposalApi.restore!=='function')return;
- try{conversations.value=(await props.proposalApi.restore(props.credentialId))?.conversations||[];}catch{}
+ const generation=epoch,id=props.session.user.user_id,csrf=props.session.csrfToken;
+ try{const result=await (props.proposalApi.history||props.proposalApi.restore)(props.credentialId);if(valid(generation,id,csrf))conversations.value=result?.conversations||[];}catch{}
 }
 watch(()=>[props.session.status,props.session.user?.user_id,props.session.csrfToken,props.credentialId],(values,previous)=>{resetForSession(values,previous);void restoreConversation();},{flush:'sync'});
 onMounted(()=>restoreConversation());
@@ -133,7 +134,7 @@ function onMessageInput(next){
 function applyMessageReset(){void closeCurrentConversation();const next=pendingMessage.value;resetNotice.value=false;pendingMessage.value='';editingOriginal.value=false;message.value=next;}
 function cancelMessageReset(){resetNotice.value=false;pendingMessage.value='';editingOriginal.value=false;}
 function clearProposal(){dispatch('RESTART');proposal.value=null;questions.value=[];generatedFor.value=null;error.value='';savedNotice.value='';}
-async function restartConversation(){if(busyConversation.value||busySaving.value||status.value==='generating')return;busyConversation.value=true;try{if(!await closeCurrentConversation())return;requestId++;clearProposal();clearConversation();message.value='';trace.value=[];pendingTurn.value='';pendingMessage.value='';resetNotice.value=false;editingOriginal.value=false;await refreshConversationHistory();emit('mode-reset');}finally{busyConversation.value=false;}}
+async function restartConversation(){if(busyConversation.value||busySaving.value||status.value==='generating')return;busyConversation.value=true;try{if(!await closeCurrentConversation())return;requestId++;clearProposal();clearConversation();message.value='';trace.value=[];pendingTurn.value='';pendingMessage.value='';resetNotice.value=false;editingOriginal.value=false;emit('mode-reset');}finally{busyConversation.value=false;}}
 async function cancelProposal(){if(busyConversation.value||status.value==='generating')return;busyConversation.value=true;try{if(!await closeCurrentConversation())return;clearProposal();clearConversation();message.value='';emit('mode-reset');}finally{busyConversation.value=false;}}
 async function selectConversation(id){
  if(!id||id===conversationId.value||busyConversation.value||busySaving.value||status.value==='generating'||typeof props.proposalApi.resume!=='function')return;

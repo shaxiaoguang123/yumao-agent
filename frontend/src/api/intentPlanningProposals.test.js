@@ -6,7 +6,7 @@ describe('intent planning proposal API',()=>{
   const client={request:vi.fn(async()=>({status:'ready'}))};
   const api=createIntentPlanningProposalApi(client);
   await api.generate('只把优先场地改成4号场','plan-7',3,['4号场'],[['你想改哪项？']],'credential-a');
-  expect(client.request).toHaveBeenCalledWith('/api/planning/proposals',{method:'POST',body:{
+  expect(client.request).toHaveBeenCalledWith('/api/planning/proposals',{method:'POST',timeoutMs:80_000,body:{
    message:'只把优先场地改成4号场',plan_id:'plan-7',base_version:3,answers:['4号场'],
    follow_up_questions:[['你想改哪项？']],credential_id:'credential-a',
   }});

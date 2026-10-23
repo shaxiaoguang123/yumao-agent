@@ -14,6 +14,7 @@ const python = process.env.PLAN_QA_PYTHON || execFileSync('conda', ['run','-n','
 await mkdir(output, {recursive:false});
 const report = {provider:'Fake Provider; no real supplier tested',checks:[],screenshots:[],externalRequests:[],errors:[]};
 let backend, vite, browser, manifest;
+const diagnosticPages=[];
 function check(name, ok, evidence={}) {report.checks.push({name,ok,evidence});if(!ok)throw new Error(name);}
 async function ready(child, marker) {
   let text='';
@@ -37,7 +38,7 @@ print(json.dumps({'plans':db.execute('SELECT count(*) FROM booking_plans').fetch
 async function context(name,width=1440,height=900) {
   const ctx=await browser.newContext({viewport:{width,height},timezoneId:'Asia/Shanghai'});
   await ctx.route('**/*',async route=>{if(new URL(route.request().url()).origin!==origin){report.externalRequests.push(name);await route.abort('blockedbyclient');}else await route.continue();});
-  const page=await ctx.newPage();page.on('pageerror',error=>report.errors.push(error.message));
+  const page=await ctx.newPage();diagnosticPages.push({name,page});page.on('pageerror',error=>report.errors.push(error.message));
   return {ctx,page};
 }
 async function login(page,user) {await page.goto(origin+'/login');await page.getByLabel('用户名').fill(user);await page.getByLabel('密码',{exact:true}).fill('Synthetic-only-password-42');await page.getByRole('button',{name:'登录',exact:true}).click();await page.getByRole('link',{name:'预约计划',exact:true}).click();await page.getByTestId('plan-tab-query').waitFor();await page.getByTestId('plan-tab-agent').click();await page.locator('.agent-credential-gate[data-state="ready"]').waitFor();}
@@ -159,6 +160,10 @@ try {
   const phone=await context('phone-B',390,844);await login(phone.page,'plan_user_b');await waitScope(phone.page);await generate(phone.page,description);await phone.page.getByTestId('queue-preview').waitFor();check('390px queue preview has no horizontal overflow',await phone.page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth));await screenshot(phone.page,'proposal-phone');
   const upstream=JSON.parse(await readFile(path.join(output,'upstream-attempts.json'),'utf8'));const models=JSON.parse(await readFile(path.join(output,'model-attempts.json'),'utf8'));check('no real provider/booking/payment requests',upstream.http_attempts===0&&upstream.external_socket_attempts===0,upstream);check('fake model review and connection test exercised',models.calls>=6&&models.tests>=1,models);
   await a.ctx.close();await phone.ctx.close();await b.ctx.close();
+} catch(error) {
+  report.errors.push(error.message);
+  for(const {name,page} of diagnosticPages)if(!page.isClosed()){await screenshot(page,'failure-'+name);}
+  throw error;
 } finally {
   if(browser)await browser.close();await stop(vite);await stop(backend);await writeFile(path.join(output,'results.json'),JSON.stringify(report,null,2));
 }

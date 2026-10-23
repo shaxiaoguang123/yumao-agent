@@ -47,10 +47,12 @@ describe('auth router guard', () => {
 
     await vi.waitFor(() => expect(store.refresh).toHaveBeenCalledOnce());
     expect(navigationFinished).toBe(false);
+    expect(router.navigationPending.value).toBe(true);
     resolveRefresh();
     await navigation;
 
     expect(router.currentRoute.value.name).toBe('account');
+    expect(router.navigationPending.value).toBe(false);
   });
 
   it('redirects to login only after a definitive anonymous refresh', async () => {

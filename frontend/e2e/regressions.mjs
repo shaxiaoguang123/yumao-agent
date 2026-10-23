@@ -32,6 +32,7 @@ export async function runRegressions(qa) {
         await tabs(ctx);
         await screenshot(ctx, ctx.name);
         await link.click();
+        await ctx.page.waitForURL(BASE + target);
         check(ctx.name, 'F7 action link reaches its route', new URL(ctx.page.url()).pathname === target);
       }, {}, viewport);
     }
@@ -44,6 +45,7 @@ export async function runRegressions(qa) {
           const link = ctx.page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: label, exact: true, includeHidden: true });
           if (!(await link.isVisible())) await ctx.page.locator('.nav-group > summary').filter({ hasText: route.startsWith('/admin') ? '管理' : '设置' }).click();
           await link.click();
+          await ctx.page.waitForURL(BASE + route);
           const activeGroup = ctx.page.locator('.nav-group.is-active > summary');
           check(ctx.name, `F1 click ${label} reaches its route`, new URL(ctx.page.url()).pathname === route && await link.getAttribute('aria-current') === 'page' && (await link.isVisible() || await activeGroup.isVisible()));
           const nav = await textGeometry(ctx.page.locator('.topbar nav a, .nav-group > summary'));

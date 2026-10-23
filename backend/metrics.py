@@ -1,7 +1,6 @@
 """Read-only aggregates of durable business facts; no upstream calls or secrets."""
 from contextlib import closing
 from datetime import datetime, timedelta
-import json
 from zoneinfo import ZoneInfo
 
 from backend.db import connect_database
@@ -19,25 +18,24 @@ def overview(settings, now, *, user_id=None, diagnostics=None):
     with closing(connect_database(settings.database_path,settings.sqlite_busy_timeout_ms)) as db:
         credentials = db.execute("SELECT COUNT(*) total,COALESCE(SUM(enabled),0) enabled FROM credentials"+predicate+
                                  (" AND " if predicate else " WHERE ")+"deleted_at_utc_ms IS NULL",parameters).fetchone()
-        queues = db.execute("""SELECT r.intent_json FROM booking_plans p JOIN booking_plan_revisions r
-            ON r.revision_id=p.current_revision_id AND r.user_id=p.user_id"""+
-            (" WHERE p.user_id=?" if user_id is not None else ""),parameters).fetchall()
+        queues = db.execute("""SELECT json_extract(r.intent_json,'$.target_date') target_date,
+            json_array_length(r.intent_json,'$.candidates') candidate_count,
+            (SELECT COUNT(*) FROM json_each(r.intent_json,'$.candidates') WHERE json_extract(value,'$.duration_minutes')=60) one_hour,
+            (SELECT COUNT(*) FROM json_each(r.intent_json,'$.candidates') WHERE json_extract(value,'$.duration_minutes')=120) two_hour
+            FROM booking_plans p JOIN booking_plan_revisions r ON r.revision_id=p.current_revision_id AND r.user_id=p.user_id
+            WHERE json_extract(r.intent_json,'$.kind')=? AND COALESCE(json_extract(r.intent_json,'$.deleted'),0)=0
+              AND json_extract(r.intent_json,'$.target_date')>=? AND json_array_length(r.intent_json,'$.candidates')>0"""+
+            (" AND p.user_id=?" if user_id is not None else ""),(QUEUE_KIND,today.isoformat(),*parameters)).fetchall()
         runs = db.execute("SELECT state,created_at_utc_ms FROM booking_execution_runs"+predicate+
                           (" AND " if predicate else " WHERE ")+"created_at_utc_ms BETWEEN ? AND ?",(*parameters,since,now)).fetchall()
         users = dict(db.execute("SELECT COUNT(*) total,COALESCE(SUM(status='active'),0) active FROM users").fetchone()) if user_id is None else None
     queue_count = candidates = eligible = one_hour = two_hour = 0
     for row in queues:
-        snapshot = json.loads(row["intent_json"])
-        if snapshot.get("kind") != QUEUE_KIND or snapshot.get("deleted") or snapshot["target_date"] < today.isoformat():
-            continue
-        entries = snapshot.get("candidates",[])
-        if not entries:
-            continue
         queue_count += 1
-        candidates += len(entries)
-        one_hour += sum(item["duration_minutes"]==60 for item in entries)
-        two_hour += sum(item["duration_minutes"]==120 for item in entries)
-        eligible += int(automatic_queue_schedule(datetime.fromisoformat(snapshot["target_date"]).date(),now,settings.booking_timezone_name)["eligible"])
+        candidates += row["candidate_count"]
+        one_hour += row["one_hour"]
+        two_hour += row["two_hour"]
+        eligible += int(automatic_queue_schedule(datetime.fromisoformat(row["target_date"]).date(),now,settings.booking_timezone_name)["eligible"])
     states = {key:0 for key in ("ready","calibrated","running","succeeded","failed","empty","stale","needs_attention")}
     trend = {day:{"date":day,"total":0,"succeeded":0,"failed":0,"needs_attention":0,"other":0} for day in days}
     for row in runs:

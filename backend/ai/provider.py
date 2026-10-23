@@ -7,10 +7,26 @@ import ssl
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from http.client import HTTPSConnection, HTTPException
 from typing import Callable, Mapping, Sequence
 from urllib.parse import urlsplit, urlunsplit
+
+
+_request_deadline = ContextVar("model_request_deadline", default=None)
+
+
+@contextmanager
+def model_call_budget(seconds):
+    deadline = time.monotonic() + seconds
+    previous = _request_deadline.get()
+    token = _request_deadline.set(min(deadline, previous) if previous is not None else deadline)
+    try:
+        yield
+    finally:
+        _request_deadline.reset(token)
 
 
 class ProviderFailure(Exception):
@@ -130,6 +146,10 @@ class PinnedChatCompletionsTransport:
         base = validate_base_url(config.base_url)
         parsed = urlsplit(base)
         deadline = time.monotonic() + self.total_timeout
+        if _request_deadline.get() is not None:
+            deadline = min(deadline, _request_deadline.get())
+        if time.monotonic() >= deadline:
+            raise ProviderFailure("provider_timeout", 504)
         if self.resolver is _resolve_public:
             addresses = self.resolver(parsed.hostname or "", timeout=max(0.001, min(2.0, deadline - time.monotonic())))
         else:

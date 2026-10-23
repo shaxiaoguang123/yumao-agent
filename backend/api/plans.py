@@ -69,10 +69,27 @@ def _credential_scope(value):
     return value
 
 
-def _query_credential_scope():
-    if set(request.args.keys()) - {"credential_id"} or len(request.args.getlist("credential_id")) > 1:
+def _query_credential_scope(extra_fields=()):
+    if set(request.args.keys()) - {"credential_id", *extra_fields} or any(len(request.args.getlist(key)) > 1 for key in request.args):
         raise PlanError("invalid_request", 400)
     return _credential_scope(request.args.get("credential_id"))
+
+
+def _revision_pagination():
+    try:
+        limit = int(request.args["limit"]) if "limit" in request.args else None
+        before = int(request.args["before_version"]) if "before_version" in request.args else None
+        if (limit is not None and not 1 <= limit <= 50) or (before is not None and not 1 <= before <= 9007199254740991):
+            raise ValueError
+    except ValueError:
+        raise PlanError("invalid_request", 400) from None
+    return limit, {"limit": limit + 1 if limit is not None else None, "before_version": before}
+
+
+def _revision_response(rows, limit):
+    more = limit is not None and len(rows) > limit
+    visible = rows[:limit] if limit is not None else rows
+    return jsonify({"revisions": visible, "next_before_version": visible[-1]["revision_number"] if more else None})
 
 
 @plans_bp.errorhandler(PlanError)
@@ -88,7 +105,10 @@ def _storage_error(_error):
 @plans_bp.get("")
 @require_session
 def list_plans():
-    return jsonify({"plans": _service().list_plans(_user_id(), _now_utc_ms(), _query_credential_scope())})
+    credential_id = _query_credential_scope({"view"})
+    if request.args.get("view") not in (None, "current"):
+        raise PlanError("invalid_request", 400)
+    return jsonify({"plans": _service().list_plans(_user_id(), _now_utc_ms(), credential_id, recent_only=request.args.get("view")=="current")})
 
 
 @plans_bp.get("/options")
@@ -97,7 +117,9 @@ def options():
     if request.args:
         raise PlanError("invalid_request", 400)
     catalog = current_app.extensions["venue_catalog_service"].public_options()
-    return jsonify({**catalog, "context": _service().active_context.to_dict()})
+    # Semantic intent labels; the executor still resolves actual inventory independently.
+    return jsonify({**catalog, "context": _service().active_context.to_dict(),
+                    "manual_queue_court_labels": [f"{number}号场" for number in range(1, 11)]})
 
 
 @plans_bp.post("")
@@ -128,8 +150,9 @@ def update_plan(plan_id):
 @plans_bp.get("/<plan_id>/revisions")
 @require_session
 def revisions(plan_id):
-    credential_id = _query_credential_scope()
-    return jsonify({"revisions": _service().list_revisions(_user_id(), plan_id, _now_utc_ms(), credential_id)})
+    credential_id = _query_credential_scope({"limit", "before_version"})
+    limit, page = _revision_pagination()
+    return _revision_response(_service().list_revisions(_user_id(), plan_id, _now_utc_ms(), credential_id, **page), limit)
 
 
 # Dedicated routes keep queue drafts out of the single-intent Matcher / Agent APIs.
@@ -144,7 +167,11 @@ def _queue_date(value):
 @plans_bp.get("/manual-queues")
 @require_session
 def manual_queues():
-    return jsonify({"queues": _service().list_manual_queues(_user_id(), _query_credential_scope())})
+    credential_id = _query_credential_scope({"view"})
+    if request.args.get("view") not in (None, "current"):
+        raise PlanError("invalid_request", 400)
+    return jsonify({"queues": _service().list_manual_queues(_user_id(), credential_id,
+                    recent_only=request.args.get("view")=="current", now_utc_ms=_now_utc_ms())})
 
 
 @plans_bp.get("/manual-queues/<target_date>")
@@ -170,8 +197,9 @@ def save_manual_queue(target_date):
 @plans_bp.get("/manual-queues/<target_date>/revisions")
 @require_session
 def manual_queue_revisions(target_date):
-    credential_id = _query_credential_scope()
-    return jsonify({"revisions": _service().manual_queue_revisions(_user_id(), _queue_date(target_date), credential_id)})
+    credential_id = _query_credential_scope({"limit", "before_version"})
+    limit, page = _revision_pagination()
+    return _revision_response(_service().manual_queue_revisions(_user_id(), _queue_date(target_date), credential_id, **page), limit)
 
 
 @plans_bp.delete("/<plan_id>")

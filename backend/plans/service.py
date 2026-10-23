@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 from contextlib import closing, contextmanager
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from backend.booking_window import BookingWindowPolicy
@@ -115,14 +115,17 @@ class PlanService:
             result = self._dto(self._owned(db, user_id, plan_id), now_utc_ms, credential_id)
         return result
 
-    def list_plans(self, user_id: str, now_utc_ms: int | None = None, credential_id=None) -> list[dict]:
+    def list_plans(self, user_id: str, now_utc_ms: int | None = None, credential_id=None, *, recent_only=False) -> list[dict]:
         now = now_utc_ms if now_utc_ms is not None else time.time_ns() // 1_000_000
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
-            rows = db.execute(_CURRENT + " ORDER BY p.updated_at_utc_ms DESC,p.plan_id", (user_id,))
+            query = _CURRENT + " AND json_extract(r.intent_json,'$.kind')!=? AND COALESCE(json_extract(r.intent_json,'$.deleted'),0)=0"
+            parameters = [user_id, QUEUE_KIND]
+            if recent_only:
+                query += " AND json_extract(r.intent_json,'$.intent.target_date')>=?"
+                parameters.append((self.policy.business_date_at_utc(now)-timedelta(days=1)).isoformat())
+            rows = db.execute(query + " ORDER BY p.updated_at_utc_ms DESC,p.plan_id", parameters)
             return [self._dto(row, now, credential_id) for row in rows
-                    if json.loads(row["intent_json"])["kind"] != QUEUE_KIND
-                    and not json.loads(row["intent_json"]).get("deleted", False)
-                    and (credential_id is None or self._stored_scope_tag(row["plan_id"]) in
+                    if (credential_id is None or self._stored_scope_tag(row["plan_id"]) in
                          (None, self._credential_scope_tag(user_id, credential_id)))]
 
     def get_plan(self, user_id: str, plan_id: str, now_utc_ms: int | None = None, credential_id=_SCOPE_UNSPECIFIED) -> dict:
@@ -135,13 +138,13 @@ class PlanService:
                 raise PlanError("plan_not_found", 404)
             return self._dto(row, now, None if credential_id is _SCOPE_UNSPECIFIED else credential_id)
 
-    def list_revisions(self, user_id: str, plan_id: str, now_utc_ms: int | None = None, credential_id=None) -> list[dict]:
+    def list_revisions(self, user_id: str, plan_id: str, now_utc_ms: int | None = None, credential_id=None, *, limit=None, before_version=None) -> list[dict]:
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
             self._assert_scope(user_id, plan_id, credential_id)
             current = self._owned(db, user_id, plan_id)
             if json.loads(current["intent_json"])["kind"] == QUEUE_KIND:
                 raise PlanError("plan_not_found", 404)
-            rows = db.execute("SELECT revision_id, revision_number,intent_json,intent_sha256,created_at_utc_ms FROM booking_plan_revisions WHERE user_id=? AND plan_id=? ORDER BY revision_number DESC", (user_id, plan_id)).fetchall()
+            rows = self._revision_rows(db, user_id, plan_id, limit, before_version)
             return [{"revision_id": row["revision_id"], "revision_number": row["revision_number"], "created_at_utc_ms": row["created_at_utc_ms"], "intent_sha256": row["intent_sha256"], **json.loads(row["intent_json"])} for row in rows]
 
     def update_plan(self, user_id: str, plan_id: str, base_version: int, payload: dict, now_utc_ms: int, credential_id=None) -> dict:
@@ -199,20 +202,37 @@ class PlanService:
             row = db.execute(_CURRENT + " AND p.plan_id=?", (user_id, self._queue_id(user_id, target_date, credential_id))).fetchone()
             return self._queue_dto(row, credential_id) if row else None
 
-    def list_manual_queues(self, user_id, credential_id=None):
+    def list_manual_queues(self, user_id, credential_id=None, *, recent_only=False, now_utc_ms=None):
+        now = time.time_ns()//1_000_000 if now_utc_ms is None else now_utc_ms
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
-            rows = db.execute(_CURRENT + " ORDER BY p.updated_at_utc_ms DESC,p.plan_id", (user_id,))
-            return [self._queue_dto(row, credential_id) for row in rows
-                    if json.loads(row["intent_json"])["kind"] == QUEUE_KIND
-                    and not json.loads(row["intent_json"]).get("deleted", False)
-                    and (credential_id is None or self._stored_scope_tag(row["plan_id"]) in
+            query = _CURRENT + " AND json_extract(r.intent_json,'$.kind')=? AND COALESCE(json_extract(r.intent_json,'$.deleted'),0)=0"
+            parameters = [user_id, QUEUE_KIND]
+            if recent_only:
+                query += " AND json_extract(r.intent_json,'$.target_date')>=?"
+                parameters.append((self.policy.business_date_at_utc(now)-timedelta(days=1)).isoformat())
+            rows = db.execute(query + " ORDER BY p.updated_at_utc_ms DESC,p.plan_id", parameters)
+            return [self._queue_dto(row, credential_id, now) for row in rows
+                    if (credential_id is None or self._stored_scope_tag(row["plan_id"]) in
                          (None, self._credential_scope_tag(user_id, credential_id)))]
 
-    def manual_queue_revisions(self, user_id, target_date, credential_id=None):
+    @staticmethod
+    def _revision_rows(db, user_id, plan_id, limit, before_version):
+        query = "SELECT revision_id,revision_number,intent_json,intent_sha256,created_at_utc_ms FROM booking_plan_revisions WHERE user_id=? AND plan_id=?"
+        parameters = [user_id, plan_id]
+        if before_version is not None:
+            query += " AND revision_number<?"
+            parameters.append(before_version)
+        query += " ORDER BY revision_number DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            parameters.append(limit)
+        return db.execute(query, parameters).fetchall()
+
+    def manual_queue_revisions(self, user_id, target_date, credential_id=None, *, limit=None, before_version=None):
         identifier = self._queue_id(user_id, target_date, credential_id)
         with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
             self._owned(db, user_id, identifier)
-            rows = db.execute("SELECT revision_id, revision_number,intent_json,created_at_utc_ms FROM booking_plan_revisions WHERE user_id=? AND plan_id=? ORDER BY revision_number DESC", (user_id, identifier)).fetchall()
+            rows = self._revision_rows(db, user_id, identifier, limit, before_version)
             return [{"revision_id": row["revision_id"], "revision_number": row["revision_number"],
                      "created_at_utc_ms": row["created_at_utc_ms"], **json.loads(row["intent_json"])} for row in rows]
 

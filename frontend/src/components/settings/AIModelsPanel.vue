@@ -5,7 +5,7 @@ import AppIcon from '../AppIcon.vue';
 import ModelPresetPicker from './ModelPresetPicker.vue';
 import ModelEditorForm from './ModelEditorForm.vue';
 import { providerDiscoveryErrorMessage, providerErrorMessage } from '../../api/providerErrors.js';
-import { rememberAgentModelReady } from '../../utils/agentReadiness.js';
+import { agentModelKey, clearAgentModelReady, rememberAgentModelReady } from '../../utils/agentReadiness.js';
 
 const api=inject('aiModelsApi');
 const session=inject('sessionStore');
@@ -34,7 +34,7 @@ async function load(){
  catch{if(valid(generation,id)&&request===sequence){state.value=null;error.value='AI模型配置读取失败，请重试。';}}
  finally{if(valid(generation,id)&&request===sequence)loading.value=false;}
 }
-async function saveModel(payload){if(busy.value||!authorized())return;const generation=epoch,id=session.user.user_id;busy.value=true;parsingResult.value=null;error.value='';notice.value='';
+async function saveModel(payload){clearAgentModelReady();if(busy.value||!authorized())return;const generation=epoch,id=session.user.user_id;busy.value=true;parsingResult.value=null;error.value='';notice.value='';
  try{if(editing.value)await api.update(editing.value.id,payload);else await api.create(payload);if(!valid(generation,id))return;notice.value='模型配置已保存。';editing.value=null;adding.value=false;await load();}
  catch{if(valid(generation,id))error.value='模型保存失败，请检查配置后重试。';}finally{if(valid(generation,id))busy.value=false;}}
 async function discoverModels(config){
@@ -50,14 +50,14 @@ async function discoverModels(config){
  }catch(failure){if(valid(generation,id)&&request===discoverySequence)discoveryError.value=providerDiscoveryErrorMessage(failure);}
  finally{if(valid(generation,id)&&request===discoverySequence)discovering.value=false;}
 }
-async function removeModel(model){if(busy.value||!authorized())return;const generation=epoch,id=session.user.user_id;busy.value=true;parsingResult.value=null;error.value='';notice.value='';
+async function removeModel(model){clearAgentModelReady();if(busy.value||!authorized())return;const generation=epoch,id=session.user.user_id;busy.value=true;parsingResult.value=null;error.value='';notice.value='';
  try{await api.remove(model.id,model.version);if(!valid(generation,id))return;notice.value='模型已删除。';await load();}
  catch{if(valid(generation,id))error.value='模型删除失败，可能已被其他窗口更新；请重新读取。';}finally{if(valid(generation,id))busy.value=false;}}
 async function savePreferences(){if(busy.value||!authorized())return;const generation=epoch,id=session.user.user_id;busy.value=true;parsingResult.value=null;error.value='';notice.value='';
  try{await api.preferences(selected.value||null,defaultId.value||null);if(!valid(generation,id))return;notice.value='当前模型与默认模型已更新。';await load();}
  catch{if(valid(generation,id))error.value='偏好保存失败，请重新读取后重试。';}finally{if(valid(generation,id))busy.value=false;}}
 async function testModel(model){if(!authorized()||busy.value||testingId.value)return;const generation=epoch,id=session.user.user_id;testingId.value=model.id;testingKind.value='connection';parsingResult.value=null;error.value='';notice.value='';
- try{const result=await api.test(model.id);if(valid(generation,id)){if(result?.ok===true){notice.value='模型连接成功。';if(model.id===state.value?.effective_model_id)rememberAgentModelReady(id,model.id);if(route.query.returnTo==='agent'&&model.id===state.value?.effective_model_id)await router.replace({name:'plans',query:{tab:'agent'}});}else error.value=testErrorMessage(result?.error);}}
+ try{const result=await api.test(model.id);if(valid(generation,id)){if(result?.ok===true){notice.value='模型连接成功。';if(model.id===state.value?.effective_model_id)rememberAgentModelReady(id,agentModelKey(model,session));if(route.query.returnTo==='agent'&&model.id===state.value?.effective_model_id)await router.replace({name:'plans',query:{tab:'agent'}});}else error.value=testErrorMessage(result?.error);}}
  catch(failure){if(valid(generation,id))error.value=testErrorMessage(failure?.code);}finally{if(valid(generation,id))testingId.value='';}}
 function returnToAgent(){return router.replace({name:'plans',query:{tab:'agent'}});}
 async function testParsing(model){

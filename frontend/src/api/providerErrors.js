@@ -24,6 +24,7 @@ const messages = {
   provider_response_too_large: '模型响应过大，请更换模型或稍后重试。',
   invalid_provider_config: '模型配置无效，请检查地址和模型名称。',
   ai_call_in_progress: '已有模型调用正在进行，请等待完成后再试（包括其他标签页）。',
+  ai_service_busy: '模型服务正忙，请稍后重试。其他页面仍可使用。',
   ai_call_rate_limited: '模型调用过于频繁，请稍后再试。',
   planning_context_limit: '对话内容已达到长度上限，请重新开始并简化描述。',
   planning_scope_required: '请先在“查询场地”读取当前 Token 的预约类别，再重新整理队列。',

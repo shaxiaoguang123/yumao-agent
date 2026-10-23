@@ -41,7 +41,8 @@ async function readBody(response) {
   if (response.status === 204) return null;
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === 'AbortError' || error?.name === 'TimeoutError') throw error;
     return null;
   }
 }
@@ -69,29 +70,45 @@ export function createHttpClient({
       if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
     }
 
+    const { timeoutMs = isMutation ? 30_000 : 15_000, signal, ...requestOptions } = options;
+    const controller = new AbortController();
+    const cancel = () => controller.abort(signal.reason);
     const init = {
-      ...options,
+      ...requestOptions,
       method,
       credentials: 'include',
       headers,
+      signal: controller.signal,
     };
     if (body === undefined) delete init.body;
     else init.body = body;
 
-    let response;
+    let response, payload, rejectAbort;
+    const abortPromise = new Promise((_, reject) => { rejectAbort = reject; });
+    const onAbort = () => rejectAbort(controller.signal.reason || new DOMException('Request cancelled', 'AbortError'));
+    controller.signal.addEventListener('abort', onAbort, { once: true });
+    signal?.addEventListener('abort', cancel, { once: true });
+    const timer = setTimeout(() => controller.abort(new DOMException('Request timed out', 'TimeoutError')), timeoutMs);
     try {
-      response = await fetchImpl(path, init);
+      if (signal?.aborted) cancel();
+      [response, payload] = await Promise.race([
+        controller.signal.aborted ? abortPromise : (async () => { const result = await fetchImpl(path, init); return [result, await readBody(result)]; })(),
+        abortPromise,
+      ]);
     } catch (cause) {
-      const kind = cause?.name === 'AbortError' || cause?.name === 'TimeoutError'
+      const kind = controller.signal.aborted || cause?.name === 'AbortError' || cause?.name === 'TimeoutError'
         ? 'timeout'
         : 'network';
       throw new HttpError(
         kind === 'timeout' ? '请求超时，请重试' : '网络暂不可用，请重试',
         { kind, cause },
       );
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+      controller.signal.removeEventListener('abort', onAbort);
     }
 
-    const payload = await readBody(response);
     if (!response.ok) {
       const code = responseCode(payload);
       const isPublicLoginFailure = pathWithoutQuery === '/api/auth/login'

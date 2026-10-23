@@ -55,10 +55,11 @@ function validateGrid(value, targetDate, selectedLabel) {
         && row.intent_start_time < row.intent_end_time))));
 }
 
-export function useLiveAvailability({ api, credentialApi, session, targetDate, contextKey }) {
+export function useLiveAvailability({ api, credentialApi, session, targetDate, contextKey, active = () => true }) {
   const enabled = ref(false);
   const autoLoading = ref(false);
   let readInterval = 0, nextReadAt = 0, refreshTimer = null, running = false, pending = false, reloadPending = false, scopeRenewals = 0, rateRetries = 0;
+  let requestController = null, activeRequest = 0;
   const optionsLoading = ref(true);
   const optionsError = ref('');
   const disabledMessage = ref('');
@@ -139,7 +140,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
       }
       readInterval = Number.isSafeInteger(result?.min_read_interval_ms) && result.min_read_interval_ms > 0 ? result.min_read_interval_ms : 0;
       if (!enabled.value) return;
-      const credentialResult = await credentialApi.list();
+      const credentialResult = await credentialApi.list({ reuse: true });
       if (!alive || requestEpoch !== epoch) return;
       credentials.value = Array.isArray(credentialResult?.credentials)
         ? credentialResult.credentials
@@ -178,7 +179,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
     }
   }
 
-  async function loadCategories() {
+  async function loadCategories({ signal } = {}) {
     clearGrid();
     categories.value = [];
     selectedScopeReference.value = '';
@@ -193,7 +194,8 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
     categoriesLoading.value = true;
     error.value = '';
     try {
-      const result = await api.categories(selectedCredentialId.value);
+      nextReadAt = Math.max(nextReadAt, Date.now() + readInterval);
+      const result = await api.categories(selectedCredentialId.value, { signal });
       if (!alive || requestEpoch !== epoch || sequence !== categorySequence) return;
       if (result?.data_state !== 'live_observed_unverified'
           || result?.source !== 'official_read_only'
@@ -209,6 +211,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
       selectedScopeReference.value = badminton[0].reference;
       message.value = result.notice || '官方预约类别已读取。';
     } catch (requestError) {
+      if (signal?.aborted) return;
       if (alive && requestEpoch === epoch && sequence === categorySequence) {
         scheduleRateRetry(requestError);
         error.value = ERROR_MESSAGES[requestError?.code]
@@ -218,11 +221,10 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
       }
     } finally {
       if (alive && requestEpoch === epoch && sequence === categorySequence) categoriesLoading.value = false;
-      nextReadAt = Math.max(nextReadAt, Date.now() + readInterval);
     }
   }
 
-  async function queryGrid() {
+  async function queryGrid({ signal } = {}) {
     clearGrid();
     if (!enabled.value || !selectedCredentialId.value || !selectedScopeReference.value || !targetDate()) {
       error.value = '请先选择预约凭据、查询类别和计划日期。';
@@ -236,11 +238,12 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
     gridLoading.value = true;
     error.value = '';
     try {
+      nextReadAt = Math.max(nextReadAt, Date.now() + readInterval);
       const result = await api.grid({
         credentialId: selectedCredentialId.value,
         scopeReference: scope.reference,
         targetDate: requestedDate,
-      });
+      }, { signal });
       if (!alive || requestEpoch !== epoch || sequence !== gridSequence
           || targetDate() !== requestedDate) return;
       if (!validateGrid(result, requestedDate, scope.label)) {
@@ -254,6 +257,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
       }, Math.max(0, result.source.ui_stale_after_utc_ms - Date.now()));
       message.value = '';
     } catch (requestError) {
+      if (signal?.aborted) return;
       if (alive && requestEpoch === epoch && sequence === gridSequence) {
         scheduleRateRetry(requestError);
         if(requestError?.code==='live_query_scope_expired'){categories.value=[];selectedScopeReference.value='';if(scopeRenewals<1){scopeRenewals++;pending=true;}}
@@ -265,7 +269,6 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
       }
     } finally {
       if (alive && requestEpoch === epoch && sequence === gridSequence) gridLoading.value = false;
-      nextReadAt = Math.max(nextReadAt, Date.now() + readInterval);
     }
   }
 
@@ -277,6 +280,7 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
   }
   function refreshAvailability({ reload = false } = {}) {
     if(!alive || !isAuthenticated() || !enabled.value || !selectedCredentialId.value || !targetDate())return;
+    if(!active() && selectedScopeReference.value && !reload)return;
     pending = true; reloadPending ||= reload; scopeRenewals=0; rateRetries=0; autoLoading.value = true;
     if(refreshTimer !== null){clearTimeout(refreshTimer);refreshTimer=null;}
     drainRefresh();
@@ -287,21 +291,34 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
       refreshTimer=null;
       if(!alive || !isAuthenticated() || !enabled.value || !targetDate()) {pending=false;autoLoading.value=false;return;}
       pending=false;running=true;
+      const request = ++activeRequest;
+      requestController = new AbortController();
+      const signal = requestController.signal;
       try {
         if(reloadPending || !selectedScopeReference.value){
           reloadPending=false;
-          await loadCategories();
+          await loadCategories({ signal });
           // Category read and slot read share a gate. One delayed continuation,
           // never polling; the next date selected wins while the read is pending.
-          if(selectedScopeReference.value && !error.value)pending=true;
-        }else await queryGrid();
+          if(selectedScopeReference.value && !error.value && active())pending=true;
+        }else if(active())await queryGrid({ signal });
       }finally{
+        if(request!==activeRequest)return;
+        requestController=null;
         running=false;
         if(alive && pending)drainRefresh();else autoLoading.value=false;
       }
     },Math.max(0,nextReadAt-Date.now()));
   }
-  function cancelRefresh(){
+  function abortRead(){
+    activeRequest++;
+    requestController?.abort();
+    requestController=null;
+    running=false;
+    gridLoading.value=false;
+  }
+  function cancelRefresh({ abort = true } = {}){
+    if(abort)abortRead();
     pending=false;reloadPending=false;autoLoading.value=false;
     if(refreshTimer!==null)clearTimeout(refreshTimer);refreshTimer=null;
   }
@@ -314,10 +331,12 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
   }
 
   watch(() => targetDate(), (next, previous) => {
+    // Let the bounded old read release the shared upstream gate before the latest date.
     if(next!==previous){clearGrid();if(next)refreshAvailability();else cancelRefresh();}
   }, { flush: 'sync' });
 
   watch(selectedCredentialId, () => {
+    abortRead();
     categorySequence += 1;
     categories.value = [];
     selectedScopeReference.value = '';
@@ -326,6 +345,10 @@ export function useLiveAvailability({ api, credentialApi, session, targetDate, c
     if(!optionsLoading.value)refreshAvailability();
   }, { flush: 'sync' });
   watch(selectedScopeReference, clearGrid, { flush: 'sync' });
+  watch(active, value => {
+    if(value)refreshAvailability();
+    else if(!categoriesLoading.value)cancelRefresh({abort:false});
+  }, { flush: 'sync' });
 
   watch(() => [session()?.status, session()?.user?.user_id, session()?.csrfToken,
     session()?.invalidationEpoch], (next, previous) => {

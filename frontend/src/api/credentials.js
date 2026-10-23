@@ -6,24 +6,39 @@ export function createCredentialApi(client) {
   if (typeof client?.request !== 'function') {
     throw new TypeError('an authenticated HTTP client is required');
   }
+  let pending, snapshot, readEpoch = 0;
+  const owner = () => `${client.user?.user_id || ''}\u0000${client.csrfToken || ''}\u0000${client.invalidationEpoch || 0}`;
+  function invalidate() { readEpoch++; pending = null; snapshot = null; }
+  const mutate = (path, options) => { invalidate(); return client.request(path, options).finally(invalidate); };
   return {
-    list() {
-      return client.request('/api/credentials');
+    list({ reuse = false } = {}) {
+      const scope = owner(), now = Date.now();
+      if (pending?.scope === scope) return pending.promise;
+      if (reuse && snapshot?.scope === scope && now - snapshot.at >= 0 && now - snapshot.at < 5000) return Promise.resolve(snapshot.value);
+      snapshot = null;
+      const epoch = readEpoch;
+      const request = { scope, promise: null };
+      request.promise = client.request('/api/credentials').then(value => {
+        if (epoch === readEpoch && scope === owner()) snapshot = { scope, at: Date.now(), value };
+        return value;
+      }).finally(() => { if (pending === request) pending = null; });
+      pending = request;
+      return request.promise;
     },
     create({ label, token, payment_password }) {
-      return client.request('/api/credentials', {
+      return mutate('/api/credentials', {
         method: 'POST',
         body: { label, token, payment_password },
       });
     },
     setPaymentPassword(credentialId, payment_password, expectedCredentialVersion) {
-      return client.request(`${credentialPath(credentialId)}/payment-password`, {
+      return mutate(`${credentialPath(credentialId)}/payment-password`, {
         method: 'PUT',
         body: { payment_password, expected_credential_version: expectedCredentialVersion },
       });
     },
     validate(credentialId, expectedCredentialVersion, expectedRevisionId) {
-      return client.request(`${credentialPath(credentialId)}/validate`, {
+      return mutate(`${credentialPath(credentialId)}/validate`, {
         method: 'POST',
         body: {
           expected_credential_version: expectedCredentialVersion,
@@ -32,7 +47,7 @@ export function createCredentialApi(client) {
       });
     },
     rotateToken(credentialId, token, expectedCredentialVersion, expectedRevisionId) {
-      return client.request(`${credentialPath(credentialId)}/rotate-token`, {
+      return mutate(`${credentialPath(credentialId)}/rotate-token`, {
         method: 'POST',
         body: {
           token,
@@ -42,13 +57,13 @@ export function createCredentialApi(client) {
       });
     },
     update(credentialId, changes) {
-      return client.request(credentialPath(credentialId), {
+      return mutate(credentialPath(credentialId), {
         method: 'PATCH',
         body: changes,
       });
     },
     remove(credentialId, expectedCredentialVersion) {
-      return client.request(credentialPath(credentialId), {
+      return mutate(credentialPath(credentialId), {
         method: 'DELETE',
         body: { expected_credential_version: expectedCredentialVersion },
       });

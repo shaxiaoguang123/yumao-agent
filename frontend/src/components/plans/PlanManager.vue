@@ -17,7 +17,7 @@ import OrderQueryPanel from './OrderQueryPanel.vue';
 import { useManualQueue, queueEntries } from '../../composables/useManualQueue.js';
 import { usePlans } from '../../composables/usePlans.js';
 import { visibleIntentPlans, visibleManualQueuePlans } from '../../utils/planQueueVisibility.js';
-import { agentModelWasRecentlyReady, rememberAgentModelReady } from '../../utils/agentReadiness.js';
+import { agentModelKey, agentModelWasRecentlyReady, clearAgentModelReady, rememberAgentModelReady } from '../../utils/agentReadiness.js';
 import { providerErrorMessage } from '../../api/providerErrors.js';
 const session=inject('sessionStore'),api=inject('planApi'),proposalApi=inject('planningProposalApi',null),intentProposalApi=inject('intentPlanningProposalApi',null);
 const liveApi=inject('liveAvailabilityApi',null),credentialApi=inject('credentialApi',null);
@@ -27,12 +27,15 @@ const courtOptions=shallowRef([]),queueScopeLabel=shallowRef(''),queryDate=shall
 const activeSection=shallowRef(['agent','orders'].includes(route.query.tab)?route.query.tab:'query'),manualDate=shallowRef('');
 const agentReadiness=shallowRef('idle');
 const agentReadinessError=shallowRef('');
+const currentVisited=shallowRef(activeSection.value==='current'),executionSettingsOpen=shallowRef(false);
+const leaving=shallowRef(0);
 let agentCheckSequence=0;
-const {plans,defaultWindow,listStatus,metadataError,saving,message,saveError,history,historyPlanId,historyStatus,authorized,refresh,initialize,remove,showHistory,closeHistory}=usePlans(api,session,()=>selectedCredentialId.value);
+const {plans,catalog,defaultWindow,listStatus,metadataError,saving,message,saveError,history,historyPlanId,historyStatus,historyBefore,loadMoreHistory,authorized,refresh,initialize,remove,showHistory,closeHistory}=usePlans(api,session,()=>selectedCredentialId.value,{requireCredential:true});
+watch(catalog,value=>{if(!courtOptions.value.length&&Array.isArray(value?.manual_queue_court_labels))courtOptions.value=[...value.manual_queue_court_labels];},{immediate:true});
 const visiblePlans=computed(()=>visibleIntentPlans(plans.value,{dateFilter:planDateFilter.value,businessDate:defaultWindow.value?.business_date||''}));
 function queueChanged(date){queueState.refreshList();if(date===manualDate.value&&!queueState.dateLocked)queueState.load();}
 function selectQueue(date,credentialId=selectedCredentialId.value){if(queueState.dateLocked||!credentialId)return;if(credentialId!==selectedCredentialId.value)selectedCredentialId.value=credentialId;manualDate.value=date;activeSection.value='manual';}
-const queueState=useManualQueue(api,session,()=>manualDate.value,()=>selectedCredentialId.value);
+const queueState=useManualQueue(api,session,()=>manualDate.value,()=>selectedCredentialId.value,()=>activeSection.value==='manual');
 const visibleQueuePlans=computed(()=>visibleManualQueuePlans(queueState.queues,{dateFilter:planDateFilter.value,businessDate:defaultWindow.value?.business_date||''}));
 const planCount=computed(()=>visiblePlans.value.length+visibleQueuePlans.value.filter(queue=>queue.candidates?.length).length);
 const upcomingQueueDate=computed(()=>{
@@ -45,7 +48,7 @@ const manualExtraDate=computed(()=>{
  const quickDates=defaultWindow.value?.queryable_target_dates?.slice(0,3)||[];
  return manualDate.value&&!quickDates.includes(manualDate.value)?manualDate.value:upcomingQueueDate.value;
 });
-onBeforeRouteLeave(async()=>{if(!authorized.value||!queueState.dirty)return true;await queueState.flush();return !queueState.dirty;});
+onBeforeRouteLeave(async()=>{if(!authorized.value||!queueState.dirty)return true;leaving.value++;try{await queueState.flush();return !queueState.dirty;}finally{leaving.value--;}});
 watch(defaultWindow,value=>{
  if(!value){manualDate.value='';queryDate.value='';}
  else {if(!queryDate.value)queryDate.value=value.queryable_target_dates?.[2]||value.default_target_date||'';if(!manualDate.value)manualDate.value=value.default_target_date||value.queryable_target_dates?.[2]||'';}
@@ -56,9 +59,10 @@ function openManualFromAgent({target_date}={}){
  if(typeof target_date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(target_date))manualDate.value=target_date;
  activeSection.value='manual';
 }
-function rememberCourtLabels(names){if(JSON.stringify(courtOptions.value)!==JSON.stringify(names))courtOptions.value=[...names];}
+function rememberCourtLabels(names){const labels=names.length?names:(catalog.value?.manual_queue_court_labels||[]);if(JSON.stringify(courtOptions.value)!==JSON.stringify(labels))courtOptions.value=[...labels];}
 function rememberQueueScope(label){queueScopeLabel.value=typeof label==='string'?label:'';}
 function redirectToModelSettings(reason){
+ clearAgentModelReady();
  if(session?.status!=='authenticated')return router.replace({name:'login'});
  return router.replace({name:'ai-models',query:{returnTo:'agent',reason}});
 }
@@ -70,22 +74,26 @@ async function checkAgentService(){
  if(!aiModelsApi){agentReadiness.value='blocked';await redirectToModelSettings('provider_not_configured');return;}
  try{
   const state=await aiModelsApi.list();
-  if(sequence!==agentCheckSequence||activeSection.value!=='agent'||session?.user?.user_id!==userId)return;
+  if(sequence!==agentCheckSequence||session?.user?.user_id!==userId)return;
+  if(activeSection.value!=='agent'){agentReadiness.value='idle';return;}
   const modelId=state?.effective_model_id;
   const model=modelId==='service_default'
    ? state?.service_default
    : state?.models?.find(item=>item.id===modelId);
   if(!modelId||!model){agentReadiness.value='blocked';await redirectToModelSettings('provider_not_configured');return;}
   if(model.auth_mode==='bearer'&&model.has_api_key!==true){agentReadiness.value='blocked';await redirectToModelSettings('provider_api_key_required');return;}
-  if(!agentModelWasRecentlyReady(userId,modelId))await aiModelsApi.test(modelId);
-  if(sequence!==agentCheckSequence||activeSection.value!=='agent'||session?.user?.user_id!==userId)return;
-  rememberAgentModelReady(userId,modelId);
+  const modelKey=agentModelKey({...model,id:modelId},session);
+  if(!agentModelWasRecentlyReady(userId,modelKey))await aiModelsApi.test(modelId);
+  if(sequence!==agentCheckSequence||session?.user?.user_id!==userId)return;
+  rememberAgentModelReady(userId,modelKey);
+  if(activeSection.value!=='agent'){agentReadiness.value='idle';return;}
   agentReadinessError.value='';
   agentReadiness.value='ready';
  }catch(error){
-  if(sequence!==agentCheckSequence||activeSection.value!=='agent')return;
+  if(sequence!==agentCheckSequence)return;
+  if(activeSection.value!=='agent'){agentReadiness.value='idle';return;}
   if(error?.sessionInvalid||session?.status==='unauthenticated'){agentReadiness.value='blocked';await router.replace({name:'login'});return;}
-  if(['provider_rate_limited','ai_call_rate_limited','ai_call_in_progress'].includes(error?.code)){
+  if(['provider_rate_limited','ai_call_rate_limited','ai_call_in_progress','ai_service_busy'].includes(error?.code)){
    agentReadiness.value='error';agentReadinessError.value=providerErrorMessage(error.code);return;
   }
   agentReadiness.value='blocked';
@@ -99,18 +107,19 @@ async function changeSection(section){
   if(failure||route.name!=='plans')return;
  }
  activeSection.value=section;
+ if(section==='current')currentVisited.value=true;
  if(section==='agent'){agentReadinessError.value='';void checkAgentService();}
- else {agentCheckSequence++;agentReadiness.value='idle';agentReadinessError.value='';}
+ else if(!['ready','checking'].includes(agentReadiness.value)){agentCheckSequence++;agentReadiness.value='idle';agentReadinessError.value='';}
 }
 watch(()=>route.query.tab,(value,previous)=>{
  if(value==='orders'||previous==='orders'){
   const section=['query','manual','agent','current','orders'].includes(value)?value:'query';
   activeSection.value=section;
   if(section==='agent')void checkAgentService();
-  else {agentCheckSequence++;agentReadiness.value='idle';}
+  else if(!['ready','checking'].includes(agentReadiness.value)){agentCheckSequence++;agentReadiness.value='idle';}
  }
 });
-watch(()=>[session?.status,session?.user?.user_id,session?.invalidationEpoch],()=>{agentCheckSequence++;agentReadiness.value='idle';courtOptions.value=[];queueScopeLabel.value='';pendingDeletePlan.value=null;planDateFilter.value='';},{flush:'sync'});
+watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken,session?.invalidationEpoch],()=>{agentCheckSequence++;agentReadiness.value='idle';currentVisited.value=activeSection.value==='current';executionSettingsOpen.value=false;courtOptions.value=[];queueScopeLabel.value='';pendingDeletePlan.value=null;planDateFilter.value='';},{flush:'sync'});
 onBeforeUnmount(()=>{agentCheckSequence++;});
 const queryContextKey=computed(()=>JSON.stringify({user:session?.user?.user_id,epoch:session?.invalidationEpoch}));
 if(activeSection.value==='agent')void checkAgentService();
@@ -121,11 +130,12 @@ if(activeSection.value==='agent')void checkAgentService();
   <div v-if="!authorized" class="panel"><p role="alert">{{ session?.status==='unauthenticated' ? '登录状态已失效，请重新登录。' : '暂时无法确认登录状态，请重试。' }}</p></div>
   <template v-else>
    <PlanSectionTabs :model-value="activeSection" :plan-count="planCount" @update:model-value="changeSection" />
+   <p v-if="leaving" class="status-loading" role="status">正在保存队列，完成后切换页面…</p>
    <p v-if="metadataError" class="form-error" role="alert">日期范围读取失败，请重试。 <button class="secondary-button" type="button" @click="initialize">重新读取</button></p>
    <p v-if="message" class="form-success" role="status">{{ message }}</p>
    <p v-if="saveError" class="form-error" role="alert">{{ saveError }}</p>
    <section v-show="activeSection==='query'" id="plan-panel-query" role="tabpanel" aria-labelledby="plan-tab-query" class="plan-workspace-section query-workspace">
-    <LiveAvailabilityPanel v-if="liveApi && credentialApi" v-model:credential-id="selectedCredentialId" :credential-refresh-key="credentialRefreshKey" :api="liveApi" :credential-api="credentialApi" :session="session" :calendar-state="defaultWindow" :target-date="queryDate" :context-key="queryContextKey" @date-change="queryDate=$event" @court-labels="rememberCourtLabels" @queue-scope="rememberQueueScope" />
+    <LiveAvailabilityPanel v-if="liveApi && credentialApi" :active="activeSection==='query'" v-model:credential-id="selectedCredentialId" :credential-refresh-key="credentialRefreshKey" :api="liveApi" :credential-api="credentialApi" :session="session" :calendar-state="defaultWindow" :target-date="queryDate" :context-key="queryContextKey" @date-change="queryDate=$event" @court-labels="rememberCourtLabels" @queue-scope="rememberQueueScope" />
     <BookingDateStrip v-else v-model="queryDate" :state="defaultWindow" />
    </section>
    <section v-show="activeSection==='manual'" id="plan-panel-manual" role="tabpanel" aria-labelledby="plan-tab-manual" class="plan-workspace-section">
@@ -147,7 +157,7 @@ if(activeSection.value==='agent')void checkAgentService();
    </section>
    <section v-show="activeSection==='current'" id="plan-panel-current" role="tabpanel" aria-labelledby="plan-tab-current" class="plan-workspace-section">
    <div class="ticket-filter-bar">
-    <div v-if="credentialApi" class="ticket-filter-credential"><PlanCredentialControl v-model="selectedCredentialId" :api="credentialApi" :session="session" :timezone-name="defaultWindow?.business_timezone_name||'Asia/Shanghai'" :disabled="queueState.dateLocked" @updated="credentialRefreshKey++" /></div>
+    <div v-if="credentialApi&&currentVisited" class="ticket-filter-credential"><PlanCredentialControl v-model="selectedCredentialId" :api="credentialApi" :session="session" :timezone-name="defaultWindow?.business_timezone_name||'Asia/Shanghai'" :disabled="queueState.dateLocked" @updated="credentialRefreshKey++" /></div>
     <label class="ticket-filter-date"><AppIcon name="calendar" /><input v-model="planDateFilter" type="date" aria-label="抢票计划日期" /></label>
     <button type="button" class="text-button ticket-filter-all" @click="planDateFilter=''">全部日期</button>
     <div class="ticket-filter-meta"><span class="ticket-filter-count">{{ visiblePlans.length+visibleQueuePlans.length }} 份计划</span><button type="button" class="text-button" :disabled="saving||queueState.dateLocked" aria-label="重新读取抢票计划" @click="refresh();queueState.refreshList()"><AppIcon name="refresh" /></button></div>
@@ -161,11 +171,11 @@ if(activeSection.value==='agent')void checkAgentService();
    </section>
    <TicketQueuePlans :queues="queueState.queues" :date-filter="planDateFilter" :calendar-state="defaultWindow" :court-names="courtOptions" :api="api" :session="session" :busy="queueState.dateLocked" @changed="queueChanged" @select="selectQueue" @history="queueState.showHistory" />
    <p v-if="listStatus==='ready'&&!visiblePlans.length&&!visibleQueuePlans.length" class="plan-empty-state">暂无抢票计划。<button type="button" class="text-button" @click="changeSection('manual')">选择预约</button></p>
-   <details v-if="credentialApi" class="disclosure-panel execution-settings-disclosure"><summary>执行设置<small>复核、校时与付款延迟</small></summary><div class="disclosure-body"><BookingExecutionSettings :api="credentialApi" /></div></details>
-   <BookingSuccessPanel :api="api" :session="session" />
+   <details v-if="credentialApi" class="disclosure-panel execution-settings-disclosure" :open="executionSettingsOpen" @toggle="executionSettingsOpen=$event.target.open"><summary>执行设置<small>复核、校时与付款延迟</small></summary><div class="disclosure-body"><BookingExecutionSettings v-if="executionSettingsOpen" :api="credentialApi" /></div></details>
+   <BookingSuccessPanel v-if="currentVisited" :api="api" :session="session" />
 
-   <section v-if="queueState.history" class="panel queue-history"><div class="plan-section-heading"><h2>队列版本历史</h2><button type="button" class="text-button" @click="queueState.history=null">关闭历史</button></div><details v-for="revision in queueState.history" :key="revision.revision_id"><summary>版本 {{ revision.revision_number }} · {{ revision.target_date }}{{ revision.deleted?' · 已删除':'' }}</summary><ManualQueuePreview :entries="queueEntries(revision)" readonly /></details></section><p v-if="queueState.historyError" class="form-error" role="alert">{{ queueState.historyError }}</p>
-   <PlanHistory v-if="historyPlanId" :revisions="history" :status="historyStatus" @close="closeHistory" @retry="showHistory(historyPlanId)" />
+   <section v-if="queueState.history" class="panel queue-history"><div class="plan-section-heading"><h2>队列版本历史</h2><button type="button" class="text-button" @click="queueState.closeHistory">关闭历史</button></div><details v-for="revision in queueState.history" :key="revision.revision_id"><summary>版本 {{ revision.revision_number }} · {{ revision.target_date }}{{ revision.deleted?' · 已删除':'' }}</summary><ManualQueuePreview :entries="queueEntries(revision)" readonly /></details><button v-if="queueState.historyCursor" type="button" class="secondary-button" :disabled="queueState.historyLoading" @click="queueState.loadMoreHistory">加载更早版本</button></section><p v-if="queueState.historyError" class="form-error" role="alert">{{ queueState.historyError }}</p>
+   <PlanHistory v-if="historyPlanId" :revisions="history" :status="historyStatus" :has-more="Boolean(historyBefore)" @more="loadMoreHistory" @close="closeHistory" @retry="showHistory(historyPlanId)" />
    </section>
    <section v-show="activeSection==='orders'" id="plan-panel-orders" role="tabpanel" aria-labelledby="plan-tab-orders" class="plan-workspace-section">
     <OrderQueryPanel v-if="activeSection==='orders'&&orderApi" :api="orderApi" :session="session" :credential-id="selectedCredentialId" :refresh-key="credentialRefreshKey">

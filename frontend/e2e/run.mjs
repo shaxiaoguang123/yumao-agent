@@ -13,6 +13,7 @@ import { runRedesign } from './redesign.mjs';
 import { runOrders } from './orders.mjs';
 import { runDiagnostics } from './diagnostics.mjs';
 import { runResponsive } from './responsive.mjs';
+import { runPerformance } from './performance.mjs';
 
 const frontend = fileURLToPath(new URL('../', import.meta.url));
 const repository = path.resolve(frontend, '..');
@@ -92,6 +93,7 @@ try {
   await runOrders(qa);
   await runDiagnostics(qa);
   await runResponsive(qa);
+  await runPerformance(qa);
 } catch (error) {
   if (qa) qa.report.runnerError = { message: error.message };
   throw error;
