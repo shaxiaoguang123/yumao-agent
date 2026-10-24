@@ -35,4 +35,26 @@ describe('ExecutionSnapshotPanel',()=>{
   expect(wrapper.text()).toContain('等待复核');
   expect(wrapper.text()).not.toContain('6号场');
  });
+ it('clears loaded results on refresh and reports the new state to the plan card',async()=>{
+  let finish;
+  const api={executionQueue:vi.fn().mockResolvedValueOnce({run:{...run,state:'succeeded'},worker_enabled:true})
+   .mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}))};
+  const wrapper=mount(ExecutionSnapshotPanel,{props:{api,credentialId:'credential-a',targetDate:'2026-10-17',session:session()}});
+  await flushPromises();expect(wrapper.text()).toContain('抢票成功');
+  await wrapper.setProps({refreshKey:1});
+  expect(wrapper.text()).not.toContain('抢票成功');expect(wrapper.text()).toContain('读取中…');
+  expect(wrapper.emitted('status-change').at(-1)[0]).toMatchObject({status:'loading',run:null});
+  finish({run:null,worker_enabled:true});await flushPromises();
+  expect(wrapper.text()).toContain('等待复核');
+  expect(wrapper.emitted('status-change').at(-1)[0]).toMatchObject({status:'ready',run:null});
+ });
+ it('clears private execution data at session loss and discards the pending response',async()=>{
+  let finish;const account=session();
+  const api={executionQueue:vi.fn(()=>new Promise(resolve=>{finish=resolve;}))};
+  const wrapper=mount(ExecutionSnapshotPanel,{props:{api,credentialId:'credential-a',targetDate:'2026-10-17',session:account}});
+  account.status='unauthenticated';await flushPromises();
+  finish({run:{...run,state:'succeeded'},worker_enabled:true});await flushPromises();
+  expect(wrapper.find('details').exists()).toBe(false);expect(api.executionQueue).toHaveBeenCalledTimes(1);
+  expect(wrapper.emitted('status-change').at(-1)[0]).toMatchObject({status:'unavailable',run:null});
+ });
 });

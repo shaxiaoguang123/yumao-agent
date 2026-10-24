@@ -1,19 +1,39 @@
 <script setup>
-import { computed, ref, watch, onUnmounted } from 'vue';
+import { computed, ref, shallowRef, watch, onUnmounted } from 'vue';
 import AppIcon from '../AppIcon.vue';
 import ManualQueuePreview from './ManualQueuePreview.vue';
 import ExecutionSnapshotPanel from './ExecutionSnapshotPanel.vue';
 import { queueEntries } from '../../composables/useManualQueue.js';
 import { visibleManualQueuePlans } from '../../utils/planQueueVisibility.js';
-const props=defineProps({queues:{type:Array,default:()=>[]},dateFilter:{type:String,default:''},calendarState:Object,courtNames:Array,api:Object,session:Object,busy:Boolean});
+import { executionStateLabels } from '../../utils/executionStatus.js';
+const props=defineProps({queues:{type:Array,default:()=>[]},dateFilter:{type:String,default:''},calendarState:Object,courtNames:Array,api:Object,session:Object,busy:Boolean,active:{type:Boolean,default:true}});
 const emit=defineEmits(['select','history','changed']);
 const deleting=ref(''),mutating=ref(false),error=ref('');
+const execution=shallowRef({}),executionRefreshKey=ref(0);
 let epoch=0,alive=true;
 const visible=computed(()=>visibleManualQueuePlans(props.queues,{dateFilter:props.dateFilter,businessDate:props.calendarState?.business_date||''}));
 const inWindow=q=>(props.calendarState?.queryable_target_dates||[]).includes(q.target_date)&&q.can_open_selection!==false;
-function stateLabel(q){if(!q.candidates.length)return '已清空';if(q.plan_status==='expired'||q.target_date<(props.calendarState?.business_date||''))return '已过期';return inWindow(q)?'未执行':'窗口外 · 未执行';}
+function stateLabel(q){
+ if(!q.candidates.length)return '已清空';
+ const result=execution.value[q.plan_id];
+ if(result?.status==='ready'&&result.run){
+  const run=result.run;
+  if(run.source_version!==q.version||run.source_revision_id!==q.current_revision_id)
+   return `队列已修改 · 执行记录来自 v${run.source_version}`;
+  return executionStateLabels[run.state]||'状态未知';
+ }
+ if(result?.status==='error')return '执行状态读取失败';
+ if(q.plan_status==='expired'||q.target_date<(props.calendarState?.business_date||''))return '已过期';
+ if(q.credential_id){
+  if(!result||result.status==='loading')return '读取执行状态…';
+  if(result.status==='unavailable')return '执行状态不可用';
+ }
+ return inWindow(q)?'未执行':'窗口外 · 未执行';
+}
+function rememberExecution(queue,result){execution.value={...execution.value,[queue.plan_id]:result};}
+watch(()=>props.queues,()=>{execution.value={};executionRefreshKey.value++;},{flush:'sync'});
 const valid=generation=>alive&&generation===epoch&&props.session?.status==='authenticated';
-watch(()=>[props.session?.status,props.session?.user?.user_id,props.session?.csrfToken,props.session?.invalidationEpoch],()=>{epoch++;deleting.value='';mutating.value=false;error.value='';},{flush:'sync'});
+watch(()=>[props.session?.status,props.session?.user?.user_id,props.session?.csrfToken,props.session?.invalidationEpoch],()=>{epoch++;deleting.value='';mutating.value=false;error.value='';execution.value={};},{flush:'sync'});
 function selectQueue(queue){if(queue.credential_id)emit('select',queue.target_date,queue.credential_id);}
 async function remove(q){if(mutating.value||props.busy)return;const generation=epoch;mutating.value=true;error.value='';try{await props.api.removeQueue(q.target_date,q.version,q.credential_id??null);if(valid(generation)){deleting.value='';emit('changed',q.target_date);}}catch(e){if(valid(generation))error.value=e?.status===409?'计划版本已变化，请重新读取后删除。':'删除结果未确认，请重新读取计划核对。';}finally{if(valid(generation))mutating.value=false;}}
 onUnmounted(()=>{alive=false;epoch++;});
@@ -21,10 +41,10 @@ onUnmounted(()=>{alive=false;epoch++;});
 <template>
  <section v-if="visible.length||error" class="ticket-queue-plans" aria-label="人工抢票计划">
   <p v-if="error" class="form-error" role="alert">{{ error }}</p>
-  <article v-for="queue in visible" :key="queue.plan_id" class="ticket-queue-card"><header class="ticket-card-heading"><strong>{{ queue.target_date }}</strong><span class="ticket-version">v{{ queue.version }}</span><span class="ticket-state" :class="{'is-expired':stateLabel(queue)==='已过期'}">{{ stateLabel(queue) }}</span><span v-if="!queue.credential_id" class="ticket-scope">历史未关联凭据</span><div class="ticket-card-actions"><button type="button" :disabled="busy||mutating||!queue.credential_id||!inWindow(queue)" :title="!queue.credential_id?'历史计划未关联凭据':inWindow(queue)?'继续到选择预约':'当天不在可查询窗口'" :aria-label="`${queue.target_date}继续选择`" @click="selectQueue(queue)"><AppIcon name="court" /></button><button type="button" :disabled="busy||mutating||!queue.credential_id" :title="queue.credential_id?'在选择预约界面编辑':'历史计划未关联凭据，无法按 Token 编辑'" :aria-label="`编辑${queue.target_date}队列`" @click="selectQueue(queue);deleting='' "><AppIcon name="edit" /></button><button type="button" :disabled="mutating" :aria-label="`${queue.target_date}版本历史`" @click="emit('history',queue.target_date,queue.credential_id??null)"><AppIcon name="clock" /></button><button type="button" :disabled="busy||mutating" :aria-label="`删除${queue.target_date}队列`" @click="deleting=queue.plan_id;error='' "><AppIcon name="trash" /></button></div></header>
+  <article v-for="queue in visible" :key="queue.plan_id" class="ticket-queue-card"><header class="ticket-card-heading"><strong>{{ queue.target_date }}</strong><span class="ticket-version">v{{ queue.version }}</span><span class="ticket-state" role="status" :class="{'is-expired':stateLabel(queue)==='已过期','is-success':stateLabel(queue)===executionStateLabels.succeeded}">{{ stateLabel(queue) }}</span><span v-if="!queue.credential_id" class="ticket-scope">历史未关联凭据</span><div class="ticket-card-actions"><button type="button" :disabled="busy||mutating||!queue.credential_id||!inWindow(queue)" :title="!queue.credential_id?'历史计划未关联凭据':inWindow(queue)?'继续到选择预约':'当天不在可查询窗口'" :aria-label="`${queue.target_date}继续选择`" @click="selectQueue(queue)"><AppIcon name="court" /></button><button type="button" :disabled="busy||mutating||!queue.credential_id" :title="queue.credential_id?'在选择预约界面编辑':'历史计划未关联凭据，无法按 Token 编辑'" :aria-label="`编辑${queue.target_date}队列`" @click="selectQueue(queue);deleting='' "><AppIcon name="edit" /></button><button type="button" :disabled="mutating" :aria-label="`${queue.target_date}版本历史`" @click="emit('history',queue.target_date,queue.credential_id??null)"><AppIcon name="clock" /></button><button type="button" :disabled="busy||mutating" :aria-label="`删除${queue.target_date}队列`" @click="deleting=queue.plan_id;error='' "><AppIcon name="trash" /></button></div></header>
    <div v-if="deleting===queue.plan_id" class="ticket-delete-confirm"><span>删除该日计划？历史修订会保留。</span><button type="button" class="danger-button" :disabled="mutating" @click="remove(queue)">确认删除</button><button type="button" class="text-button" :disabled="mutating" @click="deleting=''">取消</button></div>
    <ManualQueuePreview v-if="queue.candidates.length" :entries="queueEntries(queue)" readonly /><p v-else class="ticket-empty">候选已清空，可以查看历史版本。</p>
-   <ExecutionSnapshotPanel v-if="queue.credential_id&&queue.candidates.length" :api="api" :credential-id="queue.credential_id" :target-date="queue.target_date" :session="session" />
+   <ExecutionSnapshotPanel v-if="queue.credential_id&&queue.candidates.length" :api="api" :credential-id="queue.credential_id" :target-date="queue.target_date" :source-plan-id="queue.plan_id" :refresh-key="executionRefreshKey" :active="active" :session="session" @status-change="rememberExecution(queue,$event)" />
   </article>
  </section>
 </template>
@@ -34,4 +54,6 @@ onUnmounted(()=>{alive=false;epoch++;});
 
 <style scoped>
 .ticket-scope{color:var(--muted);font-size:11px}
+.ticket-state{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.ticket-state.is-success{color:var(--success);background:var(--success-soft)}
 </style>
