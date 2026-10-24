@@ -1,30 +1,24 @@
 <script setup>
 import { onUnmounted, ref, watch } from 'vue';
 import ManualQueuePreview from './ManualQueuePreview.vue';
+import { executionStateLabels } from '../../utils/executionStatus.js';
 
 const props = defineProps({
   api: { type: Object, required: true },
   credentialId: { type: String, required: true },
   targetDate: { type: String, required: true },
   session: { type: Object, required: true },
+  sourcePlanId: { type: String, default: '' },
+  refreshKey: { type: Number, default: 0 },
+  active: { type: Boolean, default: true },
 });
+const emit = defineEmits(['status-change']);
 
 const run = ref(null);
 const workerEnabled = ref(false);
 const state = ref('idle');
 let alive = true;
 let sequence = 0;
-
-const stateLabels = {
-  ready: '已复核 · 等待 07:30',
-  calibrated: '时间已校准 · 等待执行',
-  running: '执行中',
-  succeeded: '已完成',
-  failed: '三轮未成功',
-  empty: '复核后没有可执行候选',
-  stale: '保存队列已变更',
-  needs_attention: '需要关注',
-};
 
 const stageLabels = {
   reconcile_booking_node: '复核预约类别',
@@ -49,28 +43,38 @@ function timeText(value) {
 
 async function load() {
   const current = ++sequence;
-  if (typeof props.api.executionQueue !== 'function' || !props.credentialId || !props.targetDate) {
-    state.value = 'unavailable';
+  updateStatus('loading');
+  if (!props.active || props.session?.status !== 'authenticated' || typeof props.api.executionQueue !== 'function'
+      || !props.credentialId || !props.targetDate) {
+    updateStatus('unavailable');
     return;
   }
-  state.value = 'loading';
   try {
     const result = await props.api.executionQueue(props.targetDate, props.credentialId);
     if (!alive || current !== sequence) return;
     if (result?.worker_enabled !== true && result?.worker_enabled !== false) throw new Error('invalid_response');
     if (result.run !== null && (result.run?.target_date !== props.targetDate
-        || !Array.isArray(result.run.candidates) || !Array.isArray(result.run.stages))) throw new Error('invalid_response');
-    run.value = result.run;
-    workerEnabled.value = result.worker_enabled;
-    state.value = 'ready';
+        || !Array.isArray(result.run.candidates) || !Array.isArray(result.run.stages)
+        || (props.sourcePlanId && (result.run.source_plan_id !== props.sourcePlanId
+          || !Number.isSafeInteger(result.run.source_version) || result.run.source_version < 1
+          || typeof result.run.source_revision_id !== 'string' || !result.run.source_revision_id)))) throw new Error('invalid_response');
+    updateStatus('ready', result);
   } catch {
     if (!alive || current !== sequence) return;
-    state.value = 'error';
+    updateStatus('error');
   }
 }
 
-watch(() => [props.credentialId, props.targetDate, props.session?.user?.user_id,
-  props.session?.status, props.session?.invalidationEpoch], () => { void load(); }, { immediate: true });
+function updateStatus(status, result = null) {
+  run.value = result?.run ?? null;
+  workerEnabled.value = result?.worker_enabled === true;
+  state.value = status;
+  emit('status-change', { status, run: run.value, workerEnabled: workerEnabled.value });
+}
+
+watch(() => [props.credentialId, props.targetDate, props.sourcePlanId, props.refreshKey, props.active,
+  props.session?.user?.user_id, props.session?.status, props.session?.csrfToken,
+  props.session?.invalidationEpoch], () => { void load(); }, { immediate: true, flush: 'sync' });
 onUnmounted(() => { alive = false; sequence += 1; });
 </script>
 
@@ -80,7 +84,7 @@ onUnmounted(() => { alive = false; sequence += 1; });
       <span>执行队列</span>
       <span v-if="state === 'loading'">读取中…</span>
       <span v-else-if="state === 'error'">状态读取失败</span>
-      <span v-else-if="run">{{ stateLabels[run.state] || '状态未知' }} · {{ run.candidate_count }} 项</span>
+      <span v-else-if="run">{{ executionStateLabels[run.state] || '状态未知' }} · {{ run.candidate_count }} 项</span>
       <span v-else>{{ workerEnabled ? '等待复核' : '执行器未启用' }}</span>
     </summary>
     <div v-if="state === 'error'" class="muted"><button type="button" class="text-button" @click="load">重新读取</button></div>

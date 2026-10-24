@@ -7,7 +7,8 @@ beforeEach(()=>vi.useFakeTimers());afterEach(()=>vi.useRealTimers());
 const credential=id=>({credential_id:id,label:`测试凭据 ${id}`,enabled:true,account_binding_state:'confirmed',requires_revalidation:false,last_confirmed_validation_state:'confirmed_valid',expiry_state:'valid'});
 const categories={data_state:'live_observed_unverified',source:'official_read_only',options:[{reference:'other-ref',label:'游泳',physical_venue_verified:false},{reference:'badminton-ref',label:'羽毛球',physical_venue_verified:false}]};
 function grid(date='2026-10-15'){
- return {grid_version:'official-bookingByTime-live-observation-v1',data_state:'live_observed_unverified',simulation:false,target_date:date,timezone_name:'Asia/Shanghai',query_scope:{display_name:'羽毛球',physical_venue_verified:false},can_select:false,can_select_intent:true,can_match:false,can_bind:false,can_book:false,can_pay:false,can_create_job:false,client_selection_window:'open',source:{data_state:'live_observed_unverified',trust_state:'display_only_unverified',price_state:'displayed_unit_unverified',captured_at_utc_ms:Date.now(),ui_stale_after_utc_ms:Date.now()+60000},courts:[{display_name:'测试一号场'}],rows:[{time_label:'18:00',time_status_code:'0',intent_start_time:'18:00',intent_end_time:'19:00',cells:[{state:'observed_unknown',price_display:'20',selectable:false,intent_selectable:false}]}],notice:'未核验库存'};
+ const capturedAt=Date.now();
+ return {grid_version:'official-bookingByTime-live-observation-v1',data_state:'live_observed_unverified',simulation:false,target_date:date,timezone_name:'Asia/Shanghai',query_scope:{display_name:'羽毛球',physical_venue_verified:false},can_select:false,can_select_intent:true,can_match:false,can_bind:false,can_book:false,can_pay:false,can_create_job:false,client_selection_window:'open',source:{data_state:'live_observed_unverified',trust_state:'display_only_unverified',price_state:'displayed_unit_unverified',captured_at_utc_ms:capturedAt,ui_stale_after_utc_ms:capturedAt+60000},courts:[{display_name:'测试一号场'}],rows:[{time_label:'18:00',time_status_code:'0',intent_start_time:'18:00',intent_end_time:'19:00',cells:[{state:'observed_unknown',price_display:'20',selectable:false,intent_selectable:false}]}],notice:'未核验库存'};
 }
 const settle=async(ms=25)=>{await flushPromises();await vi.advanceTimersByTimeAsync(ms);await flushPromises();};
 async function setup(overrides={},credentialOverrides={}){
@@ -18,6 +19,12 @@ async function setup(overrides={},credentialOverrides={}){
  await settle();return {api,credentialApi,session,wrapper};
 }
 describe('badminton date-driven observation flow',()=>{
+ it.each([[60000,true],[60001,false]])('enforces the observation lifetime boundary at %i ms',async(lifetime,allowed)=>{
+  const payload=grid();payload.source.ui_stale_after_utc_ms=payload.source.captured_at_utc_ms+lifetime;
+  const {wrapper}=await setup({grid:vi.fn(async()=>payload)});
+  expect(wrapper.find('[data-testid="live-availability-grid"]').exists()).toBe(allowed);
+  if(!allowed)expect(wrapper.text()).toContain('来源标记无效');
+ });
  it('coalesces newer dates and continues after the bounded old read times out',async()=>{
   const read=vi.fn().mockImplementationOnce(()=>new Promise((_,reject)=>{setTimeout(()=>reject(new DOMException('Synthetic timeout','TimeoutError')),50);})).mockImplementation(async({targetDate})=>grid(targetDate));
   const {wrapper}=await setup({grid:read});

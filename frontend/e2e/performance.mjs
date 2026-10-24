@@ -4,6 +4,35 @@ const credentials=fixtures.map(item=>item.credential_id==='visual-confirmed'?{..
 
 export async function runPerformance(qa){
  const {scenario,BASE,check,count,layout,screenshot}=qa;
+ for(const viewport of viewports.filter(item=>[390,1440].includes(item.width))){
+  const queue={plan_id:'synthetic-executed-queue',current_revision_id:'synthetic-queue-revision-8',version:8,
+   target_date:'2026-10-17',credential_id:'visual-confirmed',plan_status:'draft',can_open_selection:true,
+   candidates:[{duration_minutes:120,preferred_start_times:['14:00'],court_preferences:['6号场'],query_scope_label:'羽毛球'}]};
+  const run={run_id:'synthetic-successful-run',target_date:queue.target_date,source_plan_id:queue.plan_id,
+   source_version:8,source_revision_id:queue.current_revision_id,state:'running',candidate_count:1,
+   candidates:[{scope_label:'羽毛球',court_preference:'6号场',start_time:'14:00',end_time:'16:00',duration_minutes:120}],
+   reconciliation:{retained_candidate_count:1,discarded_candidate_counts:{}},stages:[]};
+  await scenario(`execution-plan-status-${viewport.name}`,'user',async ctx=>{
+   await ctx.page.goto(BASE+'/plans');await ctx.page.getByTestId('plan-tab-current').waitFor();
+   check(ctx.name,'hidden execution panels do not query run state',count(ctx,`/api/booking-execution/credentials/visual-confirmed/queues/${queue.target_date}`,'GET')===0);
+   await ctx.page.getByTestId('plan-tab-current').click();
+   const label=ctx.page.locator('.ticket-state');
+   await ctx.page.getByText('执行中',{exact:true}).first().waitFor();
+   check(ctx.name,'plan card and execution panel initially report the same running state',await label.innerText()==='执行中'&&(await ctx.page.locator('.execution-snapshot summary').innerText()).includes('执行中'));
+   ctx.state.executionRuns['visual-confirmed'][queue.target_date].state='succeeded';
+   await ctx.page.getByRole('button',{name:'重新读取抢票计划',exact:true}).click();
+   await ctx.page.getByText('已执行 · 抢票成功',{exact:true}).waitFor();
+   check(ctx.name,'refresh updates both statuses without a queue revision change',await label.innerText()==='已执行 · 抢票成功'&&(await ctx.page.locator('.execution-snapshot summary').innerText()).includes('已执行 · 抢票成功'));
+   check(ctx.name,'refresh reuses one execution request per load',count(ctx,`/api/booking-execution/credentials/visual-confirmed/queues/${queue.target_date}`,'GET')===2);
+   await ctx.page.getByTestId('plan-tab-manual').click();ctx.state.executionRuns['visual-confirmed'][queue.target_date].state='needs_attention';
+   await ctx.page.getByTestId('plan-tab-current').click();await ctx.page.getByText('需要关注',{exact:true}).waitFor();
+   check(ctx.name,'returning to the plan tab reads the latest execution state',await label.innerText()==='需要关注');
+   ctx.state.executionRuns['visual-confirmed'][queue.target_date].state='succeeded';
+   await ctx.page.getByRole('button',{name:'重新读取抢票计划',exact:true}).click();await ctx.page.getByText('已执行 · 抢票成功',{exact:true}).waitFor();
+   check(ctx.name,'status reads never modify the queue',!ctx.state.requests.some(request=>request.path.startsWith('/api/plans')&&request.method!=='GET'));
+   await layout(ctx);await screenshot(ctx,ctx.name);
+  },{credentials,manualQueues:[queue],executionRuns:{'visual-confirmed':{[queue.target_date]:run}}},viewport);
+ }
  for(const viewport of viewports.filter(item=>[390,1440].includes(item.width)))await scenario(`performance-loading-${viewport.name}`,'user',async ctx=>{
   await ctx.page.goto(BASE+'/plans');await ctx.page.getByTestId('live-availability-grid').waitFor();
   const reads=ctx.state.requests.filter(item=>item.path!=='/api/auth/session');

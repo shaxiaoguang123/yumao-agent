@@ -141,7 +141,7 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
     if (url.pathname === '/api/booking-window' && record.method === 'GET') {
       await reply(200, { business_timezone_name: 'Asia/Shanghai', business_date: '2026-10-15', default_target_date: '2026-10-17', queryable_target_dates: ['2026-10-15', '2026-10-16', '2026-10-17'], can_query: false, can_book: false, can_pay: false, can_create_job: false }); return;
     }
-    if (url.pathname === '/api/plans/manual-queues' && record.method === 'GET') { await reply(200, { queues: [] }); return; }
+    if (url.pathname === '/api/plans/manual-queues' && record.method === 'GET') { await reply(200, { queues: state.manualQueues || [] }); return; }
     const selectedQueueRoute = url.pathname.match(/^\/api\/plans\/manual-queues\/([0-9]{4}-[0-9]{2}-[0-9]{2})$/);
     if (selectedQueueRoute && record.method === 'GET') {
       const credentialId = url.searchParams.get('credential_id') || '';
@@ -218,7 +218,7 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
       const credentialId = url.pathname.split('/')[4];
       await reply(state.credentials.some((item) => item.credential_id === credentialId) ? 200 : 404,
         state.credentials.some((item) => item.credential_id === credentialId)
-          ? { run: null, worker_enabled: false } : { error: 'credential_not_found' }); return;
+          ? { run: state.executionRuns?.[credentialId]?.[url.pathname.split('/')[6]] || null, worker_enabled: false } : { error: 'credential_not_found' }); return;
     }
     const matched = url.pathname.match(/^\/api\/credentials\/([^/]+)(?:\/(validate|rotate-token))?$/);
     if (matched) {
