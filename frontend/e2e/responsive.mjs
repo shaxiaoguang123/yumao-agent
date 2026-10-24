@@ -138,12 +138,13 @@ export async function runResponsive(qa) {
       } }));
       await ctx.page.route('**/api/availability/live/grid', route => {
         const targetDate = route.request().postDataJSON().target_date;
+        const capturedAt = Date.now();
         const states = ['observed_clear_unmarked', 'observed_reserved', 'observed_activity_occupied', 'observed_unbookable', 'observed_unknown'];
         return route.fulfill({ json: {
           grid_version: 'official-bookingByTime-live-observation-v1', data_state: 'live_observed_unverified', simulation: false,
           target_date: targetDate, timezone_name: 'Asia/Shanghai', query_scope: { display_name: '羽毛球', physical_venue_verified: false },
           can_select: false, can_select_intent: true, can_match: false, can_bind: false, can_book: false, can_pay: false, can_create_job: false, client_selection_window: 'open',
-          source: { data_state: 'live_observed_unverified', trust_state: 'display_only_unverified', price_state: 'displayed_unit_unverified', captured_at_utc_ms: Date.now(), ui_stale_after_utc_ms: Date.now() + 60000 },
+          source: { data_state: 'live_observed_unverified', trust_state: 'display_only_unverified', price_state: 'displayed_unit_unverified', captured_at_utc_ms: capturedAt, ui_stale_after_utc_ms: capturedAt + 60000 },
           courts: Array.from({ length: 10 }, (_, index) => ({ display_name: `${index + 1}号场` })),
           rows: Array.from({ length: 13 }, (_, index) => ({
             time_label: `${String(index + 9).padStart(2, '0')}:00`, time_status_code: '0', intent_start_time: `${String(index + 9).padStart(2, '0')}:00`, intent_end_time: `${index + 10}:00`,
