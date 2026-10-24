@@ -1,4 +1,5 @@
 :root {
+  color-scheme:light;
   --apple-background:#ffffff;
   --apple-canvas:#f5f5f7;
   --apple-ink:#1d1d1f;
@@ -9,6 +10,10 @@
   --apple-blue-soft:#edf5ff;
   --apple-line:rgba(0,0,0,.08);
   --apple-shadow:0 4px 24px rgba(0,0,0,.04);
+  --apple-topbar:rgba(255,255,255,.78);
+  --apple-hover:rgba(0,0,0,.035);
+  --apple-control-line:rgba(0,0,0,.14);
+  --apple-popover-shadow:0 12px 40px rgba(0,0,0,.1);
   --apple-ease:cubic-bezier(.22,1,.36,1);
   --apple-font:-apple-system,"SF Pro Display","PingFang SC",sans-serif;
   --brand:var(--apple-blue);
@@ -22,12 +27,18 @@
   --line:var(--apple-line);
   --shadow:var(--apple-shadow);
   --focus:0 0 0 3px rgba(0,113,227,.25);
+  /* Filled controls keep white text; links use the theme's brighter blue. */
+  --action:#0071e3;
+  --action-hover:#0066cc;
+  --on-accent:#ffffff;
   --danger:#b42318;
   --danger-soft:#fff0ee;
+  --danger-hover:#f9e1df;
   --warning:#925a00;
   --warning-soft:#fff6e8;
   --success:#207a35;
   --success-soft:#edf7ee;
+  --success-fill:#207a35;
   --radius:24px;
   --control-radius:14px;
   font-family:var(--apple-font);
@@ -35,4 +46,33 @@
   background:var(--page);
   font-synthesis:none;
   text-rendering:optimizeLegibility;
+}
+
+@media(prefers-color-scheme:dark) {
+  :root {
+    color-scheme:dark;
+    --apple-background:#161617;
+    --apple-canvas:#000000;
+    --apple-ink:#f5f5f7;
+    --apple-secondary:#a1a1a6;
+    --apple-muted:#a1a1a6;
+    --apple-blue:#6eafff;
+    --apple-blue-hover:#a0cbff;
+    --apple-blue-soft:#102b4a;
+    --apple-line:rgba(255,255,255,.12);
+    --apple-shadow:0 4px 24px rgba(0,0,0,.24);
+    --apple-topbar:rgba(22,22,23,.82);
+    --apple-hover:rgba(255,255,255,.06);
+    --apple-control-line:rgba(255,255,255,.28);
+    --apple-popover-shadow:0 12px 40px rgba(0,0,0,.5);
+    --accent:#18395d;
+    --focus:0 0 0 3px rgba(10,132,255,.5);
+    --danger:#ffb4ab;
+    --danger-soft:#3b1c1a;
+    --danger-hover:#4f2420;
+    --warning:#ffcc80;
+    --warning-soft:#33270f;
+    --success:#8bd59b;
+    --success-soft:#142b1b;
+  }
 }

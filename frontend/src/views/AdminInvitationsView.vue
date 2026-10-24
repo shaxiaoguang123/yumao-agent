@@ -274,7 +274,7 @@ onBeforeUnmount(() => {
   border:1px solid var(--line);
   border-radius:8px;
   color:var(--brand);
-  background:white;
+  background:var(--surface);
   font-size:10px;
 
 }
@@ -300,7 +300,7 @@ onBeforeUnmount(() => {
   padding:16px;
   margin-top:24px;
   background:var(--brand-soft);
-  border:1px solid #cbded0;
+  border:1px solid var(--line);
   border-radius:16px;
 
 }
@@ -320,8 +320,8 @@ onBeforeUnmount(() => {
   display:block;
   overflow-wrap:anywhere;
   padding:16px;
-  border:1px dashed #b5ceb9;
-  background:white;
+  border:1px dashed var(--line);
+  background:var(--surface);
   border-radius:8px;
   color:var(--brand-dark);
   font-family:ui-monospace,SFMono-Regular,monospace;
