@@ -14,6 +14,7 @@ import { runOrders } from './orders.mjs';
 import { runDiagnostics } from './diagnostics.mjs';
 import { runResponsive } from './responsive.mjs';
 import { runPerformance } from './performance.mjs';
+import { runThemes } from './themes.mjs';
 
 const frontend = fileURLToPath(new URL('../', import.meta.url));
 const repository = path.resolve(frontend, '..');
@@ -87,13 +88,16 @@ try {
   qa.report.browser = { name: process.env.BROWSER_EXECUTABLE_PATH ? 'local Chrome' : 'Playwright Chromium', version: browser.version(), playwright: JSON.parse(await readFile(path.join(frontend, 'node_modules/playwright/package.json'), 'utf8')).version, node: process.version, headless: true };
   qa.report.sourceStatus = execFileSync('git', ['status', '--short'], { cwd: repository, encoding: 'utf8' });
   qa.report.browserBatchSize = 12;
-  if (!process.argv.includes('--only-regressions')) await runBaseline(qa);
-  await runRegressions(qa);
-  await runRedesign(qa);
-  await runOrders(qa);
-  await runDiagnostics(qa);
-  await runResponsive(qa);
-  await runPerformance(qa);
+  if (!process.argv.includes('--only-themes')) {
+    if (!process.argv.includes('--only-regressions')) await runBaseline(qa);
+    await runRegressions(qa);
+    await runRedesign(qa);
+    await runOrders(qa);
+    await runDiagnostics(qa);
+    await runResponsive(qa);
+    await runPerformance(qa);
+  }
+  await runThemes(qa);
 } catch (error) {
   if (qa) qa.report.runnerError = { message: error.message };
   throw error;
