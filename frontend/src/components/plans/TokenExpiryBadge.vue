@@ -15,5 +15,5 @@ const detail=computed(()=>Number.isFinite(expires.value)?`Token 到期：${new I
  <span v-if="credential" class="token-expiry" :class="{'is-urgent':urgent,'is-pulsing':urgent&&!expired}" :title="detail" data-testid="token-expiry" role="status" aria-atomic="true">Token · {{ dateLabel }}<strong v-if="Number.isFinite(expires)"> · {{ expired?'已过期':`剩${Math.ceil(remaining/86400000)}天` }}</strong></span>
 </template>
 <style scoped>
-.token-expiry{font-size:12px;color:var(--muted);white-space:nowrap;padding:8px 8px;border-radius:8px;background:var(--page)}.token-expiry strong{font-weight:600}.token-expiry.is-urgent{color:#b42318;background:#fff0ee}.token-expiry.is-pulsing{animation:token-expiry-pulse 1.8s ease-in-out infinite}@keyframes token-expiry-pulse{0%,100%{opacity:1}50%{opacity:.55}}@media(prefers-reduced-motion:reduce){.token-expiry.is-pulsing{animation:none}}
+.token-expiry{font-size:12px;color:var(--muted);white-space:nowrap;padding:8px 8px;border-radius:8px;background:var(--page)}.token-expiry strong{font-weight:600}.token-expiry.is-urgent{color:var(--danger);background:var(--danger-soft)}.token-expiry.is-pulsing{animation:token-expiry-pulse 1.8s ease-in-out infinite}@keyframes token-expiry-pulse{0%,100%{opacity:1}50%{opacity:.55}}@media(prefers-reduced-motion:reduce){.token-expiry.is-pulsing{animation:none}}
 </style>

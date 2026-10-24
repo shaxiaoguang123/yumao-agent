@@ -67,3 +67,16 @@ UI redesign adds four discovery scenarios (one per viewport): local search/filte
 ## Compact responsive layout
 
 The responsive suite covers 320–1920px widths and a short desktop viewport. It checks the visible Agent preview, first-screen phone input, execution-help bounds, both navigation rows after resizing, dense log details, and inline model editing. API responses stay synthetic and blocked from the upstream service. Screenshots support manual visual review; these checks do not establish physical iOS keyboard or safe-area behavior.
+
+## System light and dark themes
+
+The application follows `prefers-color-scheme` through CSS, including native
+controls and browser theme metadata. No account preference or JavaScript theme
+state is stored. Theme scenarios run with the full suite; use
+`npm run test:e2e -- --only-themes` for a focused check.
+They cover public and authenticated routes at 390px and 1440px, a live system
+preference change without losing form input, text contrast, focus feedback,
+popovers, official price cells and layout overflow. The official venue palette
+and its dark price text are preserved separately from the application theme;
+these fixed upstream colors are checked for consistency, not claimed to pass
+the general 4.5:1 text-contrast check. All API responses remain synthetic.
