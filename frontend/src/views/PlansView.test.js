@@ -119,13 +119,15 @@ describe('reservation plan workspace',()=>{
   await new Promise(resolve=>setTimeout(resolve,500));await flushPromises();
   expect(api.saveQueue).toHaveBeenCalledWith('2026-10-17',3,[{court_preference:'6号场',start_time:'18:00',end_time:'20:00',duration_minutes:120,scope_label:'羽毛球'},{court_preference:'6号场',start_time:'10:00',end_time:'12:00',duration_minutes:120,scope_label:'羽毛球'}],'credential-a');
  });
- it('opens inline queue ordering and candidate removal without leaving the plan list',async()=>{
+ it('keeps candidate actions visible and sends the pencil to the preselection map',async()=>{
   const {wrapper}=await mountPlans();await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');await flushPromises();
-  const edit=wrapper.get('[aria-label="调整2026-10-20队列顺序和场地"]');expect(edit.element.disabled).toBe(false);
-  await edit.trigger('click');await flushPromises();
-  expect(wrapper.get('.ticket-inline-editor').text()).toContain('同一时长组内调整顺序');
-  expect(wrapper.findAll('.queue-entry-actions button[aria-label^="移除"]').length).toBeGreaterThan(0);
-  expect(wrapper.get('[data-testid="plan-tab-current"]').attributes('aria-selected')).toBe('true');
+  expect(wrapper.get('[aria-label="将60分钟候选1上移"]').exists()).toBe(true);
+  expect(wrapper.get('[aria-label="移除60分钟候选1"]').exists()).toBe(true);
+  expect(wrapper.find('.ticket-inline-editor').exists()).toBe(false);
+  await wrapper.get('[aria-label="编辑2026-10-20队列"]').trigger('click');await flushPromises();
+  expect(wrapper.get('[data-testid="plan-tab-manual"]').attributes('aria-selected')).toBe('true');
+  expect(wrapper.find('.manual-queue-grid').exists()).toBe(true);
+  expect(wrapper.find('.ticket-inline-editor').exists()).toBe(false);
  });
  it('keeps token and date filters in separate controls without inline queue editors',async()=>{
   const {wrapper}=await mountPlans();await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');await flushPromises();

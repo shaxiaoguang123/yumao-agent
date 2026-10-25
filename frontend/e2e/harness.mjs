@@ -181,7 +181,12 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
     }
     if (selectedQueueRoute && record.method === 'GET') {
       const credentialId = url.searchParams.get('credential_id') || '';
-      await reply(200, { queue: { target_date: selectedQueueRoute[1], credential_id: credentialId, version: 0, candidates: [] } }); return;
+      const existing=(state.overviewQueues||state.manualQueues||[]).find(q=>q.target_date===selectedQueueRoute[1]&&q.credential_id===credentialId);
+      await reply(200, { queue: existing?{
+        plan_id:existing.plan_id,target_date:existing.target_date,credential_id:existing.credential_id,
+        version:existing.version,current_revision_id:existing.current_revision_id||existing.record_id,
+        candidates:existing.candidates||[],
+      }:{target_date:selectedQueueRoute[1],credential_id:credentialId,version:0,candidates:[]} }); return;
     }
     if (url.pathname === '/api/availability/live/options' && record.method === 'GET') { await reply(200, { enabled: Boolean(state.liveEnabled), min_read_interval_ms: 0 }); return; }
     if (url.pathname === '/api/availability/live/categories' && record.method === 'POST' && state.liveEnabled) {
