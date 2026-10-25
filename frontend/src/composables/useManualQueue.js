@@ -10,8 +10,10 @@ export const queueEntries=queue=>(queue?.candidates||[]).map(intent=>{
  const legacyScope=intent.venue_preference==='羽毛球（场馆未绑定）'?'羽毛球':'';
  return {court_preference:intent.court_preferences[0],start_time:start,end_time:`${String(Math.floor(end/60)).padStart(2,'0')}:${String(end%60).padStart(2,'0')}`,duration_minutes:intent.duration_minutes,scope_label:intent.query_scope_label||legacyScope};
 });
-const ordered=entries=>[...entries.filter(e=>e.duration_minutes===120),...entries.filter(e=>e.duration_minutes===60)];
-const fingerprint=entries=>JSON.stringify(ordered(entries).map(e=>[e.duration_minutes,e.scope_label||'',e.court_preference,e.start_time,e.end_time]));
+export const orderQueueEntries=entries=>[...entries.filter(e=>e.duration_minutes===120),...entries.filter(e=>e.duration_minutes===60)];
+export const queueEntriesFingerprint=entries=>JSON.stringify(orderQueueEntries(entries).map(e=>[e.duration_minutes,e.scope_label||'',e.court_preference,e.start_time,e.end_time]));
+const ordered=orderQueueEntries;
+const fingerprint=queueEntriesFingerprint;
 
 export function useManualQueue(api,session,targetDate,targetCredentialId=()=>null,isActive=()=>true){
  const entries=ref([]),queues=ref([]),version=ref(0),status=ref('idle'),error=ref(''),blocked=ref(false),dirty=ref(false),latest=ref(undefined),history=ref(null),historyError=ref('');

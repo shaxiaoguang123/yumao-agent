@@ -163,6 +163,22 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
     }
     if (url.pathname === '/api/plans/manual-queues' && record.method === 'GET') { await reply(200, { queues: state.manualQueues || [] }); return; }
     const selectedQueueRoute = url.pathname.match(/^\/api\/plans\/manual-queues\/([0-9]{4}-[0-9]{2}-[0-9]{2})$/);
+    if (selectedQueueRoute && record.method === 'PUT') {
+      if(record.csrfValid!==true){await reply(403,{error:'csrf_failed'});return;}
+      const body=request.postDataJSON(),credentialId=body.credential_id||'';
+      record.body=body;
+      const sources=['overviewQueues','manualQueues'].filter(key=>Array.isArray(state[key]));
+      const existing=(state.overviewQueues||state.manualQueues||[]).find(q=>q.target_date===selectedQueueRoute[1]&&q.credential_id===credentialId);
+      if(!existing){await reply(404,{error:'plan_not_found'});return;}
+      if(body.base_version!==existing.version){await reply(409,{error:'plan_version_conflict'});return;}
+      const version=existing.version+1;
+      const updated={...existing,version,current_revision_id:`${existing.plan_id}-revision-${version}`,record_id:`${existing.plan_id}-revision-${version}`,
+        candidates:body.entries.map(entry=>({duration_minutes:entry.duration_minutes,court_preferences:[entry.court_preference],
+          preferred_start_times:[entry.start_time],query_scope_label:entry.scope_label||''})),
+        ...(existing.lifecycle?{lifecycle:{...existing.lifecycle,current_version:version}}:{})};
+      for(const key of sources)state[key]=state[key].map(q=>q.plan_id===existing.plan_id?updated:q);
+      await reply(200,{queue:updated});return;
+    }
     if (selectedQueueRoute && record.method === 'GET') {
       const credentialId = url.searchParams.get('credential_id') || '';
       await reply(200, { queue: { target_date: selectedQueueRoute[1], credential_id: credentialId, version: 0, candidates: [] } }); return;
