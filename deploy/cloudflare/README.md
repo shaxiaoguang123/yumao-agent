@@ -10,7 +10,7 @@ Use `wrangler.jsonc` as the deploy template for `yumao-booking-email` (replace t
 - `EMAIL_FROM_NAME`: `羽毛球预约通知`.
 - `BACKEND_HMAC_SECRET`: a random 32-byte value, set as a Worker secret.
 
-For a manual rollout, deploy the script from this directory with Wrangler, set `BACKEND_HMAC_SECRET` with `wrangler secret put`, and set the Workers.dev subdomain enabled. The API-based rollout uses the same module and binding/variable names.
+For a manual rollout, deploy the script from this directory with Wrangler, set `BACKEND_HMAC_SECRET` with `wrangler secret put`, and attach either a Workers.dev hostname or the app-owned custom domain. Use the custom domain when the application server cannot resolve or connect to `workers.dev`. The API-based rollout uses the same module and binding/variable names.
 
 The same 64-character lowercase hex secret and the Worker HTTPS `/notify` URL belong in root-owned `/etc/yumao-agent/yumao.env` with `EMAIL_NOTIFICATION_OWNER_USERNAME`, `EMAIL_NOTIFICATION_RECIPIENT`, and `EMAIL_NOTIFICATION_DEFAULT_ENABLED`. Never put the secret or real recipient into Git.
 
