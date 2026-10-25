@@ -15,16 +15,33 @@ function response(status, body) {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
 
+function providerHint(error) {
+  if (error?.code === "E_RATE_LIMIT_EXCEEDED") return "rate_limited";
+  if (error?.code === "E_DAILY_LIMIT_EXCEEDED") return "daily_limit";
+  if (error?.code === "E_INTERNAL_SERVER_ERROR") return "service_unavailable";
+  if (error?.code === "E_ACCOUNT_SUSPENDED") return "account_suspended";
+  if (error?.code === "E_SENDER_DOMAIN_NOT_AVAILABLE" || error?.code === "E_SENDER_NOT_VERIFIED") return "sender_domain";
+  if (error?.code === "E_RECIPIENT_NOT_ALLOWED" || error?.code === "E_RECIPIENT_SUPPRESSED") return "recipient";
+  const message = typeof error?.message === "string" ? error.message.toLowerCase() : "";
+  if (message.includes("paid") || message.includes("entitl") || message.includes("workers plan")) return "plan_required";
+  if (message.includes("sender") || message.includes("domain") || message.includes("verified")) return "sender_domain";
+  if (message.includes("recipient") || message.includes("destination") || message.includes("allowed")) return "recipient";
+  if (message.includes("rate") || message.includes("limit") || message.includes("throttl")) return "rate_limited";
+  if (message.includes("unavailable") || message.includes("internal") || message.includes("temporar")) return "service_unavailable";
+  return "unclassified";
+}
+
 function sendFailure(error) {
   const providerCode = typeof error?.code === "string" && PROVIDER_CODE.test(error.code)
     ? error.code : "UNCLASSIFIED";
+  const details = { provider_code: providerCode, provider_hint: providerHint(error) };
   if (providerCode === "E_RATE_LIMIT_EXCEEDED") {
-    return response(429, { error: "provider_retryable", provider_code: providerCode });
+    return response(429, { error: "provider_retryable", ...details });
   }
   if (PERMANENT_SEND_ERRORS.has(providerCode)) {
-    return response(400, { error: "provider_rejected", provider_code: providerCode });
+    return response(400, { error: "provider_rejected", ...details });
   }
-  return response(409, { error: "provider_outcome_unknown", provider_code: providerCode });
+  return response(409, { error: "provider_outcome_unknown", ...details });
 }
 
 async function readBoundedBody(request) {
@@ -204,7 +221,7 @@ export default {
         html: message.html,
       });
       if (typeof sent?.messageId !== "string" || !sent.messageId) {
-        return response(409, { error: "provider_outcome_unknown", provider_code: "MESSAGE_ID_MISSING" });
+        return response(409, { error: "provider_outcome_unknown", provider_code: "MESSAGE_ID_MISSING", provider_hint: "message_id_missing" });
       }
       return response(200, { accepted: true, message_id: sent.messageId });
     } catch (error) {

@@ -95,7 +95,7 @@ test('does not retry a provider response with an unknown send outcome', async ()
     throw Object.assign(new Error('private provider detail'), { code: 'E_INTERNAL_SERVER_ERROR' });
   }));
   assert.equal(response.status, 409);
-  assert.deepEqual(await response.json(), { error: 'provider_outcome_unknown', provider_code:'E_INTERNAL_SERVER_ERROR' });
+  assert.deepEqual(await response.json(), { error: 'provider_outcome_unknown', provider_code:'E_INTERNAL_SERVER_ERROR', provider_hint:'service_unavailable' });
 });
 
 test('marks only an explicit rate limit as retryable', async () => {
@@ -103,7 +103,7 @@ test('marks only an explicit rate limit as retryable', async () => {
     throw Object.assign(new Error('private provider detail'), { code: 'E_RATE_LIMIT_EXCEEDED' });
   }));
   assert.equal(response.status, 429);
-  assert.deepEqual(await response.json(), { error: 'provider_retryable', provider_code:'E_RATE_LIMIT_EXCEEDED' });
+  assert.deepEqual(await response.json(), { error: 'provider_retryable', provider_code:'E_RATE_LIMIT_EXCEEDED', provider_hint:'rate_limited' });
 });
 
 test('marks known sender and payload rejections as permanent failures', async () => {
@@ -111,7 +111,7 @@ test('marks known sender and payload rejections as permanent failures', async ()
     throw Object.assign(new Error('private provider detail'), { code: 'E_SENDER_DOMAIN_NOT_AVAILABLE' });
   }));
   assert.equal(response.status, 400);
-  assert.deepEqual(await response.json(), { error: 'provider_rejected', provider_code:'E_SENDER_DOMAIN_NOT_AVAILABLE' });
+  assert.deepEqual(await response.json(), { error: 'provider_rejected', provider_code:'E_SENDER_DOMAIN_NOT_AVAILABLE', provider_hint:'sender_domain' });
 });
 
 test('does not expose a provider message when the error code is malformed', async () => {
@@ -119,5 +119,13 @@ test('does not expose a provider message when the error code is malformed', asyn
     throw Object.assign(new Error('private provider detail'), { code: 'secret\nvalue' });
   }));
   assert.equal(response.status, 409);
-  assert.deepEqual(await response.json(), { error:'provider_outcome_unknown', provider_code:'UNCLASSIFIED' });
+  assert.deepEqual(await response.json(), { error:'provider_outcome_unknown', provider_code:'UNCLASSIFIED', provider_hint:'unclassified' });
+});
+
+test('maps only a safe provider message category without returning raw text', async () => {
+  const response = await worker.fetch(signedRequest(notification), env(async () => {
+    throw new Error('Workers Paid plan required for Email Sending');
+  }));
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error:'provider_outcome_unknown', provider_code:'UNCLASSIFIED', provider_hint:'plan_required' });
 });

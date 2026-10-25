@@ -50,4 +50,12 @@ describe('EmailNotificationSettings',()=>{
     expect(wrapper.text()).toContain('Cloudflare 尚未为发件域启用邮件服务');
     expect(wrapper.text()).not.toContain('private provider message');
   });
+
+  it('shows a safe account-plan hint from Cloudflare error codes',async()=>{
+    const api={emailNotificationSettings:vi.fn(async()=>settings()),sendEmailNotificationTest:vi.fn(async()=>{throw Object.assign(new Error('provider error'),{code:'cloudflare_plan_required'});}),updateEmailNotificationSettings:vi.fn()};
+    const wrapper=mount(EmailNotificationSettings,{props:{api,session:session()}});await flushPromises();
+    await wrapper.get('button[type="button"]').trigger('click');await flushPromises();
+    expect(wrapper.text()).toContain('Cloudflare Email Sending 报告当前账户需要 Workers Paid');
+    expect(wrapper.text()).not.toContain('provider error');
+  });
 });
