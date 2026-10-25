@@ -2,6 +2,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 const MAX_CLOCK_SKEW_SECONDS = 300;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+const PROVIDER_CODE = /^[A-Z0-9_]{1,48}$/;
 const PERMANENT_SEND_ERRORS = new Set([
   "E_ACCOUNT_SUSPENDED", "E_SENDER_DOMAIN_NOT_AVAILABLE", "E_SENDER_NOT_VERIFIED",
   "E_CONTENT_TOO_LARGE", "E_DELIVERY_FAILED", "E_HEADER_NOT_ALLOWED",
@@ -15,13 +16,15 @@ function response(status, body) {
 }
 
 function sendFailure(error) {
-  if (error?.code === "E_RATE_LIMIT_EXCEEDED") {
-    return response(429, { error: "provider_retryable" });
+  const providerCode = typeof error?.code === "string" && PROVIDER_CODE.test(error.code)
+    ? error.code : "UNCLASSIFIED";
+  if (providerCode === "E_RATE_LIMIT_EXCEEDED") {
+    return response(429, { error: "provider_retryable", provider_code: providerCode });
   }
-  if (PERMANENT_SEND_ERRORS.has(error?.code)) {
-    return response(400, { error: "provider_rejected" });
+  if (PERMANENT_SEND_ERRORS.has(providerCode)) {
+    return response(400, { error: "provider_rejected", provider_code: providerCode });
   }
-  return response(409, { error: "provider_outcome_unknown" });
+  return response(409, { error: "provider_outcome_unknown", provider_code: providerCode });
 }
 
 async function readBoundedBody(request) {
@@ -201,7 +204,7 @@ export default {
         html: message.html,
       });
       if (typeof sent?.messageId !== "string" || !sent.messageId) {
-        return response(409, { error: "provider_outcome_unknown" });
+        return response(409, { error: "provider_outcome_unknown", provider_code: "MESSAGE_ID_MISSING" });
       }
       return response(200, { accepted: true, message_id: sent.messageId });
     } catch (error) {

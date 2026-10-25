@@ -95,7 +95,7 @@ test('does not retry a provider response with an unknown send outcome', async ()
     throw Object.assign(new Error('private provider detail'), { code: 'E_INTERNAL_SERVER_ERROR' });
   }));
   assert.equal(response.status, 409);
-  assert.deepEqual(await response.json(), { error: 'provider_outcome_unknown' });
+  assert.deepEqual(await response.json(), { error: 'provider_outcome_unknown', provider_code:'E_INTERNAL_SERVER_ERROR' });
 });
 
 test('marks only an explicit rate limit as retryable', async () => {
@@ -103,7 +103,7 @@ test('marks only an explicit rate limit as retryable', async () => {
     throw Object.assign(new Error('private provider detail'), { code: 'E_RATE_LIMIT_EXCEEDED' });
   }));
   assert.equal(response.status, 429);
-  assert.deepEqual(await response.json(), { error: 'provider_retryable' });
+  assert.deepEqual(await response.json(), { error: 'provider_retryable', provider_code:'E_RATE_LIMIT_EXCEEDED' });
 });
 
 test('marks known sender and payload rejections as permanent failures', async () => {
@@ -111,5 +111,13 @@ test('marks known sender and payload rejections as permanent failures', async ()
     throw Object.assign(new Error('private provider detail'), { code: 'E_SENDER_DOMAIN_NOT_AVAILABLE' });
   }));
   assert.equal(response.status, 400);
-  assert.deepEqual(await response.json(), { error: 'provider_rejected' });
+  assert.deepEqual(await response.json(), { error: 'provider_rejected', provider_code:'E_SENDER_DOMAIN_NOT_AVAILABLE' });
+});
+
+test('does not expose a provider message when the error code is malformed', async () => {
+  const response = await worker.fetch(signedRequest(notification), env(async () => {
+    throw Object.assign(new Error('private provider detail'), { code: 'secret\nvalue' });
+  }));
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error:'provider_outcome_unknown', provider_code:'UNCLASSIFIED' });
 });

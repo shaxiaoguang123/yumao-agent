@@ -295,21 +295,33 @@ class EmailNotificationTests(unittest.TestCase):
 
     def test_cloudflare_unknown_outcome_is_never_retried(self):
         response = Mock(status_code=409)
-        response.iter_content.return_value = [b'{"error":"provider_outcome_unknown"}']
+        response.iter_content.return_value = [b'{"error":"provider_outcome_unknown","provider_code":"E_INTERNAL_SERVER_ERROR"}']
         with patch('backend.notifications.requests.post', return_value=response):
             with self.assertRaises(NotificationSendError) as caught:
                 self.service._send({"notification_id":"event-a","kind":"test",
                                     "outcome":"test","status_label":"test"})
         self.assertTrue(caught.exception.uncertain)
+        self.assertEqual(caught.exception.code,"cloudflare_e_internal_server_error")
 
     def test_cloudflare_explicit_rate_limit_is_retryable(self):
         response = Mock(status_code=429)
-        response.iter_content.return_value = [b'{"error":"provider_retryable"}']
+        response.iter_content.return_value = [b'{"error":"provider_retryable","provider_code":"E_RATE_LIMIT_EXCEEDED"}']
         with patch('backend.notifications.requests.post', return_value=response):
             with self.assertRaises(NotificationSendError) as caught:
                 self.service._send({"notification_id":"event-a","kind":"test",
                                     "outcome":"test","status_label":"test"})
         self.assertTrue(caught.exception.retryable)
+        self.assertEqual(caught.exception.code,"cloudflare_e_rate_limit_exceeded")
+
+    def test_invalid_provider_code_is_not_persisted(self):
+        response = Mock(status_code=409)
+        response.iter_content.return_value = [b'{"error":"provider_outcome_unknown","provider_code":"SECRET\\nVALUE"}']
+        with patch('backend.notifications.requests.post', return_value=response):
+            with self.assertRaises(NotificationSendError) as caught:
+                self.service._send({"notification_id":"event-a","kind":"test",
+                                    "outcome":"test","status_label":"test"})
+        self.assertTrue(caught.exception.uncertain)
+        self.assertEqual(caught.exception.code,"provider_outcome_unknown")
 
 
 if __name__ == "__main__":
