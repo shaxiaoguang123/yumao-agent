@@ -19,6 +19,7 @@ from backend.db import connect_database
 
 
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z", re.ASCII)
+_PROVIDER_CODE = re.compile(r"[A-Z0-9_]{1,48}\Z", re.ASCII)
 _MAX_RESPONSE_BYTES = 4096
 _MAX_REQUEST_BYTES = 64 * 1024
 _MAX_ATTEMPTS = 4
@@ -28,6 +29,15 @@ class NotificationError(ValueError):
     def __init__(self, code: str, status: int = 400):
         self.code, self.status = code, status
         super().__init__(code)
+
+
+def _provider_error_code(chunks: list[bytes]) -> str | None:
+    try:
+        result = json.loads(b"".join(chunks).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    code = result.get("provider_code") if type(result) is dict else None
+    return f"cloudflare_{code.lower()}" if type(code) is str and _PROVIDER_CODE.fullmatch(code) else None
 
 
 class EmailNotificationService:
@@ -585,12 +595,13 @@ class EmailNotificationService:
                 if size > _MAX_RESPONSE_BYTES:
                     raise NotificationSendError("provider_invalid_response", permanent=True)
                 chunks.append(chunk)
+            provider_code = _provider_error_code(chunks)
             if response.status_code == 429:
-                raise NotificationSendError("provider_retryable", retryable=True)
+                raise NotificationSendError(provider_code or "provider_retryable", retryable=True)
             if response.status_code == 409 or response.status_code >= 500:
-                raise NotificationSendError("provider_outcome_unknown", uncertain=True)
+                raise NotificationSendError(provider_code or "provider_outcome_unknown", uncertain=True)
             if response.status_code != 200:
-                raise NotificationSendError("provider_rejected", permanent=True)
+                raise NotificationSendError(provider_code or "provider_rejected", permanent=True)
             result = json.loads(b"".join(chunks).decode("utf-8"))
             if type(result) is not dict or result.get("accepted") is not True:
                 raise NotificationSendError("provider_invalid_response", permanent=True)

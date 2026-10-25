@@ -133,9 +133,11 @@ describe('reservation plan workspace',()=>{
   expect(wrapper.find('.ticket-filter-bar .ticket-filter-date input[type="date"]').exists()).toBe(true);
   expect(wrapper.find('.ticket-refresh[aria-label="重新读取抢票计划"]').exists()).toBe(true);
   expect(wrapper.find('.ticket-queue-plans form').exists()).toBe(false);
+  expect(wrapper.get('.execution-settings-disclosure summary').text()).not.toContain('邮件通知');
   expect(wrapper.find('#plan-panel-current [aria-labelledby="execution-settings-title"]').exists()).toBe(false);
   const settings=wrapper.get('.execution-settings-disclosure');settings.element.open=true;await settings.trigger('toggle');await flushPromises();
   expect(wrapper.find('#plan-panel-current [aria-labelledby="execution-settings-title"] h2').text()).toBe('自动执行时间');
+  expect(wrapper.find('.email-notification-settings').exists()).toBe(false);
  });
  it('loads one user execution schedule and does not reload it when switching Token',async()=>{
   const {wrapper,credentialApi}=await mountPlans();await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');await flushPromises();
