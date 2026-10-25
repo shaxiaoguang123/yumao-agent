@@ -8,11 +8,10 @@ import LiveAvailabilityPanel from './LiveAvailabilityPanel.vue';
 import PlanSectionTabs from './PlanSectionTabs.vue';
 import BookingDateStrip from './BookingDateStrip.vue';
 import ManualQueueWorkspace from './ManualQueueWorkspace.vue';
-import TicketQueuePlans from './TicketQueuePlans.vue';
+import QueuePlanDashboard from './QueuePlanDashboard.vue';
 import ManualQueuePreview from './ManualQueuePreview.vue';
 import PlanCredentialControl from './PlanCredentialControl.vue';
 import BookingExecutionSettings from '../BookingExecutionSettings.vue';
-import BookingSuccessPanel from './BookingSuccessPanel.vue';
 import OrderQueryPanel from './OrderQueryPanel.vue';
 import { useManualQueue, queueEntries } from '../../composables/useManualQueue.js';
 import { usePlans } from '../../composables/usePlans.js';
@@ -24,7 +23,8 @@ const liveApi=inject('liveAvailabilityApi',null),credentialApi=inject('credentia
 const aiModelsApi=inject('aiModelsApi',null),router=useRouter(),route=useRoute();
 const orderApi=inject('orderApi',null);
 const courtOptions=shallowRef([]),queueScopeLabel=shallowRef(''),queryDate=shallowRef(''),selectedCredentialId=shallowRef(''),credentialRefreshKey=shallowRef(0),planDateFilter=shallowRef(''),pendingDeletePlan=shallowRef(null);
-const activeSection=shallowRef(['agent','orders'].includes(route.query.tab)?route.query.tab:'query'),manualDate=shallowRef('');
+const activeSection=shallowRef(['query','manual','agent','current','orders'].includes(route.query.tab)?route.query.tab:'query'),manualDate=shallowRef('');
+const overviewCounts=shallowRef(null),overviewRefreshKey=shallowRef(0);
 const agentReadiness=shallowRef('idle');
 const agentReadinessError=shallowRef('');
 const currentVisited=shallowRef(activeSection.value==='current'),executionSettingsOpen=shallowRef(false);
@@ -33,11 +33,11 @@ let agentCheckSequence=0;
 const {plans,catalog,defaultWindow,listStatus,metadataError,saving,message,saveError,history,historyPlanId,historyStatus,historyBefore,loadMoreHistory,authorized,refresh,initialize,remove,showHistory,closeHistory}=usePlans(api,session,()=>selectedCredentialId.value,{requireCredential:true});
 watch(catalog,value=>{if(Array.isArray(value?.manual_queue_court_labels))courtOptions.value=[...value.manual_queue_court_labels];},{immediate:true});
 const visiblePlans=computed(()=>visibleIntentPlans(plans.value,{dateFilter:planDateFilter.value,businessDate:defaultWindow.value?.business_date||''}));
-function queueChanged(date){queueState.refreshList();if(date===manualDate.value&&!queueState.dateLocked)queueState.load();}
+function queueChanged(date){overviewRefreshKey.value++;queueState.refreshList();if(date===manualDate.value&&!queueState.dateLocked)queueState.load();}
 function selectQueue(date,credentialId=selectedCredentialId.value){if(queueState.dateLocked||!credentialId)return;if(credentialId!==selectedCredentialId.value)selectedCredentialId.value=credentialId;manualDate.value=date;activeSection.value='manual';}
 const queueState=useManualQueue(api,session,()=>manualDate.value,()=>selectedCredentialId.value,()=>activeSection.value==='manual');
 const visibleQueuePlans=computed(()=>visibleManualQueuePlans(queueState.queues,{dateFilter:planDateFilter.value,businessDate:defaultWindow.value?.business_date||''}));
-const planCount=computed(()=>visiblePlans.value.length+visibleQueuePlans.value.filter(queue=>queue.candidates?.length).length);
+const planCount=computed(()=>visiblePlans.value.length+(overviewCounts.value?.all??visibleQueuePlans.value.filter(queue=>queue.candidates?.length).length));
 const upcomingQueueDate=computed(()=>{
  const lastQuickDate=defaultWindow.value?.queryable_target_dates?.slice(0,3).at(-1);
  if(!lastQuickDate)return '';
@@ -119,7 +119,7 @@ watch(()=>route.query.tab,(value,previous)=>{
   else if(!['ready','checking'].includes(agentReadiness.value)){agentCheckSequence++;agentReadiness.value='idle';}
  }
 });
-watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken,session?.invalidationEpoch],()=>{agentCheckSequence++;agentReadiness.value='idle';currentVisited.value=activeSection.value==='current';executionSettingsOpen.value=false;courtOptions.value=[];queueScopeLabel.value='';pendingDeletePlan.value=null;planDateFilter.value='';},{flush:'sync'});
+watch(()=>[session?.status,session?.user?.user_id,session?.csrfToken,session?.invalidationEpoch],()=>{agentCheckSequence++;agentReadiness.value='idle';currentVisited.value=activeSection.value==='current';executionSettingsOpen.value=false;courtOptions.value=[];queueScopeLabel.value='';pendingDeletePlan.value=null;planDateFilter.value='';overviewCounts.value=null;},{flush:'sync'});
 onBeforeUnmount(()=>{agentCheckSequence++;});
 const queryContextKey=computed(()=>JSON.stringify({user:session?.user?.user_id,epoch:session?.invalidationEpoch}));
 if(activeSection.value==='agent')void checkAgentService();
@@ -156,12 +156,10 @@ if(activeSection.value==='agent')void checkAgentService();
     <p v-else class="panel muted">选择 Agent 预约后会先检查模型配置。</p>
    </section>
    <section v-show="activeSection==='current'" id="plan-panel-current" role="tabpanel" aria-labelledby="plan-tab-current" class="plan-workspace-section">
-   <div class="ticket-filter-bar">
-    <div v-if="credentialApi&&currentVisited" class="ticket-filter-credential"><PlanCredentialControl v-model="selectedCredentialId" :api="credentialApi" :session="session" :timezone-name="defaultWindow?.business_timezone_name||'Asia/Shanghai'" :disabled="queueState.dateLocked" @updated="credentialRefreshKey++" /></div>
-    <label class="ticket-filter-date"><AppIcon name="calendar" /><input v-model="planDateFilter" type="date" aria-label="抢票计划日期" /></label>
-    <button type="button" class="text-button ticket-filter-all" @click="planDateFilter=''">全部日期</button>
-    <div class="ticket-filter-meta"><span class="ticket-filter-count">{{ visiblePlans.length+visibleQueuePlans.length }} 份计划</span><button type="button" class="text-button" :disabled="saving||queueState.dateLocked" aria-label="重新读取抢票计划" @click="refresh();queueState.refreshList()"><AppIcon name="refresh" /></button></div>
-   </div>
+   <QueuePlanDashboard v-if="currentVisited" v-model:date-filter="planDateFilter" :api="api" :session="session" :credential-id="selectedCredentialId" :calendar-state="defaultWindow" :active="activeSection==='current'" :busy="queueState.dateLocked" :refresh-key="overviewRefreshKey" @select="selectQueue" @history="queueState.showHistory" @changed="queueChanged" @count-change="overviewCounts=$event">
+    <template #credentials><PlanCredentialControl v-if="credentialApi" v-model="selectedCredentialId" :api="credentialApi" :session="session" :timezone-name="defaultWindow?.business_timezone_name||'Asia/Shanghai'" :disabled="queueState.dateLocked" @updated="credentialRefreshKey++" /></template>
+    <template #empty-action><button type="button" class="text-button" @click="changeSection('manual')">选择预约</button></template>
+   </QueuePlanDashboard>
 
    <section v-if="visiblePlans.length||listStatus==='loading'||listStatus==='error'" class="panel" aria-labelledby="plans-list-title"><div class="plan-section-heading"><h2 id="plans-list-title">Agent 意向</h2><button data-testid="refresh-plans" class="secondary-button" type="button" :disabled="saving || listStatus==='loading'" @click="refresh();queueState.refreshList()" aria-label="刷新计划" title="刷新计划"><AppIcon name="refresh" /></button></div>
     <p v-if="listStatus==='loading'" class="muted" role="status">正在读取计划…</p>
@@ -169,10 +167,7 @@ if(activeSection.value==='agent')void checkAgentService();
     <div v-else class="plan-list"><article v-for="plan in visiblePlans" :key="plan.plan_id" class="plan-card"><div><span class="plan-draft-tag">{{ !plan.credential_id?'历史未关联凭据':plan.intent.target_date<(defaultWindow?.business_date||'')?'已过期 · 未执行':(defaultWindow?.queryable_target_dates||[]).includes(plan.intent.target_date)?'未执行 · 当前凭据':'窗口外 · 未执行' }}</span><h3>{{ plan.intent.venue_preference }}</h3><p>{{ plan.intent.target_date }} · {{ plan.intent.preferred_start_times.join(' → ') }} · {{ plan.intent.duration_minutes }} 分钟</p><p class="muted">版本 {{ plan.version }} · {{ plan.intent.court_preferences.join(' → ') || '场地未指定' }}</p></div><div class="plan-actions"><button data-testid="history-plan" class="text-button" type="button" :disabled="saving" @click="showHistory(plan.plan_id)">版本历史</button><button class="text-button" type="button" :disabled="saving" :aria-label="`删除计划${plan.intent.venue_preference}`" @click="pendingDeletePlan=plan">删除</button></div></article></div>
    <div v-if="pendingDeletePlan" class="ticket-delete-plan"><span>删除“{{ pendingDeletePlan.intent.venue_preference }}”？历史会保留。</span><button type="button" class="danger-button" :disabled="saving" @click="remove(pendingDeletePlan);pendingDeletePlan=null">确认删除</button><button type="button" class="text-button" @click="pendingDeletePlan=null">取消</button></div>
    </section>
-   <TicketQueuePlans :queues="queueState.queues" :date-filter="planDateFilter" :calendar-state="defaultWindow" :court-names="courtOptions" :api="api" :session="session" :active="activeSection==='current'" :busy="queueState.dateLocked" @changed="queueChanged" @select="selectQueue" @history="queueState.showHistory" />
-   <p v-if="listStatus==='ready'&&!visiblePlans.length&&!visibleQueuePlans.length" class="plan-empty-state">暂无抢票计划。<button type="button" class="text-button" @click="changeSection('manual')">选择预约</button></p>
    <details v-if="credentialApi" class="disclosure-panel execution-settings-disclosure" :open="executionSettingsOpen" @toggle="executionSettingsOpen=$event.target.open"><summary>执行设置<small>复核、校时与付款延迟</small></summary><div class="disclosure-body"><BookingExecutionSettings v-if="executionSettingsOpen" :api="credentialApi" /></div></details>
-   <BookingSuccessPanel v-if="currentVisited" :api="api" :session="session" />
 
    <section v-if="queueState.history" class="panel queue-history"><div class="plan-section-heading"><h2>队列版本历史</h2><button type="button" class="text-button" @click="queueState.closeHistory">关闭历史</button></div><details v-for="revision in queueState.history" :key="revision.revision_id"><summary>版本 {{ revision.revision_number }} · {{ revision.target_date }}{{ revision.deleted?' · 已删除':'' }}</summary><ManualQueuePreview :entries="queueEntries(revision)" readonly /></details><button v-if="queueState.historyCursor" type="button" class="secondary-button" :disabled="queueState.historyLoading" @click="queueState.loadMoreHistory">加载更早版本</button></section><p v-if="queueState.historyError" class="form-error" role="alert">{{ queueState.historyError }}</p>
    <PlanHistory v-if="historyPlanId" :revisions="history" :status="historyStatus" :has-more="Boolean(historyBefore)" @more="loadMoreHistory" @close="closeHistory" @retry="showHistory(historyPlanId)" />

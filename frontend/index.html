@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
+    <script>
+      try {
+        const appearance = localStorage.getItem('yumao-theme');
+        if (appearance === 'light' || appearance === 'dark') document.documentElement.dataset.theme = appearance;
+      } catch { /* System appearance is the fallback when storage is blocked. */ }
+    </script>
     <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
     <title>羽毛球预约工作台</title>

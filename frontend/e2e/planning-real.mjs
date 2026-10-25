@@ -116,7 +116,7 @@ try {
   await screenshot(a.page,'proposal-desktop');await a.page.getByTestId('confirm-save-proposal').click();await a.page.locator('.chat-bubble.bubble-saved').waitFor();
   check('explicit confirmation writes one queue revision',storage().plans===1&&storage().revisions===1);
 
-  await a.page.reload();await a.page.getByTestId('plan-tab-current').click();await a.page.locator('.ticket-queue-card').waitFor();
+  await a.page.reload();await a.page.getByTestId('plan-tab-current').click();await a.page.getByTestId('queue-filter-all').click();await a.page.locator('.ticket-queue-card').waitFor();
   const targetDate=await a.page.locator('.ticket-queue-card .ticket-card-heading > strong').innerText();
   check('reload reads the saved manual queue',await a.page.locator('.ticket-queue-card').count()===1);
   await waitScope(a.page);await generate(a.page,replacement);await a.page.getByTestId('replace-warning').waitFor();

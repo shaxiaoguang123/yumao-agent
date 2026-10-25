@@ -15,7 +15,7 @@ function safe(value) {
 async function contextFor(name, role, viewport = viewports[0], options = {}) {
   const browser = await getBrowser();
   const state = { role, credentials: clone(fixtures), executionSettings: {}, requests: [], listDelay: 0, listError: false, listNetworkError: false, sessionError: false, inviteDelay: 0, inviteOutcome: 'success', createDelay: 0, createError: false, removeError: false, rotationError: false, loginOutcome: 'success', registerOutcome: 'success', passwordOutcome: 'error', passwordDelay: 0, logoutOutcome: 'success', ...options };
-  const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, locale: 'zh-CN', timezoneId: 'Asia/Shanghai', reducedMotion: 'reduce', serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] });
+  const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, locale: 'zh-CN', timezoneId: options.timezoneId || 'Asia/Shanghai', reducedMotion: 'reduce', serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] });
   const pendingRoutes = new Set();
   const requestRecords = new WeakMap();
   await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
@@ -43,7 +43,11 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
     const adminLogQueryAllowed = adminLogRead && [...url.searchParams.keys()].every(key => ['hours','since','until','limit','before','level','module','user_id','code','request_id','conversation_id','run_id'].includes(key));
     const adminUserQueryAllowed = adminUserRead
       && [...url.searchParams.keys()].every((key) => ['q', 'role', 'status', 'limit', 'offset'].includes(key));
-    const queryAllowed = adminLogQueryAllowed || adminUserQueryAllowed || ((scopedPlanRead || scopedPlanningConversationRead)
+    const overviewRead = url.pathname === '/api/plans/queue-overview' && request.method() === 'GET';
+    const executionRead = /^\/api\/booking-execution\/credentials\/[^/]+\/queues\/\d{4}-\d{2}-\d{2}$/.test(url.pathname) && request.method() === 'GET';
+    const overviewQueryAllowed = overviewRead && [...url.searchParams.keys()].every(key=>['credential_id','category','target_date','page','limit'].includes(key)) && url.searchParams.getAll('credential_id').length===1;
+    const executionQueryAllowed = executionRead && [...url.searchParams.keys()].every(key=>key==='revision_id') && url.searchParams.getAll('revision_id').length<=1;
+    const queryAllowed = overviewQueryAllowed || executionQueryAllowed || adminLogQueryAllowed || adminUserQueryAllowed || ((scopedPlanRead || scopedPlanningConversationRead)
       && request.method() === 'GET'
       && [...url.searchParams.keys()].every((key) => key === 'credential_id' || (scopedPlanRead && key === 'view' && url.searchParams.get(key) === 'current'))
       && (scopedPlanningConversationRead
@@ -140,6 +144,22 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
     }
     if (url.pathname === '/api/booking-window' && record.method === 'GET') {
       await reply(200, { business_timezone_name: 'Asia/Shanghai', business_date: '2026-10-15', default_target_date: '2026-10-17', queryable_target_dates: ['2026-10-15', '2026-10-16', '2026-10-17'], can_query: false, can_book: false, can_pay: false, can_create_job: false }); return;
+    }
+    if (overviewRead) {
+      if(state.overviewError){await reply(503,{error:'plan_storage_unavailable'});return;}
+      const credentialId=url.searchParams.get('credential_id'),category=url.searchParams.get('category')||'pending',date=url.searchParams.get('target_date');
+      const labels={running:'执行中',succeeded:'已执行 · 抢票成功',failed:'三轮未成功',needs_attention:'需要关注',ready:'已复核 · 等待开抢',waiting:'待复核 · 未执行',empty:'复核后没有可执行候选',stale:'保存队列已变更',missed:'已错过开抢 · 未执行'};
+      let queues=(state.overviewQueues || state.manualQueues || []).filter(q=>(!q.credential_id||q.credential_id===credentialId)&&(!date||q.target_date===date)).map(q=>{
+        if(q.lifecycle)return q;
+        const run=state.executionRuns?.[credentialId]?.[q.target_date];
+        const exact=run&&run.source_revision_id===q.current_revision_id&&run.source_version===q.version;
+        const status=exact?run.state:'waiting';
+        return {...q,record_id:q.current_revision_id||q.plan_id,lifecycle:{category:status==='succeeded'?'succeeded':['running','ready','calibrated','waiting'].includes(status)?'pending':'attention',state:status,label:labels[status]||'需要关注',opening_at_utc_ms:Date.parse(q.target_date+'T07:30:00+08:00')-172800000,completed_at_utc_ms:exact?run.completed_at_utc_ms:null,event_at_utc_ms:run?.completed_at_utc_ms||q.updated_at_utc_ms||0,is_current_revision:true,current_version:q.version}};
+      });
+      const counts={pending:0,succeeded:0,attention:0,all:queues.length};for(const q of queues)counts[q.lifecycle.category]++;
+      queues=queues.filter(q=>category==='all'||q.lifecycle.category===category).sort((a,b)=>category==='pending'?(a.lifecycle.state==='running'?0:1)-(b.lifecycle.state==='running'?0:1)||a.lifecycle.opening_at_utc_ms-b.lifecycle.opening_at_utc_ms:b.lifecycle.event_at_utc_ms-a.lifecycle.event_at_utc_ms);
+      const total=queues.length,page=Number(url.searchParams.get('page')||1),limit=Number(url.searchParams.get('limit')||20);
+      await reply(200,{queues:queues.slice((page-1)*limit,page*limit),counts,total,page,next_page:page*limit<total?page+1:null});return;
     }
     if (url.pathname === '/api/plans/manual-queues' && record.method === 'GET') { await reply(200, { queues: state.manualQueues || [] }); return; }
     const selectedQueueRoute = url.pathname.match(/^\/api\/plans\/manual-queues\/([0-9]{4}-[0-9]{2}-[0-9]{2})$/);
@@ -305,9 +325,9 @@ async function privacy(ctx) {
     const query = new URLSearchParams(location.search);
     const navigationOnly = location.pathname === '/plans' && [...query.keys()].every(key => key === 'tab')
       && query.getAll('tab').length === 1 && ['query','manual','agent','current','orders'].includes(query.get('tab'));
-    return { localKeys: Object.keys(localStorage), sessionKeys: Object.keys(sessionStorage), urlHasQuery: Boolean(location.hash || (location.search && !navigationOnly)) };
+    return { localKeys: Object.keys(localStorage), appearance:localStorage.getItem('yumao-theme'), sessionKeys: Object.keys(sessionStorage), urlHasQuery: Boolean(location.hash || (location.search && !navigationOnly)) };
   });
-  check(ctx.name, 'no persistent synthetic credentials or URL data', data.localKeys.length === 0 && data.sessionKeys.length === 0 && !data.urlHasQuery, data);
+  check(ctx.name, 'no persistent synthetic credentials or URL data', data.localKeys.every(key=>key==='yumao-theme') && (data.appearance===null||['light','dark'].includes(data.appearance)) && data.sessionKeys.length === 0 && !data.urlHasQuery, data);
   const mutations = ctx.state.requests.filter((item) => 'csrfValid' in item);
   check(ctx.name, 'authenticated mutations carry Session CSRF', mutations.every((item) => item.csrfValid), { mutations });
 }

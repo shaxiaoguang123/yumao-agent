@@ -17,13 +17,15 @@ export async function runPerformance(qa){
    check(ctx.name,'hidden execution panels do not query run state',count(ctx,`/api/booking-execution/credentials/visual-confirmed/queues/${queue.target_date}`,'GET')===0);
    await ctx.page.getByTestId('plan-tab-current').click();
    const label=ctx.page.locator('.ticket-state');
-   await ctx.page.getByText('执行中',{exact:true}).first().waitFor();
+   await ctx.page.getByText('执行中',{exact:true}).first().waitFor();await ctx.page.getByTestId('queue-filter-all').click();await label.waitFor();
    check(ctx.name,'plan card and execution panel initially report the same running state',await label.innerText()==='执行中'&&(await ctx.page.locator('.execution-snapshot summary').innerText()).includes('执行中'));
    ctx.state.executionRuns['visual-confirmed'][queue.target_date].state='succeeded';
    await ctx.page.getByRole('button',{name:'重新读取抢票计划',exact:true}).click();
    await ctx.page.getByText('已执行 · 抢票成功',{exact:true}).waitFor();
    check(ctx.name,'refresh updates both statuses without a queue revision change',await label.innerText()==='已执行 · 抢票成功'&&(await ctx.page.locator('.execution-snapshot summary').innerText()).includes('已执行 · 抢票成功'));
-   check(ctx.name,'refresh reuses one execution request per load',count(ctx,`/api/booking-execution/credentials/visual-confirmed/queues/${queue.target_date}`,'GET')===2);
+   check(ctx.name,'summary refreshes require no per-card detail requests',count(ctx,`/api/booking-execution/credentials/visual-confirmed/queues/${queue.target_date}`,'GET')===0);
+   await ctx.page.locator('.execution-snapshot summary').click();await ctx.page.locator('.execution-snapshot-body').waitFor();
+   check(ctx.name,'expanding reads one exact revision detail',count(ctx,`/api/booking-execution/credentials/visual-confirmed/queues/${queue.target_date}`,'GET')===1);
    await ctx.page.getByTestId('plan-tab-manual').click();ctx.state.executionRuns['visual-confirmed'][queue.target_date].state='needs_attention';
    await ctx.page.getByTestId('plan-tab-current').click();await ctx.page.getByText('需要关注',{exact:true}).waitFor();
    check(ctx.name,'returning to the plan tab reads the latest execution state',await label.innerText()==='需要关注');

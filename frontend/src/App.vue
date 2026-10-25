@@ -2,6 +2,7 @@
 import { inject, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router';
 import AppIcon from './components/AppIcon.vue';
+import ThemeSwitcher from './components/ThemeSwitcher.vue';
 import './styles/design-system.css';
 const sessionStore = inject('sessionStore');
 const route = useRoute();
@@ -60,6 +61,7 @@ onUnmounted(() => window.removeEventListener('resize', revealActiveNavigationIte
     </details>
     <RouterLink v-if="!sessionStore?.user" :to="{name:'login'}"><AppIcon name="user" />登录</RouterLink>
    </nav>
+   <ThemeSwitcher />
    <RouterLink v-if="sessionStore?.user" class="workspace-profile" :to="{name:'account'}" aria-label="当前账户设置">
     <span class="avatar">{{ sessionStore.user.username?.slice(0,1).toUpperCase() }}</span>
     <span class="profile-name">{{ sessionStore.user.username }}</span>

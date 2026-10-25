@@ -12,11 +12,13 @@ export function createPlanApi(client) {
     remove: (id, base_version, credential_id) => client.request(path(id), {method:'DELETE',body:scopedBody({base_version},credential_id)}),
     removeQueue: (date, base_version, credential_id) => client.request(`/api/plans/manual-queues/${encodeURIComponent(date)}`, {method:'DELETE',body:scopedBody({base_version},credential_id)}),
     queues: (credential_id) => client.request(scopedPath('/api/plans/manual-queues',credential_id,{view:'current'})),
+    queueOverview: (credential_id, filters = {}, options = {}) => client.request(scopedPath('/api/plans/queue-overview', credential_id,
+      Object.fromEntries(Object.entries(filters).filter(([,value]) => value !== undefined && value !== ''))), options),
     queue: (date, credential_id) => client.request(scopedPath(`/api/plans/manual-queues/${encodeURIComponent(date)}`,credential_id)),
     saveQueue: (date, base_version, entries, credential_id) => client.request(`/api/plans/manual-queues/${encodeURIComponent(date)}`, {method:'PUT',body:scopedBody({base_version,entries},credential_id)}),
     queueRevisions: (date, credential_id, before) => client.request(scopedPath(`/api/plans/manual-queues/${encodeURIComponent(date)}/revisions`,credential_id,revisionPage(before))),
-    executionQueue: (date, credential_id) => client.request(
-      `/api/booking-execution/credentials/${encodeURIComponent(credential_id)}/queues/${encodeURIComponent(date)}`,
+    executionQueue: (date, credential_id, revision_id) => client.request(
+      scopedPath(`/api/booking-execution/credentials/${encodeURIComponent(credential_id)}/queues/${encodeURIComponent(date)}`, null, revision_id ? {revision_id} : {}),
     ),
     executionSuccesses: () => client.request('/api/booking-execution/successes'),
     list: (credential_id) => client.request(scopedPath('/api/plans',credential_id,{view:'current'})),

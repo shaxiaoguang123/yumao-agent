@@ -18,6 +18,7 @@ function apiFixture(overrides={}){
  return {
   list:vi.fn(async()=>({plans:[]})),options:vi.fn(async()=>({context,manual_queue_court_labels:Array.from({length:10},(_,index)=>`${index+1}号场`)})),window:vi.fn(async()=>bookingWindow),executionSuccesses:vi.fn(async()=>({successes:[],worker_enabled:false})),
   queues:vi.fn(async(id)=>({queues:queuesByCredential[id]||[]})),
+  queueOverview:vi.fn(async(id,filters)=>{const queues=(queuesByCredential[id]||[]).filter(q=>!filters.target_date||q.target_date===filters.target_date).map(q=>({...q,record_id:`rev-${q.target_date}`,current_revision_id:`rev-${q.target_date}`,lifecycle:{category:'pending',state:'waiting',label:'待复核 · 未执行',opening_at_utc_ms:1792183800000,is_current_revision:true,current_version:q.version}}));return {queues:filters.category==='pending'||filters.category==='all'?queues:[],counts:{pending:queues.length,succeeded:0,attention:0,all:queues.length},total:queues.length,page:1,next_page:null};}),
   queue:vi.fn(async(date,id)=>({queue:(queuesByCredential[id]||[]).find(item=>item.target_date===date)||{target_date:date,credential_id:id,version:0,candidates:[]}})),
   saveQueue:vi.fn(async(date,version,entries,id)=>({queue:{...queue(date,id,entries.map(item=>candidate(item.court_preference,item.start_time,item.duration_minutes,item.scope_label))),version:version+1}})),
   removeQueue:vi.fn(async()=>({})),queueRevisions:vi.fn(async()=>({revisions:[]})),
@@ -58,10 +59,15 @@ describe('reservation plan workspace',()=>{
   expect(api.options).toHaveBeenCalledOnce();expect(api.window).toHaveBeenCalledOnce();expect(api.list).toHaveBeenCalledOnce();
   expect(api.queue).not.toHaveBeenCalled();expect(api.executionSuccesses).not.toHaveBeenCalled();expect(credentialApi.executionSettings).not.toHaveBeenCalled();
   await wrapper.get('[data-testid="plan-tab-manual"]').trigger('click');await flushPromises();expect(api.queue).toHaveBeenCalledOnce();
-  await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');await flushPromises();expect(api.executionSuccesses).toHaveBeenCalledOnce();
+  await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');await flushPromises();expect(api.queueOverview).toHaveBeenCalledOnce();expect(api.executionSuccesses).not.toHaveBeenCalled();
   const disclosure=wrapper.get('#plan-panel-current .credential-popover');disclosure.element.open=true;await disclosure.trigger('toggle');await flushPromises();
   await wrapper.get('#plan-panel-current [data-testid="selection-credential"]').setValue('credential-b');await flushPromises();
   expect(api.options).toHaveBeenCalledOnce();expect(api.window).toHaveBeenCalledOnce();expect(credentialApi.executionSettings).not.toHaveBeenCalled();
+ });
+ it('opens a direct current link with batched summaries and no hidden inventory reads',async()=>{
+  const {wrapper,api,liveApi}=await mountPlans(apiFixture(),{},'/plans?tab=current');
+  expect(wrapper.get('#plan-panel-current').isVisible()).toBe(true);
+  expect(api.queueOverview).toHaveBeenCalledOnce();expect(liveApi.grid).not.toHaveBeenCalled();
  });
  it('prepares the category for a direct Agent entry without querying hidden venue inventory',async()=>{
   const {wrapper,liveApi}=await mountPlans(apiFixture(),{},'/plans?tab=agent');
@@ -126,7 +132,7 @@ describe('reservation plan workspace',()=>{
   const {wrapper}=await mountPlans();await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');await flushPromises();
   expect(wrapper.find('.ticket-filter-bar .ticket-filter-credential').exists()).toBe(true);
   expect(wrapper.find('.ticket-filter-bar .ticket-filter-date input[type="date"]').exists()).toBe(true);
-  expect(wrapper.find('.ticket-filter-meta button[aria-label="重新读取抢票计划"]').exists()).toBe(true);
+  expect(wrapper.find('.ticket-refresh[aria-label="重新读取抢票计划"]').exists()).toBe(true);
   expect(wrapper.find('.ticket-queue-plans form').exists()).toBe(false);
   expect(wrapper.find('#plan-panel-current [aria-labelledby="execution-settings-title"]').exists()).toBe(false);
   const settings=wrapper.get('.execution-settings-disclosure');settings.element.open=true;await settings.trigger('toggle');await flushPromises();

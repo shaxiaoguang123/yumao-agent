@@ -25,6 +25,15 @@ describe('ExecutionSnapshotPanel',()=>{
   expect(wrapper.text()).toContain('150 ms');
  });
 
+ it('loads a historical execution only on expansion and requires the exact source revision',async()=>{
+  const api={executionQueue:vi.fn(async()=>({run:{...run,source_plan_id:'plan-a',source_revision_id:'revision-old'},worker_enabled:true}))};
+  const wrapper=mount(ExecutionSnapshotPanel,{props:{api,credentialId:'credential-a',targetDate:'2026-10-17',session:session(),lazy:true,summary:{label:'已执行 · 抢票成功'},sourcePlanId:'plan-a',sourceRevisionId:'revision-old'}});
+  await flushPromises();expect(api.executionQueue).not.toHaveBeenCalled();
+  wrapper.get('details').element.open=true;await wrapper.get('details').trigger('toggle');await flushPromises();
+  expect(api.executionQueue).toHaveBeenCalledWith('2026-10-17','credential-a','revision-old');
+  await wrapper.setProps({sourceRevisionId:'revision-new'});await flushPromises();
+  expect(wrapper.text()).toContain('状态读取失败');expect(wrapper.text()).not.toContain('6号场');
+ });
  it('fences a late response after switching tokens',async()=>{
   let finish;
   const api={executionQueue:vi.fn((_date,id)=>id==='credential-a'?new Promise(resolve=>{finish=resolve;}):Promise.resolve({run:null,worker_enabled:true}))};
