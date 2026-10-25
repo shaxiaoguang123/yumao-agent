@@ -29,7 +29,7 @@ async function mountPlans(api=apiFixture(),extraProvide={},startPath='/plans'){
  const router=createRouter({history:createMemoryHistory(),routes:[{path:'/plans',name:'plans',component:PlansView},{path:'/ai-models',name:'ai-models',component:{template:'<div />'}},{path:'/credentials',name:'credentials',component:{template:'<div />'}},{path:'/login',name:'login',component:{template:'<div />'}}]});await router.push(startPath);await router.isReady();
  const session=reactive({status:'authenticated',user:{user_id:'owner',username:'Owner'},csrfToken:'csrf-a',invalidationEpoch:0});
  const executionSettings=()=>({version:0,settings:{reconciliation_time:'00:30',clock_calibration_lead_ms:1000,start_offset_ms:0,booking_node_delay_ms:0,booking_by_time_delay_ms:0,get_user_info_delay_ms:0,get_pay_price_delay_ms:0,create_booking_delay_ms:0,open_platform_pay_order_delay_ms:0,payment_verify_delay_ms:0,payment_verify_interval_ms:3000,candidate_interval_ms:0},worker_enabled:false});
- const credentialApi={list:vi.fn(async()=>({credentials})),executionSettings:vi.fn(async()=>executionSettings()),updateExecutionSettings:vi.fn(async(version,settings)=>({version:version+1,settings,worker_enabled:false}))};
+ const credentialApi={list:vi.fn(async()=>({credentials})),executionSettings:vi.fn(async()=>executionSettings()),updateExecutionSettings:vi.fn(async(version,settings)=>({version:version+1,settings,worker_enabled:false})),emailNotificationSettings:vi.fn(async()=>({available:false})),updateEmailNotificationSettings:vi.fn()};
  const liveApi={
   options:vi.fn(async()=>({enabled:true,min_read_interval_ms:0})),
   categories:vi.fn(async()=>({data_state:'live_observed_unverified',source:'official_read_only',options:[{reference:'scope-a',label:'羽毛球',physical_venue_verified:false}]})),
@@ -119,14 +119,13 @@ describe('reservation plan workspace',()=>{
   await new Promise(resolve=>setTimeout(resolve,500));await flushPromises();
   expect(api.saveQueue).toHaveBeenCalledWith('2026-10-17',3,[{court_preference:'6号场',start_time:'18:00',end_time:'20:00',duration_minutes:120,scope_label:'羽毛球'},{court_preference:'6号场',start_time:'10:00',end_time:'12:00',duration_minutes:120,scope_label:'羽毛球'}],'credential-a');
  });
- it('shows one saved-queue date and routes edit into the shared selector for the same Token',async()=>{
-  const {wrapper,api}=await mountPlans();await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');await flushPromises();
-  expect(wrapper.get('[aria-label="编辑2026-10-20队列"]').element.disabled).toBe(false);
-  await wrapper.get('[aria-label="编辑2026-10-20队列"]').trigger('click');await flushPromises();
-  expect(wrapper.get('[data-testid="plan-tab-manual"]').attributes('aria-selected')).toBe('true');
-  expect(wrapper.get('[data-testid="browse-date-extra"]').text()).toContain('周二');
-  expect(wrapper.get('[data-testid="browse-date-extra"]').text()).toContain('10/20');
-  expect(api.queue).toHaveBeenCalledWith('2026-10-20','credential-a');
+ it('opens inline queue ordering and candidate removal without leaving the plan list',async()=>{
+  const {wrapper}=await mountPlans();await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');await flushPromises();
+  const edit=wrapper.get('[aria-label="调整2026-10-20队列顺序和场地"]');expect(edit.element.disabled).toBe(false);
+  await edit.trigger('click');await flushPromises();
+  expect(wrapper.get('.ticket-inline-editor').text()).toContain('同一时长组内调整顺序');
+  expect(wrapper.findAll('.queue-entry-actions button[aria-label^="移除"]').length).toBeGreaterThan(0);
+  expect(wrapper.get('[data-testid="plan-tab-current"]').attributes('aria-selected')).toBe('true');
  });
  it('keeps token and date filters in separate controls without inline queue editors',async()=>{
   const {wrapper}=await mountPlans();await wrapper.get('[data-testid="plan-tab-current"]').trigger('click');await flushPromises();

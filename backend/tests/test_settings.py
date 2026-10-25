@@ -102,6 +102,34 @@ class AppSettingsTests(unittest.TestCase):
         self.assertTrue(settings.booking_execution_enabled)
         self.assertNotIn("1234567890abcdef", repr(settings))
 
+    def test_email_notification_configuration_is_complete_and_secrets_are_hidden(self):
+        env = _settings_input()
+        self.assertIsNone(load_settings(env).email_notification_worker_url)
+        env.update({
+            "EMAIL_NOTIFICATION_OWNER_USERNAME": "notification-owner",
+            "EMAIL_NOTIFICATION_RECIPIENT": "notifications@example.test",
+            "EMAIL_NOTIFICATION_WORKER_URL": "https://notify.qq274268.workers.dev/notify",
+            "EMAIL_NOTIFICATION_HMAC_SECRET": "ab" * 32,
+            "EMAIL_NOTIFICATION_DEFAULT_ENABLED": "true",
+        })
+        settings = load_settings(env)
+        self.assertEqual(settings.email_notification_owner_username, "notification-owner")
+        self.assertTrue(settings.email_notification_default_enabled)
+        rendered = repr(settings)
+        self.assertNotIn("notifications@example.test", rendered)
+        self.assertNotIn("ab" * 32, rendered)
+        for key, value in (("EMAIL_NOTIFICATION_WORKER_URL", "http://notify.example/notify"),
+                            ("EMAIL_NOTIFICATION_HMAC_SECRET", "short"),
+                            ("EMAIL_NOTIFICATION_RECIPIENT", "not-an-email")):
+            invalid = dict(env)
+            invalid[key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                load_settings(invalid)
+        partial = dict(env)
+        partial.pop("EMAIL_NOTIFICATION_HMAC_SECRET")
+        with self.assertRaisesRegex(ValueError, "configuration must be complete"):
+            load_settings(partial)
+
     def test_both_keyrings_decode_to_bytes_without_exposing_material_in_repr(self) -> None:
         env = _settings_input()
         encryption = bytes(range(32, 64))

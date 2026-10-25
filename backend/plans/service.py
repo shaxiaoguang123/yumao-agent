@@ -319,6 +319,23 @@ class PlanService:
             return [{"revision_id": row["revision_id"], "revision_number": row["revision_number"],
                      "created_at_utc_ms": row["created_at_utc_ms"], **json.loads(row["intent_json"])} for row in rows]
 
+    def manual_queue_revision(self, user_id, target_date, credential_id, revision_id):
+        identifier = self._queue_id(user_id, target_date, credential_id)
+        with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
+            row = db.execute(
+                """SELECT revision_id,revision_number,intent_json,created_at_utc_ms
+                   FROM booking_plan_revisions
+                   WHERE user_id=? AND plan_id=? AND revision_id=?""",
+                (user_id, identifier, revision_id),
+            ).fetchone()
+            if row is None:
+                return None
+            snapshot = json.loads(row["intent_json"])
+            if snapshot.get("kind") != QUEUE_KIND or snapshot.get("target_date") != target_date:
+                return None
+            return {"revision_id": row["revision_id"], "revision_number": row["revision_number"],
+                    "created_at_utc_ms": row["created_at_utc_ms"], **snapshot}
+
     def save_manual_queue(self, user_id, target_date, base_version, entries, now, credential_id=None):
         if type(base_version) is not int or not 0 <= base_version <= 9007199254740991:
             raise PlanError("invalid_plan", 400)

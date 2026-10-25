@@ -20,6 +20,8 @@ _BOOKING_CURRENCY_CODE_RE = re.compile(r"\A[A-Z]{3}\Z", re.ASCII)
 _PLACEHOLDER_SECRETS = {"changeme", "change-me", "password", "secret", "default"}
 _MAX_RATE_LIMIT_WINDOW_SECONDS = 86_400
 _DEFAULT_BOOKING_TIMEZONE = "Asia/Shanghai"
+_EMAIL_RE = re.compile(r"[^\s@]{1,64}@[^\s@.]{1,63}(?:\.[^\s@.]{1,63})+\Z", re.ASCII)
+_EMAIL_NOTIFICATION_SECRET_RE = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +70,11 @@ class AppSettings:
     password_change_ip_window_seconds: int = 900
     trust_proxy_headers: bool = False
     runtime_logs_enabled: bool = True
+    email_notification_owner_username: str | None = None
+    email_notification_recipient: str | None = field(default=None, repr=False)
+    email_notification_worker_url: str | None = field(default=None, repr=False)
+    email_notification_hmac_secret: str | None = field(default=None, repr=False)
+    email_notification_default_enabled: bool = False
 
 
 def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
@@ -243,6 +250,42 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
     if runtime_logs_flag not in {"true", "false"}:
         raise ValueError("RUNTIME_LOGS_ENABLED must be true or false")
 
+    email_owner = source.get("EMAIL_NOTIFICATION_OWNER_USERNAME")
+    email_recipient = source.get("EMAIL_NOTIFICATION_RECIPIENT")
+    email_worker_url = source.get("EMAIL_NOTIFICATION_WORKER_URL")
+    email_hmac_secret = source.get("EMAIL_NOTIFICATION_HMAC_SECRET")
+    email_config_values = (email_owner, email_recipient, email_worker_url, email_hmac_secret)
+    email_notifications_configured = any(value is not None for value in email_config_values)
+    email_notification_default_flag = source.get("EMAIL_NOTIFICATION_DEFAULT_ENABLED", "false")
+    if email_notification_default_flag not in {"true", "false"}:
+        raise ValueError("EMAIL_NOTIFICATION_DEFAULT_ENABLED must be true or false")
+    if email_notifications_configured:
+        if any(not isinstance(value, str) or not value or value != value.strip()
+               for value in email_config_values):
+            raise ValueError("email notification configuration must be complete")
+        email_owner = email_owner.casefold()
+        if len(email_owner) > 80 or not re.fullmatch(r"[a-z0-9_.-]+", email_owner, re.ASCII):
+            raise ValueError("EMAIL_NOTIFICATION_OWNER_USERNAME is invalid")
+        if len(email_recipient) > 254 or not _EMAIL_RE.fullmatch(email_recipient):
+            raise ValueError("EMAIL_NOTIFICATION_RECIPIENT is invalid")
+        if not _EMAIL_NOTIFICATION_SECRET_RE.fullmatch(email_hmac_secret):
+            raise ValueError("EMAIL_NOTIFICATION_HMAC_SECRET must be 32 random bytes encoded as 64 lowercase hex characters")
+        try:
+            email_worker = urlsplit(email_worker_url)
+            email_worker_port = email_worker.port
+        except ValueError as exc:
+            raise ValueError("EMAIL_NOTIFICATION_WORKER_URL must be a valid HTTPS Worker URL") from exc
+        if (email_worker.scheme != "https" or not email_worker.hostname
+                or not email_worker.hostname.endswith(".workers.dev")
+                or email_worker.username is not None or email_worker.password is not None
+                or email_worker.query or email_worker.fragment or email_worker_port not in (None, 443)
+                or email_worker.path != "/notify"):
+            raise ValueError("EMAIL_NOTIFICATION_WORKER_URL must be an HTTPS /notify endpoint")
+    else:
+        email_owner = email_recipient = email_worker_url = email_hmac_secret = None
+        if email_notification_default_flag == "true":
+            raise ValueError("EMAIL_NOTIFICATION_DEFAULT_ENABLED requires complete email notification configuration")
+
     raw_origins = source.get("APP_ALLOWED_ORIGINS", "")
     allowed_origins = tuple(origin.strip().rstrip("/") for origin in raw_origins.split(",") if origin.strip())
     if app_env == "production" and not allowed_origins:
@@ -368,4 +411,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         ),
         trust_proxy_headers=trust_proxy_headers_flag == "true",
         runtime_logs_enabled=runtime_logs_flag == "true",
+        email_notification_owner_username=email_owner,
+        email_notification_recipient=email_recipient,
+        email_notification_worker_url=email_worker_url,
+        email_notification_hmac_secret=email_hmac_secret,
+        email_notification_default_enabled=email_notification_default_flag == "true",
     )

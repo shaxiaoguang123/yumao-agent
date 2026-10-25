@@ -1,0 +1,18 @@
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "yumao-booking-email",
+  "main": "email-notification-worker.mjs",
+  "compatibility_date": "2026-10-25",
+  "workers_dev": true,
+  "vars": {
+    "EMAIL_FROM": "booking@yourdomain.example",
+    "EMAIL_FROM_NAME": "羽毛球预约通知"
+  },
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "destination_address": "verified-recipient@example.com",
+      "allowed_sender_addresses": ["booking@yourdomain.example"]
+    }
+  ]
+}

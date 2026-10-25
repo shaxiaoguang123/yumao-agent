@@ -27,3 +27,7 @@ Nginx listens only on `127.0.0.1:8080`; the host firewall therefore needs no
 public HTTP or HTTPS rule. Keep `TRUST_PROXY_HEADERS=true` only with this
 loopback-only Nginx setup; Nginx replaces forwarded client IP and scheme headers
 before requests reach Gunicorn.
+
+## Booking email notifications
+
+The optional email feature uses a Cloudflare Email Service Worker because the VM's account REST sender is disabled. Configure the restricted `send_email` binding and Worker HMAC secret as described in `deploy/cloudflare/README.md`; place the same secret only in the root-owned `/etc/yumao-agent/yumao.env`. The application migrates a durable notification outbox and the existing single Worker process dispatches it without making email delivery part of booking/payment success. Configure one app owner username and one verified recipient; other accounts cannot read or change this mailbox setting.

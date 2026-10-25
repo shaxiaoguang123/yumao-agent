@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "test": "vitest",
+    "test:email-worker": "node --test ../deploy/cloudflare/email-notification-worker.test.mjs",
     "test:e2e": "node e2e/run.mjs",
     "test:e2e:planning": "node e2e/planning-real.mjs"
   },
