@@ -17,7 +17,15 @@ const testEmailErrors = {
   cloudflare_e_sender_domain_not_available: 'Cloudflare 尚未为发件域启用邮件服务，请完成 Email Sending 域配置。',
   cloudflare_e_sender_not_verified: 'Cloudflare 发件域尚未验证，请先完成域验证。',
   cloudflare_e_internal_server_error: 'Cloudflare 返回暂时性错误，发送结果待核实；请先检查邮箱，再决定是否重试。',
+  cloudflare_e_rate_limit_exceeded: 'Cloudflare 邮件服务当前限流，请稍后再检查发送状态。',
+  cloudflare_e_daily_limit_exceeded: 'Cloudflare 当日邮件额度已用完，请检查账户计划。',
+  cloudflare_e_account_suspended: 'Cloudflare 暂停了此账户的邮件发送，请检查账户状态。',
   cloudflare_message_id_missing: 'Cloudflare 未返回邮件编号，发送结果待核实；请先检查邮箱，再决定是否重试。',
+  cloudflare_plan_required: 'Cloudflare Email Sending 报告当前账户需要 Workers Paid；已验证收件地址的免费发送权限仍需确认。',
+  cloudflare_sender_domain: 'Cloudflare 发件域未通过验证，请检查 Email Sending 域配置。',
+  cloudflare_recipient: 'Cloudflare 未允许此收件地址，请检查已验证的目的地址。',
+  cloudflare_rate_limited: 'Cloudflare 邮件服务当前限流，将按退避时间重试。',
+  cloudflare_service_unavailable: 'Cloudflare 邮件服务暂时不可用，发送结果待核实；请先检查邮箱。',
 };
 const version = ref(0);
 const status = ref('loading');

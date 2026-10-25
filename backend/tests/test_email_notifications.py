@@ -323,6 +323,15 @@ class EmailNotificationTests(unittest.TestCase):
         self.assertTrue(caught.exception.uncertain)
         self.assertEqual(caught.exception.code,"provider_outcome_unknown")
 
+    def test_unclassified_provider_error_uses_only_the_safe_hint(self):
+        response=Mock(status_code=409)
+        response.iter_content.return_value=[b'{"error":"provider_outcome_unknown","provider_code":"UNCLASSIFIED","provider_hint":"plan_required"}']
+        with patch('backend.notifications.requests.post',return_value=response):
+            with self.assertRaises(NotificationSendError) as caught:
+                self.service._send({"notification_id":"event-a","kind":"test","outcome":"test","status_label":"test"})
+        self.assertTrue(caught.exception.uncertain)
+        self.assertEqual(caught.exception.code,"cloudflare_plan_required")
+
 
 if __name__ == "__main__":
     unittest.main()

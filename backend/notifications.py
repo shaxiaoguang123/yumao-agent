@@ -20,6 +20,8 @@ from backend.db import connect_database
 
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z", re.ASCII)
 _PROVIDER_CODE = re.compile(r"[A-Z0-9_]{1,48}\Z", re.ASCII)
+_PROVIDER_HINTS = {"plan_required", "sender_domain", "recipient", "rate_limited", "daily_limit",
+                   "account_suspended", "service_unavailable", "unclassified", "message_id_missing"}
 _MAX_RESPONSE_BYTES = 4096
 _MAX_REQUEST_BYTES = 64 * 1024
 _MAX_ATTEMPTS = 4
@@ -36,8 +38,17 @@ def _provider_error_code(chunks: list[bytes]) -> str | None:
         result = json.loads(b"".join(chunks).decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
         return None
-    code = result.get("provider_code") if type(result) is dict else None
-    return f"cloudflare_{code.lower()}" if type(code) is str and _PROVIDER_CODE.fullmatch(code) else None
+    if type(result) is not dict:
+        return None
+    code = result.get("provider_code")
+    if type(code) is str and _PROVIDER_CODE.fullmatch(code) and code != "UNCLASSIFIED":
+        return f"cloudflare_{code.lower()}"
+    hint = result.get("provider_hint")
+    if type(hint) is str and hint in _PROVIDER_HINTS:
+        return f"cloudflare_{hint}"
+    if type(code) is str and _PROVIDER_CODE.fullmatch(code):
+        return f"cloudflare_{code.lower()}"
+    return None
 
 
 class EmailNotificationService:
