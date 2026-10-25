@@ -77,23 +77,32 @@ class FakeProtocol:
         self.get_user_calls = 0
         self.fresh_conflict = False
         self.create_error = None
+        self.category_failures_remaining = 0
+        self.category_failure_outcome = "uncertain"
         self.orders_paid = True
+        self.current_order_no = None
+        self.current_order_status = "1"
+        self.order_status_hook = None
+        self.list_order_calls = 0
 
     def _reply(self, envelope, *, date_header=None):
         return ProtocolReply(envelope, 200, date_header, self.now, self.now + 100, 100)
 
-    def read_categories(self, _user_id, _credential_id, _token):
+    def read_categories(self, _user_id, _credential_id, _token, **_kwargs):
         self.category_calls += 1
+        if self.category_failures_remaining:
+            self.category_failures_remaining -= 1
+            raise UpstreamCallError("upstream_timeout", self.category_failure_outcome)
         return [{"node_id": f"category-response-{self.category_calls}", "label": "羽毛球"}], self._reply({
             "success": True, "message": "CORE10008", "resultData": [{"id": "category", "nodename": "羽毛球"}],
         })
 
-    def read_grid(self, _user_id, _credential_id, _token, _node_id, _target_date):
+    def read_grid(self, _user_id, _credential_id, _token, _node_id, _target_date, **_kwargs):
         self.grid_calls += 1
         conflicts = ["0-0-1"] if self.fresh_conflict and self.grid_calls > 1 else []
         return self._reply(booking_envelope(conflicts=conflicts))
 
-    def get_user_info(self, _user_id, _credential_id, _token):
+    def get_user_info(self, _user_id, _credential_id, _token, **_kwargs):
         self.get_user_calls += 1
         server_time = datetime.fromtimestamp(self.now / 1000, timezone.utc).replace(microsecond=0)
         return self._reply({"success": True, "message": "CORE10008", "resultData": {"idserial": "reservation-person"}},
@@ -112,18 +121,29 @@ class FakeProtocol:
         self.created_children_counts.append(_kwargs.get("childrennum"))
         if self.create_error:
             raise self.create_error
-        return self._reply({"success": True, "message": "CORE10008", "resultData": {"orderno": "order-a"}})
+        self.current_order_no = f"order-{self.create_calls}"
+        return self._reply({"success": True, "message": "CORE10008", "resultData": {"orderno": self.current_order_no}})
 
     def pay_order(self, *_args, **_kwargs):
         self.pay_calls += 1
         return self._reply({"success": True, "message": "CORE10008", "resultData": {}})
 
-    def list_orders(self, _token):
-        content = [{"orderno": "order-a", "bookingno": "booking-a", "id": "id-a", "status": "1"}]
-        return self._reply({"success": True, "message": "CORE10008", "resultData": {"content": content if self.orders_paid else []}})
+    def list_orders(self, _token, **_kwargs):
+        self.list_order_calls += 1
+        if self.order_status_hook is not None:
+            self.current_order_status = self.order_status_hook(self.create_calls, self.list_order_calls)
+        else:
+            self.current_order_status = "1" if self.orders_paid else "5"
+        content = [{"orderno": self.current_order_no or "order-a", "bookingno": "booking-a",
+                    "id": "id-a", "status": self.current_order_status}]
+        return self._reply({"success": True, "message": "CORE10008", "resultData": {"content": content}})
 
     def order_details(self, *_args, **_kwargs):
-        return self._reply({"success": True, "message": "CORE10008", "resultData": {"status": "1"}})
+        detail = {"status": self.current_order_status}
+        if self.current_order_status == "5":
+            detail["paytime"] = "2026-10-15 07:30:00"
+        return self._reply({"success": True, "message": "CORE10008",
+                            "resultData": detail})
 
 
 class ExecutionEngineTests(unittest.TestCase):
@@ -143,12 +163,19 @@ class ExecutionEngineTests(unittest.TestCase):
         self.credentials = FakeCredentialService()
         self.protocol = FakeProtocol(epoch(15, 0, 30))
         self.sleeps = []
+        self.monotonic_ns_value = 0
         self.engine = BookingExecutionEngine(
             database_path=self.database, busy_timeout_ms=5000,
             plan_service=self.plan_service, credential_service=self.credentials,
             protocol=self.protocol, timezone_name=ZONE, worker_enabled=True,
-            clock_utc_ms=lambda: self.protocol.now, sleep=self.sleeps.append,
+            clock_utc_ms=lambda: self.protocol.now, monotonic_ns=lambda: self.monotonic_ns_value,
+            sleep=self._advance_sleep,
         )
+
+    def _advance_sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.monotonic_ns_value += int(seconds * 1_000_000_000)
+        self.protocol.now += int(seconds * 1000)
 
     def _insert_owned_credential(self, credential_id=CREDENTIAL, revision_id="revision-a"):
         with closing(connect_database(self.database, 5000)) as db:
@@ -257,7 +284,8 @@ class ExecutionEngineTests(unittest.TestCase):
         self.protocol.now = epoch(15, 7, 30, 2)
         done = self.engine.execute(run["run_id"], USER, CREDENTIAL)
         self.assertEqual(done["state"], "needs_attention")
-        self.assertEqual(self.sleeps.count(0.125), 14)
+        self.assertEqual(self.sleeps[:4], [0.125, 0.25, 0.5, 1.0])
+        self.assertGreaterEqual(self.protocol.now - epoch(15, 7, 30, 2), 5 * 60 * 1000)
         self.assertEqual(
             [item["run_id"] for item in BookingExecutionRepository(self.database, 5000).list_successes(USER)],
             [successful_run_id],
@@ -276,19 +304,63 @@ class ExecutionEngineTests(unittest.TestCase):
                                 if stage["stage_key"] == "booking_by_time"), [1, 2, 3])
 
     def test_pending_order_with_a_nonempty_detail_paytime_is_never_successful(self):
-        pending = {"orderno": "order-a", "bookingno": "booking-a", "id": "id-a",
-                   "status": "5", "paytime": "2026-10-22 12:36:00"}
-        self.protocol.list_orders = lambda _token: self.protocol._reply({"success": True, "resultData": {"content": [pending]}})
-        self.protocol.order_details = lambda *_args, **_kwargs: self.protocol._reply({"success": True, "resultData": pending})
+        self.protocol.orders_paid = False
         run = self._reconcile()
         self._calibrate(run)
         self.protocol.now = epoch(15, 7, 30, 1)
+        verification_started = self.protocol.now
         done = self.engine.execute(run["run_id"], USER, CREDENTIAL)
         self.assertEqual(done["state"], "needs_attention")
         self.assertEqual((self.protocol.create_calls, self.protocol.pay_calls), (1, 1))
+        self.assertGreaterEqual(self.protocol.now - verification_started, 5 * 60 * 1000)
         self.assertEqual(self.engine.repository.list_successes(USER), [])
         verification = next(item for item in done['stages'] if item['stage_key'] == 'payment_verification')
         self.assertEqual((verification['outcome'], verification['safe_code']), ('uncertain', 'payment_pending'))
+
+    def test_payment_verification_waits_beyond_old_attempt_limit_for_official_confirmation(self):
+        run = self._reconcile()
+        self._calibrate(run)
+        self.protocol.now = epoch(15, 7, 30, 1)
+        verification_started = self.protocol.now
+        self.protocol.order_status_hook = lambda _created, _listed: (
+            "5" if self.protocol.now - verification_started < 60_000 else "1"
+        )
+
+        done = self.engine.execute(run["run_id"], USER, CREDENTIAL)
+
+        self.assertEqual(done["state"], "succeeded")
+        self.assertGreaterEqual(self.protocol.now - verification_started, 60_000)
+        self.assertEqual((self.protocol.create_calls, self.protocol.pay_calls), (1, 1))
+
+    def test_transient_preflight_read_is_retried_and_successful_snapshot_is_saved(self):
+        self.protocol.category_failures_remaining = 1
+
+        run = self._reconcile()
+
+        self.assertEqual(run["state"], "ready")
+        self.assertEqual(self.protocol.category_calls, 2)
+        failures = [stage for stage in run["stages"] if stage["stage_key"] == "reconcile_upstream_read"]
+        self.assertEqual([(item["round_number"], item["outcome"]) for item in failures], [(1, "uncertain")])
+        self.assertEqual(run["candidate_count"], 1)
+
+    def test_persistent_preflight_read_failure_is_bounded_and_visible(self):
+        self.protocol.category_failures_remaining = 3
+
+        run = self._reconcile()
+
+        self.assertEqual(run["state"], "needs_attention")
+        self.assertEqual(self.protocol.category_calls, 3)
+        failures = [stage for stage in run["stages"] if stage["stage_key"] == "reconcile_upstream_read"]
+        self.assertEqual(sorted(item["round_number"] for item in failures), [1, 2, 3])
+
+    def test_definitive_preflight_rejection_is_not_retried(self):
+        self.protocol.category_failures_remaining = 1
+        self.protocol.category_failure_outcome = "rejected"
+
+        run = self._reconcile()
+
+        self.assertEqual(run["state"], "needs_attention")
+        self.assertEqual(self.protocol.category_calls, 1)
 
     def test_failed_order_list_envelope_cannot_confirm_payment(self):
         self.protocol.list_orders = lambda _token: self.protocol._reply({"success": False, "resultData": {"content": [{"orderno": "order-a", "status": "1"}]}})
@@ -321,6 +393,60 @@ class ExecutionEngineTests(unittest.TestCase):
         result = self._calibrate(run)
         self.assertEqual(result["state"], "stale")
         self.assertEqual(self.protocol.get_user_calls, 0)
+
+    def test_queue_edit_during_payment_delay_stops_before_payment(self):
+        run = self._reconcile({**DEFAULT_SETTINGS, "open_platform_pay_order_delay_ms": 1000})
+        self._calibrate(run)
+        self.protocol.now = epoch(15, 7, 30, 1)
+        original_sleep = self.engine._sleep
+        changed = False
+
+        def edit_during_payment_delay(seconds):
+            nonlocal changed
+            original_sleep(seconds)
+            if seconds == 1 and not changed:
+                changed = True
+                self.plan_service.save_manual_queue(
+                    USER, TARGET, self.queue["version"],
+                    [{"court_preference": "6号场", "scope_label": "羽毛球", "start_time": "10:00",
+                      "end_time": "11:00", "duration_minutes": 60}],
+                    epoch(15, 7, 30, 2), CREDENTIAL,
+                )
+
+        self.engine._sleep = edit_during_payment_delay
+        done = self.engine.execute(run["run_id"], USER, CREDENTIAL)
+
+        self.assertEqual(self.protocol.create_calls, 1)
+        self.assertEqual(self.protocol.pay_calls, 0)
+        self.assertEqual(done["state"], "needs_attention")
+        self.assertTrue(any(stage["safe_code"] == "saved_queue_changed" for stage in done["stages"]))
+
+    def test_queue_edit_during_create_delay_stops_before_order_creation(self):
+        run = self._reconcile({**DEFAULT_SETTINGS, "create_booking_delay_ms": 1000})
+        self._calibrate(run)
+        self.protocol.now = epoch(15, 7, 30, 1)
+        original_sleep = self.engine._sleep
+        changed = False
+
+        def edit_during_create_delay(seconds):
+            nonlocal changed
+            original_sleep(seconds)
+            if seconds == 1 and not changed:
+                changed = True
+                self.plan_service.save_manual_queue(
+                    USER, TARGET, self.queue["version"],
+                    [{"court_preference": "6号场", "scope_label": "羽毛球", "start_time": "10:00",
+                      "end_time": "11:00", "duration_minutes": 60}],
+                    epoch(15, 7, 30, 2), CREDENTIAL,
+                )
+
+        self.engine._sleep = edit_during_create_delay
+        done = self.engine.execute(run["run_id"], USER, CREDENTIAL)
+
+        self.assertEqual(self.protocol.create_calls, 0)
+        self.assertEqual(self.protocol.pay_calls, 0)
+        self.assertEqual(done["state"], "needs_attention")
+        self.assertTrue(any(stage["safe_code"] == "saved_queue_changed" for stage in done["stages"]))
 
     def test_scheduler_selects_only_exact_business_date_plus_two(self):
         settings_service = ExecutionSettingsService(self.database, 5000, worker_enabled=True)
@@ -413,6 +539,51 @@ class ExecutionEngineTests(unittest.TestCase):
             self.engine.execute = original_execute
         self.assertEqual(result["executed"], 2)
         self.assertEqual({item[2] for item in started}, {CREDENTIAL, second})
+
+    def test_scheduler_dispatches_fifty_due_tokens_in_one_bounded_batch(self):
+        repository = BookingExecutionRepository(self.database, 5000)
+        credentials = []
+        for index in range(50):
+            credential_id = f"credential-{index:02d}"
+            self._insert_owned_credential(credential_id, f"revision-{index:02d}")
+            queue = self.plan_service.save_manual_queue(
+                USER, TARGET, 0,
+                [{"court_preference": "6号场", "scope_label": "羽毛球", "start_time": "10:00",
+                  "end_time": "11:00", "duration_minutes": 60}],
+                epoch(15, 0, 30), credential_id,
+            )
+            run = self.engine.reconcile(
+                USER, credential_id, TARGET, queue,
+                {"version": 0, "settings": dict(DEFAULT_SETTINGS), "worker_enabled": True},
+            )
+            repository.update_state(
+                run["run_id"], ("ready",), "calibrated", epoch(15, 7, 29),
+                clock_offset_ms=0, clock_uncertainty_ms=0,
+            )
+            credentials.append(credential_id)
+
+        barrier = threading.Barrier(50, timeout=5)
+        started = []
+
+        def execute(run_id, user_id, credential_id):
+            started.append(credential_id)
+            barrier.wait()
+
+        scheduler = BookingScheduler(
+            settings_service=ExecutionSettingsService(self.database, 5000, worker_enabled=True),
+            engine=self.engine, repository=repository, plan_service=self.plan_service,
+            timezone_name=ZONE, worker_enabled=True,
+            clock_utc_ms=lambda: epoch(15, 7, 30, 1),
+        )
+        original_execute = self.engine.execute
+        self.engine.execute = execute
+        try:
+            result = scheduler.tick_once(epoch(15, 7, 30, 1))
+        finally:
+            self.engine.execute = original_execute
+
+        self.assertEqual(result["executed"], 50)
+        self.assertEqual(set(started), set(credentials))
 
 
 if __name__ == "__main__":

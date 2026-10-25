@@ -9,7 +9,9 @@
 - The remaining candidate list is stored as an immutable execution snapshot. It contains category and court display names plus the selected interval; it does not reuse court IDs from the earlier response.
 - Before execution, the worker calibrates against the upstream HTTPS `Date` header. After 07:30 plus the per-Token offset, it refreshes `bookingByTime` for every candidate and builds coordinates, quote, and order payloads from that same fresh response.
 - Candidates run in saved order, with two-hour candidates before one-hour candidates, for up to three rounds. The first confirmed paid order ends the run.
-- An uncertain order-creation response or unverified payment result moves the run to `needs_attention`. It does not issue another order or payment request because the upstream flow has no proven idempotency key.
+- Transient read-only preflight failures are retried at most twice before a run is stored as `needs_attention`. Worker reads wait on the shared request gate rather than exhausting the interactive request retry limit.
+- An uncertain order-creation response or unverified payment result moves the run to `needs_attention`. After an order is created, official order status is checked until confirmation, cancellation/expiry, or five minutes from the create request; the worker never repeats the order or payment request because the upstream flow has no proven idempotency key.
+- The single Worker process dispatches at most 50 Token jobs concurrently. Read-only API calls still honor the shared database-backed request gate; this is a per-process job limit, not a guarantee that all upstream requests start at the same instant.
 - The worker does not call a slider/CAPTCHA endpoint. If an upstream step rejects or requires a challenge, the run records a safe error code and stops or continues only where the result is known to be a read-only/definite rejection.
 
 ## Per-Token controls

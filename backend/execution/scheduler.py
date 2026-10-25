@@ -13,6 +13,9 @@ from backend.plans.service import PlanService
 from backend.diagnostics import diagnostic_scope, record_event, set_diagnostic_identity
 
 
+_MAX_CONCURRENT_TOKEN_EXECUTIONS = 50
+
+
 class BookingScheduler:
     """Single-process daily worker for each active user's independent credentials."""
 
@@ -132,9 +135,8 @@ class BookingScheduler:
         if len(execution_jobs) == 1:
             self.engine.execute(*execution_jobs[0])
         elif execution_jobs:
-            # shortcut: cap one-process concurrency at eight Tokens until production load is measured.
             with ThreadPoolExecutor(
-                max_workers=min(8, len(execution_jobs)),
+                max_workers=min(_MAX_CONCURRENT_TOKEN_EXECUTIONS, len(execution_jobs)),
                 thread_name_prefix="booking-token",
             ) as executor:
                 futures = [executor.submit(self.engine.execute, *job) for job in execution_jobs]

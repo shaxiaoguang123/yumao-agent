@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from Crypto.Cipher import AES
 
 from backend.credentials.upstream import BoundedHttpResponse
+from backend.credentials.types import CredentialOperationError
 from backend.execution.protocol import OfficialBookingProtocol
 from backend.execution.clock import ClockCalibrationError, sample_upstream_clock
 
@@ -56,10 +58,14 @@ class FakeTransport:
 class FakeCredentialService:
     def __init__(self):
         self.tokens = []
+        self.rate_limit_failures_remaining = 0
         self.gate = type("Gate", (), {"minimum_interval_ms": None})()
 
     def with_availability_read_token(self, user_id, credential_id, callback):
         self.tokens.append((user_id, credential_id))
+        if self.rate_limit_failures_remaining:
+            self.rate_limit_failures_remaining -= 1
+            raise CredentialOperationError("upstream_read_rate_limited", 429, 1)
         return callback("synthetic-token")
 
 
@@ -84,6 +90,26 @@ class BookingProtocolTests(unittest.TestCase):
         self.assertEqual(reply.envelope["success"], True)
         self.assertEqual(self.credentials.tokens, [("user-a", "credential-a"), ("user-a", "credential-a")])
         self.assertEqual(reply.server_date_header, "Thu, 15 Oct 2026 16:30:00 GMT")
+
+    def test_worker_waits_on_shared_read_gate_without_spending_upstream_retries(self):
+        self.credentials.rate_limit_failures_remaining = 2
+        elapsed = [0.0]
+        sleeps = []
+
+        def fake_sleep(seconds):
+            sleeps.append(seconds)
+            elapsed[0] += seconds
+
+        with patch("backend.execution.protocol.time.monotonic", side_effect=lambda: elapsed[0]), \
+                patch("backend.execution.protocol.time.sleep", side_effect=fake_sleep):
+            categories, _reply = self.protocol.read_categories(
+                "user-a", "credential-a", "ignored", wait_for_rate_limit=True,
+            )
+
+        self.assertEqual(categories, [{"node_id": "category-node", "label": "羽毛球"}])
+        self.assertEqual(self.credentials.tokens, [("user-a", "credential-a")] * 3)
+        self.assertEqual(sleeps, [0.5, 0.5])
+        self.assertEqual(len(self.transport.calls), 1)
 
     def test_order_price_booking_and_payment_payloads_match_the_legacy_python_flow(self):
         user = self.protocol.get_user_info("user-a", "credential-a", "synthetic-token")
