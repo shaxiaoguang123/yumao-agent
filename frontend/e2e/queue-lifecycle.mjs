@@ -19,7 +19,7 @@ export async function runQueueLifecycle(qa){
    await layout(ctx);await screenshot(ctx,ctx.name+'-pending');
    await ctx.page.getByTestId('queue-filter-succeeded').click();await ctx.page.locator('.ticket-queue-card').nth(19).waitFor();
    check(ctx.name,'success list pages older records and orders latest first',await ctx.page.locator('.ticket-queue-card').count()===20&&(await ctx.page.locator('.ticket-card-heading>strong').first().innerText())==='2026-10-23');
-   check(ctx.name,'historic results retain actual court and disable mutation',await ctx.page.locator('.ticket-success-result').first().innerText().then(t=>t.includes('6号场')&&t.includes('14:00–16:00'))&&await ctx.page.getByRole('button',{name:'调整2026-10-23队列顺序和场地',exact:true}).isDisabled());
+   check(ctx.name,'historic results retain actual court and disable mutation',await ctx.page.locator('.ticket-success-result').first().innerText().then(t=>t.includes('6号场')&&t.includes('14:00–16:00'))&&await ctx.page.getByRole('button',{name:'编辑2026-10-23队列',exact:true}).isDisabled());
    await ctx.page.getByRole('button',{name:'加载更多记录',exact:true}).click();await ctx.page.locator('.ticket-queue-card').nth(22).waitFor();
    check(ctx.name,'all 23 immutable successes are reachable',await ctx.page.locator('.ticket-queue-card').count()===23);
    await ctx.page.getByLabel('抢票计划日期',{exact:true}).fill('2026-10-01');await ctx.page.getByText('1 条记录',{exact:true}).waitFor();
@@ -50,25 +50,39 @@ export async function runQueueLifecycle(qa){
   editable.candidates=[
    {duration_minutes:120,preferred_start_times:['16:00'],court_preferences:['2号场'],query_scope_label:'羽毛球'},
    {duration_minutes:120,preferred_start_times:['18:00'],court_preferences:['4号场'],query_scope_label:'羽毛球'},
+   {duration_minutes:60,preferred_start_times:['20:00'],court_preferences:['7号场'],query_scope_label:'羽毛球'},
   ];
   await scenario(`queue-inline-edit-${viewport.name}`,'user',async ctx=>{
    await ctx.page.goto(BASE+'/plans?tab=current');
    const card=ctx.page.locator('.ticket-queue-card').filter({hasText:'2026-11-05'});
    await card.waitFor();
-   await card.getByRole('button',{name:'调整2026-11-05队列顺序和场地',exact:true}).click();
+   check(ctx.name,'move and remove controls are available without opening the map',
+     await card.getByRole('button',{name:'将120分钟候选2上移',exact:true}).isVisible()
+      &&await card.getByRole('button',{name:'移除120分钟候选2',exact:true}).isVisible());
    await card.getByRole('button',{name:'将120分钟候选2上移',exact:true}).click();
+   await card.getByText('候选队列已实时保存。',{exact:true}).waitFor();
    check(ctx.name,'moves a candidate within the two-hour queue',
-     JSON.stringify(await card.locator('.queue-entry strong').allTextContents())==='["4号场","2号场"]');
+     JSON.stringify(await card.locator('.queue-entry strong').allTextContents())==='["4号场","2号场","7号场"]');
    await card.getByRole('button',{name:'移除120分钟候选2',exact:true}).click();
+   await card.getByText('候选队列已实时保存。',{exact:true}).waitFor();
    check(ctx.name,'edits stay inside the two-hour group and leave the selected 4号场 candidate',
-     JSON.stringify(await card.locator('.queue-entry strong').allTextContents())==='["4号场"]');
+     JSON.stringify(await card.locator('.queue-entry strong').allTextContents())==='["4号场","7号场"]');
    await layout(ctx);await screenshot(ctx,ctx.name+'-editing');
-   await card.getByRole('button',{name:'保存调整',exact:true}).click();
-   await card.getByText('队列调整已保存。',{exact:true}).waitFor();
-   const saved=ctx.state.requests.find(item=>item.path==='/api/plans/manual-queues/2026-11-05'&&item.method==='PUT');
+   const saves=ctx.state.requests.filter(item=>item.path==='/api/plans/manual-queues/2026-11-05'&&item.method==='PUT');
    check(ctx.name,'saves the new order and removal through the versioned CSRF-protected queue API',
-     saved?.csrfValid===true&&saved?.body?.base_version===4&&ctx.state.overviewQueues[0].version===5
-      &&ctx.state.overviewQueues[0].candidates.length===1&&ctx.state.overviewQueues[0].candidates[0].court_preferences[0]==='4号场');
+     saves.length===2&&saves[0]?.csrfValid===true&&saves[0]?.body?.base_version===4
+      &&saves[1]?.csrfValid===true&&saves[1]?.body?.base_version===5
+      &&ctx.state.overviewQueues[0].version===6&&ctx.state.overviewQueues[0].candidates.length===2
+      &&ctx.state.overviewQueues[0].candidates[0].court_preferences[0]==='4号场'
+      &&ctx.state.overviewQueues[0].candidates[1].duration_minutes===60);
+   await card.getByRole('button',{name:'编辑2026-11-05队列',exact:true}).click();
+   check(ctx.name,'pencil edit opens the saved date in the preselection map',
+     await ctx.page.getByTestId('plan-tab-manual').getAttribute('aria-selected')==='true'
+      &&await ctx.page.locator('.manual-queue-grid').isVisible());
+   const manual=ctx.page.locator('#plan-panel-manual');
+   await manual.locator('.manual-preview-disclosure > summary').click();
+   check(ctx.name,'preselection map loads the latest saved two-hour and one-hour candidates',
+     JSON.stringify(await manual.locator('.queue-entry strong').allTextContents())==='["4号场","7号场"]');
    await layout(ctx);await screenshot(ctx,ctx.name);
   },{credentials,overviewQueues:[editable]},viewport);
  }
