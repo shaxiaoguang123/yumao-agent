@@ -13,6 +13,12 @@ const state = reactive({
   recipient: '',
   worker_enabled: false,
 });
+const testEmailErrors = {
+  cloudflare_e_sender_domain_not_available: 'Cloudflare 尚未为发件域启用邮件服务，请完成 Email Sending 域配置。',
+  cloudflare_e_sender_not_verified: 'Cloudflare 发件域尚未验证，请先完成域验证。',
+  cloudflare_e_internal_server_error: 'Cloudflare 返回暂时性错误，发送结果待核实；请先检查邮箱，再决定是否重试。',
+  cloudflare_message_id_missing: 'Cloudflare 未返回邮件编号，发送结果待核实；请先检查邮箱，再决定是否重试。',
+};
 const version = ref(0);
 const status = ref('loading');
 const testing = ref(false);
@@ -100,8 +106,10 @@ async function sendTest() {
   try {
     await props.api.sendEmailNotificationTest();
     message.value = '测试邮件已被 Cloudflare 接受，请查看收件箱和垃圾箱。';
-  } catch {
-    error.value = '测试邮件发送失败，请检查邮箱验证状态或 Cloudflare 发信配置。';
+  } catch (requestError) {
+    error.value = Object.hasOwn(testEmailErrors, requestError?.code)
+      ? testEmailErrors[requestError.code]
+      : '测试邮件发送失败，请检查邮箱验证状态或 Cloudflare 发信配置。';
   } finally {
     testing.value = false;
   }

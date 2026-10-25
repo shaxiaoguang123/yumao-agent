@@ -42,4 +42,12 @@ describe('EmailNotificationSettings',()=>{
     account.status='unauthenticated';await flushPromises();finish(settings());await flushPromises();
     expect(wrapper.find('section').exists()).toBe(false);
   });
+
+  it('shows a safe sender-domain hint from Cloudflare without exposing provider details',async()=>{
+    const api={emailNotificationSettings:vi.fn(async()=>settings()),sendEmailNotificationTest:vi.fn(async()=>{throw Object.assign(new Error('private provider message'),{code:'cloudflare_e_sender_domain_not_available'});}),updateEmailNotificationSettings:vi.fn()};
+    const wrapper=mount(EmailNotificationSettings,{props:{api,session:session()}});await flushPromises();
+    await wrapper.get('button[type="button"]').trigger('click');await flushPromises();
+    expect(wrapper.text()).toContain('Cloudflare 尚未为发件域启用邮件服务');
+    expect(wrapper.text()).not.toContain('private provider message');
+  });
 });
