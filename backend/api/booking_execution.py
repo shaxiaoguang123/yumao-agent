@@ -92,6 +92,11 @@ def update_legacy_credential_settings(credential_id: str):
 @booking_execution_bp.get("/credentials/<credential_id>/queues/<target_date>")
 @require_session
 def get_execution_queue(credential_id: str, target_date: str):
+    if set(request.args) - {"revision_id"} or any(len(request.args.getlist(key)) != 1 for key in request.args):
+        raise ExecutionSettingsError("invalid_target_date")
+    revision_id = request.args.get("revision_id")
+    if revision_id is not None and (not revision_id or len(revision_id) > 128):
+        raise ExecutionSettingsError("invalid_target_date")
     try:
         parsed = date.fromisoformat(target_date)
     except (TypeError, ValueError):
@@ -100,9 +105,9 @@ def get_execution_queue(credential_id: str, target_date: str):
         raise ExecutionSettingsError("invalid_target_date")
     user_id = g.session_context.user.user_id
     _service().assert_credential_owner(user_id, credential_id)
-    run = current_app.extensions["booking_execution_repository"].latest_run(
-        user_id, credential_id, target_date,
-    )
+    repository = current_app.extensions["booking_execution_repository"]
+    run = (repository.find_source_run(user_id, credential_id, target_date, revision_id)
+           if revision_id is not None else repository.latest_run(user_id, credential_id, target_date))
     return jsonify({"run": run, "worker_enabled": _service().worker_enabled})
 
 

@@ -14,6 +14,7 @@ from backend.db import connect_database
 from backend.plans.manual_queue import QUEUE_KIND, parse_queue, automatic_queue_schedule
 from backend.plans.models import PlanInterpretationContext, describe_window
 from backend.plans.validation import IntentValidationError, parse_manual_intent
+from backend.plans.lifecycle import TERMINAL_STATES, queue_lifecycle, lifecycle_sort_key
 
 
 class PlanError(Exception):
@@ -214,6 +215,88 @@ class PlanService:
             return [self._queue_dto(row, credential_id, now) for row in rows
                     if (credential_id is None or self._stored_scope_tag(row["plan_id"]) in
                          (None, self._credential_scope_tag(user_id, credential_id)))]
+
+    def queue_overview(self, user_id, credential_id, now, *, category="pending", target_date=None, page=1, limit=20):
+        """Batch execution summaries; load full candidate payloads for this page only."""
+        scope = self._credential_scope_tag(user_id, credential_id)
+        terminal = ",".join("?" for _ in TERMINAL_STATES)
+        query = f"""
+            SELECT p.plan_id, p.current_revision_id AS plan_current_revision_id,
+                   p.version AS plan_current_version, r.revision_id, r.revision_number,
+                   r.created_at_utc_ms AS revision_created_at_utc_ms,
+                   json_extract(r.intent_json,'$.target_date') AS target_date,
+                   json_extract(r.intent_json,'$.context.timezone_name') AS timezone_name,
+                   json_array_length(r.intent_json,'$.candidates') AS candidate_count,
+                   run.run_id, run.state AS run_state, run.completed_at_utc_ms,
+                   run.updated_at_utc_ms AS run_updated_at_utc_ms
+            FROM booking_plans p JOIN booking_plan_revisions r
+              ON r.plan_id=p.plan_id AND r.user_id=p.user_id
+            LEFT JOIN booking_execution_runs run
+              ON run.user_id=p.user_id AND run.credential_id=?
+             AND run.source_plan_id=p.plan_id AND run.source_revision_id=r.revision_id
+             AND run.source_version=r.revision_number AND run.source_sha256=r.intent_sha256
+             AND run.target_date=json_extract(r.intent_json,'$.target_date')
+            WHERE p.user_id=? AND json_extract(r.intent_json,'$.kind')=?
+              AND (p.plan_id LIKE ? OR instr(p.plan_id,':')=0)
+              AND ((r.revision_id=p.current_revision_id AND COALESCE(json_extract(r.intent_json,'$.deleted'),0)=0
+                    AND (json_array_length(r.intent_json,'$.candidates')>0 OR ? IS NOT NULL))
+                   OR (r.revision_id!=p.current_revision_id AND run.state IN ({terminal})))
+        """
+        parameters = [credential_id, user_id, QUEUE_KIND, f"manual-queue-v2:{scope}:%", target_date, *TERMINAL_STATES]
+        if target_date:
+            query += " AND json_extract(r.intent_json,'$.target_date')=?"
+            parameters.append(target_date)
+        with closing(connect_database(self.database_path, self.busy_timeout_ms)) as db:
+            # Metadata, counts and immutable page payloads use one consistent read snapshot.
+            db.execute("BEGIN")
+            items = []
+            counts = dict.fromkeys(("pending", "succeeded", "attention", "all"), 0)
+            for row in db.execute(query, parameters):
+                record = dict(row)
+                record["credential_id"] = credential_id if self._stored_scope_tag(row["plan_id"]) == scope else None
+                lifecycle = queue_lifecycle(record, now, self.policy.timezone_name)
+                item = {"record_id": row["revision_id"], "plan_id": row["plan_id"], "target_date": row["target_date"], "lifecycle": lifecycle}
+                counts[lifecycle["category"]] += 1
+                counts["all"] += 1
+                if category == "all" or category == lifecycle["category"]:
+                    items.append(item)
+            items.sort(key=lambda item: lifecycle_sort_key(item, category))
+            offset = (page - 1) * limit
+            selected = items[offset:offset + limit]
+            if selected:
+                ids = [item["record_id"] for item in selected]
+                placeholders = ",".join("?" for _ in ids)
+                rows = db.execute(f"""SELECT p.plan_id, p.user_id, r.revision_id AS current_revision_id,
+                                      r.revision_number AS version, r.intent_json, r.intent_sha256,
+                                      r.created_at_utc_ms AS updated_at_utc_ms
+                               FROM booking_plans p JOIN booking_plan_revisions r
+                                 ON r.plan_id=p.plan_id AND r.user_id=p.user_id
+                               WHERE p.user_id=? AND r.revision_id IN ({placeholders})""", [user_id, *ids])
+                queues = {row["current_revision_id"]: self._queue_dto(row, credential_id, now) for row in rows}
+                for item in selected:
+                    item.update(queues[item["record_id"]])
+                    item["execution_state"] = item["lifecycle"]["state"]
+                successful_ids = [item["lifecycle"]["run_id"] for item in selected if item["lifecycle"]["state"] == "succeeded"]
+                successes = {}
+                if successful_ids:
+                    marks = ",".join("?" for _ in successful_ids)
+                    for run in db.execute(f"""SELECT run.run_id, run.snapshot_json, stage.candidate_index,
+                                                    stage.completed_at_utc_ms
+                                             FROM booking_execution_runs run JOIN booking_execution_stages stage ON stage.run_id=run.run_id
+                                             WHERE run.user_id=? AND run.credential_id=? AND run.run_id IN ({marks})
+                                               AND stage.stage_key='payment_verification' AND stage.outcome='success'
+                                             ORDER BY stage.completed_at_utc_ms""", [user_id, credential_id, *successful_ids]):
+                        candidate = next((candidate for candidate in json.loads(run["snapshot_json"]).get("candidates", [])
+                                          if candidate.get("queue_index") == run["candidate_index"]), None)
+                        if candidate:
+                            successes[run["run_id"]] = {key: candidate.get(key) for key in
+                                ("scope_label", "court_preference", "start_time", "end_time", "duration_minutes")}
+                            successes[run["run_id"]]["confirmed_at_utc_ms"] = run["completed_at_utc_ms"]
+                for item in selected:
+                    item["success"] = successes.get(item["lifecycle"]["run_id"])
+            return {"queues": selected, "counts": counts, "total": len(items), "page": page,
+                    "next_page": page + 1 if offset + limit < len(items) else None,
+                    "queried_at_utc_ms": now, "business_timezone_name": self.policy.timezone_name}
 
     @staticmethod
     def _revision_rows(db, user_id, plan_id, limit, before_version):

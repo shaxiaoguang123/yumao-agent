@@ -11,12 +11,16 @@ const props = defineProps({
   sourcePlanId: { type: String, default: '' },
   refreshKey: { type: Number, default: 0 },
   active: { type: Boolean, default: true },
+  lazy: Boolean,
+  summary: Object,
+  sourceRevisionId: String,
 });
 const emit = defineEmits(['status-change']);
 
 const run = ref(null);
 const workerEnabled = ref(false);
 const state = ref('idle');
+const expanded = ref(false);
 let alive = true;
 let sequence = 0;
 
@@ -38,11 +42,12 @@ const stageLabels = {
 
 function timeText(value) {
   if (!Number.isSafeInteger(value)) return '—';
-  return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(value);
+  return new Intl.DateTimeFormat('zh-CN', { timeZone:'Asia/Shanghai', month:'2-digit', day:'2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12:false }).format(value);
 }
 
 async function load() {
   const current = ++sequence;
+  if (props.lazy && !expanded.value) { updateStatus('idle'); return; }
   updateStatus('loading');
   if (!props.active || props.session?.status !== 'authenticated' || typeof props.api.executionQueue !== 'function'
       || !props.credentialId || !props.targetDate) {
@@ -50,14 +55,17 @@ async function load() {
     return;
   }
   try {
-    const result = await props.api.executionQueue(props.targetDate, props.credentialId);
+    const result = props.sourceRevisionId
+      ? await props.api.executionQueue(props.targetDate, props.credentialId, props.sourceRevisionId)
+      : await props.api.executionQueue(props.targetDate, props.credentialId);
     if (!alive || current !== sequence) return;
     if (result?.worker_enabled !== true && result?.worker_enabled !== false) throw new Error('invalid_response');
     if (result.run !== null && (result.run?.target_date !== props.targetDate
         || !Array.isArray(result.run.candidates) || !Array.isArray(result.run.stages)
         || (props.sourcePlanId && (result.run.source_plan_id !== props.sourcePlanId
           || !Number.isSafeInteger(result.run.source_version) || result.run.source_version < 1
-          || typeof result.run.source_revision_id !== 'string' || !result.run.source_revision_id)))) throw new Error('invalid_response');
+          || typeof result.run.source_revision_id !== 'string' || !result.run.source_revision_id))
+        || (props.sourceRevisionId && result.run.source_revision_id !== props.sourceRevisionId))) throw new Error('invalid_response');
     updateStatus('ready', result);
   } catch {
     if (!alive || current !== sequence) return;
@@ -73,16 +81,18 @@ function updateStatus(status, result = null) {
 }
 
 watch(() => [props.credentialId, props.targetDate, props.sourcePlanId, props.refreshKey, props.active,
+  props.sourceRevisionId, expanded.value,
   props.session?.user?.user_id, props.session?.status, props.session?.csrfToken,
   props.session?.invalidationEpoch], () => { void load(); }, { immediate: true, flush: 'sync' });
 onUnmounted(() => { alive = false; sequence += 1; });
 </script>
 
 <template>
-  <details v-if="state !== 'unavailable'" class="execution-snapshot" :data-testid="`execution-snapshot-${targetDate}`">
+  <details v-if="state !== 'unavailable'" class="execution-snapshot" :data-testid="`execution-snapshot-${targetDate}`" @toggle="expanded=$event.target.open">
     <summary>
       <span>执行队列</span>
-      <span v-if="state === 'loading'">读取中…</span>
+      <span v-if="state === 'idle' && summary">{{ summary.label }} · 查看详情</span>
+      <span v-else-if="state === 'loading'">读取中…</span>
       <span v-else-if="state === 'error'">状态读取失败</span>
       <span v-else-if="run">{{ executionStateLabels[run.state] || '状态未知' }} · {{ run.candidate_count }} 项</span>
       <span v-else>{{ workerEnabled ? '等待复核' : '执行器未启用' }}</span>

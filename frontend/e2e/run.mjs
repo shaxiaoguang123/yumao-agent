@@ -14,6 +14,7 @@ import { runOrders } from './orders.mjs';
 import { runDiagnostics } from './diagnostics.mjs';
 import { runResponsive } from './responsive.mjs';
 import { runPerformance } from './performance.mjs';
+import { runQueueLifecycle } from './queue-lifecycle.mjs';
 import { runThemes } from './themes.mjs';
 
 const frontend = fileURLToPath(new URL('../', import.meta.url));
@@ -97,6 +98,7 @@ try {
     await runResponsive(qa);
     await runPerformance(qa);
   }
+  await runQueueLifecycle(qa);
   await runThemes(qa);
 } catch (error) {
   if (qa) qa.report.runnerError = { message: error.message };

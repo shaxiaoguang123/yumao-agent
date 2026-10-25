@@ -49,7 +49,7 @@
 }
 
 @media(prefers-color-scheme:dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme:dark;
     --apple-background:#161617;
     --apple-canvas:#000000;
@@ -75,4 +75,30 @@
     --success:#8bd59b;
     --success-soft:#142b1b;
   }
+}
+:root[data-theme="dark"] {
+    color-scheme:dark;
+    --apple-background:#161617;
+    --apple-canvas:#000000;
+    --apple-ink:#f5f5f7;
+    --apple-secondary:#a1a1a6;
+    --apple-muted:#a1a1a6;
+    --apple-blue:#6eafff;
+    --apple-blue-hover:#a0cbff;
+    --apple-blue-soft:#102b4a;
+    --apple-line:rgba(255,255,255,.12);
+    --apple-shadow:0 4px 24px rgba(0,0,0,.24);
+    --apple-topbar:rgba(22,22,23,.82);
+    --apple-hover:rgba(255,255,255,.06);
+    --apple-control-line:rgba(255,255,255,.28);
+    --apple-popover-shadow:0 12px 40px rgba(0,0,0,.5);
+    --accent:#18395d;
+    --focus:0 0 0 3px rgba(10,132,255,.5);
+    --danger:#ffb4ab;
+    --danger-soft:#3b1c1a;
+    --danger-hover:#4f2420;
+    --warning:#ffcc80;
+    --warning-soft:#33270f;
+    --success:#8bd59b;
+    --success-soft:#142b1b;
 }

@@ -181,6 +181,25 @@ def manual_queue(target_date):
     return jsonify({"queue": _service().get_manual_queue(_user_id(), _queue_date(target_date), credential_id)})
 
 
+@plans_bp.get("/queue-overview")
+@require_session
+def queue_overview():
+    credential_id = _query_credential_scope({"category", "target_date", "page", "limit"})
+    category = request.args.get("category", "pending")
+    if not credential_id or category not in {"pending", "succeeded", "attention", "all"}:
+        raise PlanError("invalid_request", 400)
+    try:
+        page = int(request.args.get("page", "1"))
+        limit = int(request.args.get("limit", "20"))
+        if not 1 <= page <= 100000 or not 1 <= limit <= 50:
+            raise ValueError
+    except ValueError:
+        raise PlanError("invalid_request", 400) from None
+    target_date = _queue_date(request.args["target_date"]) if "target_date" in request.args else None
+    return jsonify(_service().queue_overview(_user_id(), credential_id, _now_utc_ms(),
+                   category=category, target_date=target_date, page=page, limit=limit))
+
+
 @plans_bp.put("/manual-queues/<target_date>")
 @require_session
 @require_csrf

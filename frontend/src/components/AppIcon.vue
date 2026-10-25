@@ -1,6 +1,9 @@
 <script setup>
 defineProps({ name: { type: String, default: 'shield' } });
 const paths = {
+ sun: ['M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8', 'M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5'],
+ moon: ['M21 13a9 9 0 0 1-10-10 9 9 0 1 0 10 10z'],
+ display: ['M3 4h18v13H3z', 'M8 21h8', 'M12 17v4'],
  home: ['M3 10l9-7 9 7', 'M5 9v12h14V9', 'M9 21v-8h6v8'],
  shield: ['M12 3l8 3v6c0 5-8 9-8 9s-8-4-8-9V6z', 'M8 12l3 3 5-6'],
  user: ['M20 21v-2a7 7 0 0 0-14 0v2', 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8'],

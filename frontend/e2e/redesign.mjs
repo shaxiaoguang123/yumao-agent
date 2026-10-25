@@ -75,7 +75,7 @@ export async function runRedesign(qa) {
   const help=ctx.page.getByLabel('查看执行时间和延迟说明');
   await help.waitFor();await help.focus();
   check(ctx.name,'scheduler help opens from keyboard focus',await ctx.page.getByRole('tooltip').isVisible());
-  await ctx.page.getByText('抢票结果',{exact:true}).click();
+  await ctx.page.getByTestId('queue-filter-succeeded').click();
   await layout(ctx);await screenshot(ctx,`${ctx.name}-plans-current`);
  },{credentials:planReadyCredentials},viewport);
 }
