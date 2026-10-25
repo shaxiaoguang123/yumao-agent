@@ -77,5 +77,18 @@ export function createCredentialApi(client) {
         body: { expected_version: expectedVersion, settings },
       });
     },
+    emailNotificationSettings() {
+      return client.request('/api/booking-execution/email-notifications');
+    },
+    updateEmailNotificationSettings(expectedVersion, settings) {
+      return client.request('/api/booking-execution/email-notifications', {
+        method: 'PUT', body: { expected_version: expectedVersion, ...settings },
+      });
+    },
+    sendEmailNotificationTest() {
+      return client.request('/api/booking-execution/email-notifications/test', {
+        method: 'POST', body: {},
+      });
+    },
   };
 }

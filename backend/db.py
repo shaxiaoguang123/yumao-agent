@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 _MIGRATION_NAME_RE = re.compile(r"\A(?P<version>[0-9]{4})_[a-z0-9_]+\.sql\Z")
 
 _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
@@ -64,6 +64,17 @@ _REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
         "get_user_info_delay_ms", "get_pay_price_delay_ms", "create_booking_delay_ms",
         "open_platform_pay_order_delay_ms", "payment_verify_delay_ms",
         "payment_verify_interval_ms", "candidate_interval_ms", "updated_at_utc_ms",
+    }),
+    "user_email_notification_settings": frozenset({
+        "user_id", "version", "enabled", "reminder_time", "last_test_sent_at_utc_ms",
+        "updated_at_utc_ms",
+    }),
+    "booking_email_notification_outbox": frozenset({
+        "notification_id", "user_id", "credential_id", "target_date", "kind",
+        "queue_revision_id", "queue_version", "scheduled_at_utc_ms", "status",
+        "attempt_count", "next_attempt_at_utc_ms", "lease_owner_id",
+        "lease_expires_at_utc_ms", "provider_message_id", "safe_error_code",
+        "created_at_utc_ms", "updated_at_utc_ms", "sent_at_utc_ms",
     }),
     "booking_execution_runs": frozenset({
         "run_id", "user_id", "credential_id", "target_date", "source_plan_id",
@@ -250,6 +261,9 @@ def _validate_schema_contract(connection: sqlite3.Connection, schema_version: in
             "booking_execution_settings", "booking_execution_runs", "booking_execution_stages",
         })
         and (schema_version >= 12 or name != "user_booking_execution_settings")
+        and (schema_version >= 13 or name not in {
+            "user_email_notification_settings", "booking_email_notification_outbox",
+        })
         and (schema_version >= 9 or name != "planning_conversations")
         and (schema_version >= 2 or name not in {
             "credentials",

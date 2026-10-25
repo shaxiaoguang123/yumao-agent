@@ -52,6 +52,9 @@ jobs:
       - name: Run frontend tests
         run: npm test -- --run
 
+      - name: Run Cloudflare email Worker tests
+        run: npm run test:email-worker
+
       - name: Build frontend for production
         run: npm run build
 

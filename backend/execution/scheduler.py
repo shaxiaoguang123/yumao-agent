@@ -19,7 +19,8 @@ class BookingScheduler:
     def __init__(self, *, settings_service: ExecutionSettingsService,
                  engine: BookingExecutionEngine, repository: BookingExecutionRepository,
                  plan_service: PlanService, timezone_name: str,
-                 worker_enabled: bool, clock_utc_ms=None, sleep=time.sleep, diagnostics=None):
+                 worker_enabled: bool, clock_utc_ms=None, sleep=time.sleep, diagnostics=None,
+                 email_notification_service=None):
         self.settings = settings_service
         self.engine = engine
         self.repository = repository
@@ -27,6 +28,7 @@ class BookingScheduler:
         self.timezone_name = timezone_name
         self.zone = ZoneInfo(timezone_name)
         self.worker_enabled = bool(worker_enabled)
+        self.email_notifications = email_notification_service
         self.diagnostics = diagnostics
         self._clock = clock_utc_ms or (lambda: time.time_ns() // 1_000_000)
         self._sleep = sleep
@@ -55,6 +57,7 @@ class BookingScheduler:
         reconciled = executed = 0
         execution_jobs: list[tuple[str, str, str]] = []
         settings_by_user: dict[str, dict | None] = {}
+        notification_owners: dict[str, bool] = {}
         for user_id, credential_id in self.settings.list_active_credentials():
             set_diagnostic_identity(user_id=user_id, credential_id=credential_id)
             if user_id not in settings_by_user:
@@ -72,6 +75,25 @@ class BookingScheduler:
             except Exception as exc:
                 record_event("execution", "scheduler.queue_failed", level="error", code="queue_read_failed", exception=exc)
                 continue
+            if self.email_notifications is not None:
+                try:
+                    if user_id not in notification_owners:
+                        notification_owners[user_id] = self.email_notifications.owns_notifications(user_id)
+                    if notification_owners[user_id]:
+                        notification_queues = {target_date: queue}
+                        for offset in (3, 4):
+                            notification_date = (business_date + timedelta(days=offset)).isoformat()
+                            notification_queues[notification_date] = self.plans.get_manual_queue(
+                                user_id, notification_date, credential_id,
+                            )
+                        self.email_notifications.sync_queue_dates(
+                            user_id, credential_id, business_date, notification_queues, now,
+                        )
+                except Exception as exc:
+                    notification_owners[user_id] = False
+                    with diagnostic_scope(self.diagnostics, user_id=user_id, credential_id=credential_id):
+                        record_event("execution", "notification.schedule_failed", level="error",
+                                     code="email_notification_schedule_failed", exception=exc)
             latest = self.repository.latest_run(user_id, credential_id, target_date)
             if not queue or not queue.get("candidates") or queue.get("deleted"):
                 if latest and latest["state"] in {"ready", "calibrated"}:
@@ -124,6 +146,13 @@ class BookingScheduler:
                         # not prevent the remaining due Tokens from starting.
                         with diagnostic_scope(self.diagnostics, run_id=job[0], user_id=job[1], credential_id=job[2]):
                             record_event("execution", "scheduler.token_failed", level="error", code="execution_internal_error", exception=exc)
+        if self.email_notifications is not None:
+            try:
+                self.email_notifications.dispatch_due(int(self._clock()))
+            except Exception as exc:
+                with diagnostic_scope(self.diagnostics):
+                    record_event("execution", "notification.dispatch_failed", level="error",
+                                 code="email_notification_dispatch_failed", exception=exc)
         executed = len(execution_jobs)
         return {"worker_enabled": True, "target_date": target_date,
                 "reconciled": reconciled, "executed": executed}
@@ -179,6 +208,10 @@ class BookingScheduler:
                     candidates.append(event)
                 else:
                     return 0
+        if self.email_notifications is not None:
+            email_due = self.email_notifications.next_due_at_utc_ms()
+            if email_due is not None:
+                candidates.append(email_due)
         return max(0, min(30_000, min(candidates) - now))
 
     def run_forever(self) -> None:

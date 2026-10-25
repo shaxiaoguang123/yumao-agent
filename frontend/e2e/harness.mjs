@@ -14,7 +14,7 @@ function safe(value) {
 }
 async function contextFor(name, role, viewport = viewports[0], options = {}) {
   const browser = await getBrowser();
-  const state = { role, credentials: clone(fixtures), executionSettings: {}, requests: [], listDelay: 0, listError: false, listNetworkError: false, sessionError: false, inviteDelay: 0, inviteOutcome: 'success', createDelay: 0, createError: false, removeError: false, rotationError: false, loginOutcome: 'success', registerOutcome: 'success', passwordOutcome: 'error', passwordDelay: 0, logoutOutcome: 'success', ...options };
+  const state = { role, credentials: clone(fixtures), executionSettings: {}, emailNotificationAvailable:false, emailNotificationSettings:{version:1,enabled:false,reminder_time:'20:00'}, emailNotificationTestSends:0, requests: [], listDelay: 0, listError: false, listNetworkError: false, sessionError: false, inviteDelay: 0, inviteOutcome: 'success', createDelay: 0, createError: false, removeError: false, rotationError: false, loginOutcome: 'success', registerOutcome: 'success', passwordOutcome: 'error', passwordDelay: 0, logoutOutcome: 'success', ...options };
   const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, locale: 'zh-CN', timezoneId: options.timezoneId || 'Asia/Shanghai', reducedMotion: 'reduce', serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] });
   const pendingRoutes = new Set();
   const requestRecords = new WeakMap();
@@ -203,6 +203,27 @@ async function contextFor(name, role, viewport = viewports[0], options = {}) {
       }
       report.unexpectedApiRequests.push({ scenario: name, method: record.method, path: record.path });
       await reply(501, { error: 'unmocked_api' }); return;
+    }
+    if (url.pathname === '/api/booking-execution/email-notifications') {
+      if (!state.emailNotificationAvailable) { await reply(200, { available:false }); return; }
+      if (record.method === 'GET') {
+        await reply(200, { available:true, worker_enabled:true, recipient:'notify@example.invalid',
+          result_time:'08:00', recent:[], ...state.emailNotificationSettings }); return;
+      }
+      if (record.method === 'PUT') {
+        const body=request.postDataJSON();
+        if (record.csrfValid!==true) { await reply(403,{error:'csrf_failed'}); return; }
+        if (body.expected_version!==state.emailNotificationSettings.version) { await reply(409,{error:'email_notification_version_conflict'}); return; }
+        if(typeof body.enabled!=='boolean'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(body.reminder_time)||body.reminder_time<'18:00'||Object.keys(body).some(key=>!['expected_version','enabled','reminder_time'].includes(key))){await reply(400,{error:'invalid_email_notification_settings'});return;}
+        state.emailNotificationSettings={version:body.expected_version+1,enabled:body.enabled,reminder_time:body.reminder_time};
+        await reply(200,{available:true,worker_enabled:true,recipient:'notify@example.invalid',result_time:'08:00',recent:[],...state.emailNotificationSettings});return;
+      }
+      await reply(405,{error:'method_not_allowed'}); return;
+    }
+    if (url.pathname === '/api/booking-execution/email-notifications/test' && record.method==='POST') {
+      if(!state.emailNotificationAvailable){await reply(404,{error:'email_notification_not_available'});return;}
+      if(record.csrfValid!==true){await reply(403,{error:'csrf_failed'});return;}
+      state.emailNotificationTestSends+=1;await reply(200,{accepted:true,message_id:'synthetic-email-message'});return;
     }
     if (url.pathname === '/api/booking-execution/successes' && record.method === 'GET') {
       await reply(200, { successes: state.executionSuccesses || [], worker_enabled: false }); return;

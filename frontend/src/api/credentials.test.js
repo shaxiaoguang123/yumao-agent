@@ -59,6 +59,9 @@ describe('Credential API helpers', () => {
     await api.remove('credential-a', 4);
     await api.executionSettings();
     await api.updateExecutionSettings(0, { reconciliation_time: '00:30' });
+    await api.emailNotificationSettings();
+    await api.updateEmailNotificationSettings(1, { enabled: true, reminder_time: '20:00' });
+    await api.sendEmailNotificationTest();
 
     expect(client.request.mock.calls).toEqual([
       ['/api/credentials'],
@@ -96,6 +99,11 @@ describe('Credential API helpers', () => {
         method: 'PUT',
         body: { expected_version: 0, settings: { reconciliation_time: '00:30' } },
       }],
+      ['/api/booking-execution/email-notifications'],
+      ['/api/booking-execution/email-notifications', {
+        method: 'PUT', body: { expected_version: 1, enabled: true, reminder_time: '20:00' },
+      }],
+      ['/api/booking-execution/email-notifications/test', { method:'POST', body:{} }],
     ]);
     expect(window.localStorage.getItem(token)).toBeNull();
     expect(window.sessionStorage.getItem(token)).toBeNull();

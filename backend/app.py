@@ -49,6 +49,7 @@ from backend.execution.engine import BookingExecutionEngine
 from backend.execution.protocol import OfficialBookingProtocol
 from backend.execution.repository import BookingExecutionRepository
 from backend.execution.scheduler import BookingScheduler
+from backend.notifications import EmailNotificationService
 from backend.db import CURRENT_SCHEMA_VERSION, check_schema_ready
 from backend.settings import load_settings
 from backend.api.diagnostics import diagnostics_bp
@@ -62,6 +63,10 @@ _SECRET_CONFIG_KEYS = {
     "APP_UPSTREAM_FINGERPRINT_KEYS",
     "APP_UPSTREAM_FINGERPRINT_ACTIVE_KEY_ID",
     "LLM_API_KEY",
+    "EMAIL_NOTIFICATION_RECIPIENT",
+    "EMAIL_NOTIFICATION_WORKER_URL",
+    "EMAIL_NOTIFICATION_HMAC_SECRET",
+    "EMAIL_NOTIFICATION_OWNER_USERNAME",
     "UPSTREAM_ITEM_AES_KEY_ASCII",
     "UPSTREAM_ITEM_AES_IV_ASCII",
     "AES_KEY_ASCII",
@@ -228,6 +233,18 @@ def create_app(config: Mapping[str, object] | None = None, *, process_role="web"
     execution_repository = BookingExecutionRepository(
         settings.database_path, settings.sqlite_busy_timeout_ms,
     )
+    email_notification_service = EmailNotificationService(
+        settings.database_path, settings.sqlite_busy_timeout_ms,
+        timezone_name=settings.booking_timezone_name,
+        owner_username=settings.email_notification_owner_username,
+        recipient=settings.email_notification_recipient,
+        worker_url=settings.email_notification_worker_url,
+        hmac_secret=settings.email_notification_hmac_secret,
+        default_enabled=settings.email_notification_default_enabled,
+        worker_enabled=settings.booking_execution_enabled,
+        plan_service=app.extensions["plan_service"],
+        execution_settings_service=app.extensions["execution_settings_service"],
+    )
     app.extensions["booking_execution_protocol"] = booking_protocol
     app.extensions["order_query_service"] = OrderQueryService(
         credential_service=credential_service, protocol=booking_protocol,
@@ -236,6 +253,7 @@ def create_app(config: Mapping[str, object] | None = None, *, process_role="web"
     )
     app.extensions["booking_execution_engine"] = booking_execution_engine
     app.extensions["booking_execution_repository"] = execution_repository
+    app.extensions["email_notification_service"] = email_notification_service
     app.extensions["booking_scheduler"] = BookingScheduler(
         settings_service=app.extensions["execution_settings_service"],
         engine=booking_execution_engine,
@@ -244,6 +262,7 @@ def create_app(config: Mapping[str, object] | None = None, *, process_role="web"
         timezone_name=settings.booking_timezone_name,
         worker_enabled=settings.booking_execution_enabled,
         diagnostics=diagnostics,
+        email_notification_service=email_notification_service,
     )
     app.extensions["ai_provider_service"] = AIProviderService(
         database_path=settings.database_path,
