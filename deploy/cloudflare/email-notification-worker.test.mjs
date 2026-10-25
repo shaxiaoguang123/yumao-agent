@@ -25,7 +25,7 @@ function signedRequest(payload, timestamp = Math.floor(Date.now() / 1000), key =
 }
 
 function env(send = async () => ({ messageId: 'provider-message-1' })) {
-  return { BACKEND_HMAC_SECRET: secret, EMAIL_FROM: 'booking@shaxiaoguang.eu.cc',
+  return { BACKEND_HMAC_SECRET: secret, EMAIL_TO:'notifications@example.test', EMAIL_FROM: 'booking@shaxiaoguang.eu.cc',
     EMAIL_FROM_NAME: '羽毛球预约通知', EMAIL: { send } };
 }
 
@@ -38,8 +38,8 @@ test('accepts one signed reminder and HTML-escapes candidate labels', async () =
   assert.deepEqual(await response.json(), { accepted: true, message_id: 'provider-message-1' });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].from.email, 'booking@shaxiaoguang.eu.cc');
+  assert.equal(calls[0].to, 'notifications@example.test');
   assert.match(calls[0].html, /&lt;img src=x onerror=alert\(1\)&gt;/);
-  assert.equal('to' in calls[0], false);
 });
 
 test('renders a confirmed reservation using the verified court and slot', async () => {
