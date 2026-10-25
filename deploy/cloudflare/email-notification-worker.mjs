@@ -215,6 +215,7 @@ export default {
     try {
       const message = render(payload);
       const sent = await env.EMAIL.send({
+        to: env.EMAIL_TO,
         from: { email: env.EMAIL_FROM, name: env.EMAIL_FROM_NAME },
         subject: message.subject,
         text: message.text,

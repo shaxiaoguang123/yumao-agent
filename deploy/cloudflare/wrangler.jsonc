@@ -5,6 +5,7 @@
   "compatibility_date": "2026-10-25",
   "workers_dev": true,
   "vars": {
+    "EMAIL_TO": "verified-recipient@example.com",
     "EMAIL_FROM": "booking@yourdomain.example",
     "EMAIL_FROM_NAME": "羽毛球预约通知"
   },

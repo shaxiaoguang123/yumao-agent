@@ -5,6 +5,7 @@ The booking app runs on a VM, so it calls this Worker over HTTPS. The Worker sen
 Use `wrangler.jsonc` as the deploy template for `yumao-booking-email` (replace the example sender and verified destination with the configured values), then set the Worker secret and deploy. Do not put a real destination address or secret into Git. Add these bindings/variables:
 
 - `EMAIL`: `send_email` binding with `destination_address` set to the verified mailbox and `allowed_sender_addresses` limited to the configured sender.
+- `EMAIL_TO`: the same verified destination address fixed by the binding.
 - `EMAIL_FROM`: an address on the onboarded domain.
 - `EMAIL_FROM_NAME`: `羽毛球预约通知`.
 - `BACKEND_HMAC_SECRET`: a random 32-byte value, set as a Worker secret.
