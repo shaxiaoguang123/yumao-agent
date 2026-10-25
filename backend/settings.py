@@ -22,6 +22,7 @@ _MAX_RATE_LIMIT_WINDOW_SECONDS = 86_400
 _DEFAULT_BOOKING_TIMEZONE = "Asia/Shanghai"
 _EMAIL_RE = re.compile(r"[^\s@]{1,64}@[^\s@.]{1,63}(?:\.[^\s@.]{1,63})+\Z", re.ASCII)
 _EMAIL_NOTIFICATION_SECRET_RE = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
+_EMAIL_NOTIFICATION_CUSTOM_HOST = "notify.shaxiaoguang.eu.cc"
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,7 +277,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         except ValueError as exc:
             raise ValueError("EMAIL_NOTIFICATION_WORKER_URL must be a valid HTTPS Worker URL") from exc
         if (email_worker.scheme != "https" or not email_worker.hostname
-                or not email_worker.hostname.endswith(".workers.dev")
+                or not (email_worker.hostname.endswith(".workers.dev")
+                        or email_worker.hostname == _EMAIL_NOTIFICATION_CUSTOM_HOST)
                 or email_worker.username is not None or email_worker.password is not None
                 or email_worker.query or email_worker.fragment or email_worker_port not in (None, 443)
                 or email_worker.path != "/notify"):

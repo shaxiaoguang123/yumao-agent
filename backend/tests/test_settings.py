@@ -118,7 +118,12 @@ class AppSettingsTests(unittest.TestCase):
         rendered = repr(settings)
         self.assertNotIn("notifications@example.test", rendered)
         self.assertNotIn("ab" * 32, rendered)
+        custom_domain = dict(env)
+        custom_domain["EMAIL_NOTIFICATION_WORKER_URL"] = "https://notify.shaxiaoguang.eu.cc/notify"
+        self.assertEqual(load_settings(custom_domain).email_notification_worker_url,
+                         "https://notify.shaxiaoguang.eu.cc/notify")
         for key, value in (("EMAIL_NOTIFICATION_WORKER_URL", "http://notify.example/notify"),
+                            ("EMAIL_NOTIFICATION_WORKER_URL", "https://notify.example/notify"),
                             ("EMAIL_NOTIFICATION_HMAC_SECRET", "short"),
                             ("EMAIL_NOTIFICATION_RECIPIENT", "not-an-email")):
             invalid = dict(env)
