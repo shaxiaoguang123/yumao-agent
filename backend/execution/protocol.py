@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 import math
+import threading
 import unicodedata
 from dataclasses import dataclass, field
 
@@ -66,6 +67,7 @@ class OfficialBookingProtocol:
         self.transport = transport
         self._key = item_aes_key_ascii
         self._iv = item_aes_iv_ascii
+        self._worker_read_lock = threading.Lock()
 
     def _encrypted(self, payload: dict) -> dict:
         if not isinstance(self._key, str) or not isinstance(self._iv, str):
@@ -96,7 +98,8 @@ class OfficialBookingProtocol:
         return time.time_ns() // 1_000_000
 
     def _call(self, *, path: str, payload: dict, token: str,
-              encrypt: bool = True, read_user: tuple[str, str] | None = None) -> ProtocolReply:
+              encrypt: bool = True, read_user: tuple[str, str] | None = None,
+              wait_for_rate_limit_seconds: float = 0) -> ProtocolReply:
         if path not in self._ALLOWED:
             raise UpstreamCallError("official_route_not_allowed", "failed")
         wire_payload = self._encrypted(payload) if encrypt else payload
@@ -119,14 +122,32 @@ class OfficialBookingProtocol:
             try:
                 if read_user is not None:
                     user_id, credential_id = read_user
-                    response = self.credentials.with_availability_read_token(
-                        user_id, credential_id, send,
-                    )
+                    if wait_for_rate_limit_seconds > 0:
+                        with self._worker_read_lock:
+                            deadline = time.monotonic() + wait_for_rate_limit_seconds
+                            while True:
+                                try:
+                                    response = self.credentials.with_availability_read_token(
+                                        user_id, credential_id, send,
+                                    )
+                                    break
+                                except CredentialOperationError as exc:
+                                    if exc.code not in {"upstream_read_rate_limited", "validation_rate_limited"}:
+                                        raise
+                                    remaining = deadline - time.monotonic()
+                                    if remaining <= 0:
+                                        raise
+                                    time.sleep(min(0.5, remaining))
+                    else:
+                        response = self.credentials.with_availability_read_token(
+                            user_id, credential_id, send,
+                        )
                 else:
                     response = send(token)
                 break
             except CredentialOperationError as exc:
-                if (path not in {"/phone/payOrderForPhone", "/phone/payOrderDetails"}
+                if (wait_for_rate_limit_seconds <= 0
+                        and path not in {"/phone/payOrderForPhone", "/phone/payOrderDetails"}
                         and exc.code in {"upstream_read_rate_limited", "validation_rate_limited"} and retry < 3):
                     wait = exc.retry_after_seconds
                     if wait is None:
@@ -201,10 +222,12 @@ class OfficialBookingProtocol:
             elapsed_ms=elapsed_ms,
         )
 
-    def read_categories(self, user_id: str, credential_id: str, token: str) -> tuple[list[dict], ProtocolReply]:
+    def read_categories(self, user_id: str, credential_id: str, token: str, *,
+                        wait_for_rate_limit: bool = False) -> tuple[list[dict], ProtocolReply]:
         reply = self._call(
             path="/phone/getBookingNode", payload={"booktype": _BOOKING_NODE_LIST_BOOKTYPE},
             token=token, read_user=(user_id, credential_id),
+            wait_for_rate_limit_seconds=60 if wait_for_rate_limit else 0,
         )
         values = reply.envelope.get("resultData")
         if reply.envelope.get("success") is not True or type(values) is not list or not 1 <= len(values) <= 256:
@@ -230,17 +253,21 @@ class OfficialBookingProtocol:
         return options, reply
 
     def read_grid(self, user_id: str, credential_id: str, token: str,
-                  node_id: str, target_date: str) -> ProtocolReply:
+                  node_id: str, target_date: str, *,
+                  wait_for_rate_limit: bool = False) -> ProtocolReply:
         return self._call(
             path="/phone/bookingByTime",
             payload={"nodeid": node_id, "selectdate": target_date},
             token=token,
             read_user=(user_id, credential_id),
+            wait_for_rate_limit_seconds=60 if wait_for_rate_limit else 0,
         )
 
-    def get_user_info(self, user_id: str, credential_id: str, token: str) -> ProtocolReply:
+    def get_user_info(self, user_id: str, credential_id: str, token: str, *,
+                      wait_for_rate_limit: bool = False) -> ProtocolReply:
         return self._call(path="/userAddress/getUserInfo", payload={}, token=token,
-                          encrypt=False, read_user=(user_id, credential_id))
+                          encrypt=False, read_user=(user_id, credential_id),
+                          wait_for_rate_limit_seconds=60 if wait_for_rate_limit else 0)
 
     def get_children(self, token: str, node_id: str) -> ProtocolReply:
         return self._call(path="/phone/getChildren", payload={"nodeid": node_id}, token=token)

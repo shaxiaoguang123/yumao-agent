@@ -24,7 +24,9 @@ from backend.diagnostics import diagnostic_scope, record_event
 
 
 _MAX_ROUNDS = 3
-_VERIFY_ATTEMPTS = 15
+_MAX_RECONCILIATION_ATTEMPTS = 3
+_ORDER_SETTLEMENT_WINDOW_MS = 5 * 60 * 1000
+_VERIFY_MAX_INTERVAL_MS = 30_000
 _RESERVATION_COUNT = "5"
 
 
@@ -110,6 +112,19 @@ class BookingExecutionEngine:
             run_id, ("ready", "calibrated"), "stale", self._now(), completed=True,
         )
 
+    def _stop_if_queue_changed(self, run_id: str, user_id: str, credential_id: str,
+                               round_number: int, candidate_index: int) -> dict | None:
+        run = self.repository.run_by_id(run_id)
+        if run is None or self._source_is_current(run, user_id, credential_id):
+            return None
+        self.repository.record_stage(run_id, self._stage_event(
+            "saved_queue_revision_check", self._now(), self._now(), 0,
+            "rejected", "saved_queue_changed", round_number=round_number,
+            candidate_index=candidate_index,
+        ))
+        self.repository.update_state(run_id, ("running",), "needs_attention", self._now(), completed=True)
+        return self.repository.run_by_id(run_id)
+
     def reconcile(self, user_id: str, credential_id: str, target_date: str,
                   queue: dict, execution_settings: dict) -> dict | None:
         """Query each selected real category and persist a filtered execution snapshot."""
@@ -133,49 +148,81 @@ class BookingExecutionEngine:
         raw_by_scope: dict[str, tuple[dict, int]] = {}
         sample = None
         failure_code = None
-        for scope_index, label in enumerate(scope_labels):
-            try:
-                self._delay(settings, "booking_node_delay_ms")
-                categories, category_reply = self.protocol.read_categories(user_id, credential_id, "")
-                events.append(self._reply_event("reconcile_booking_node", category_reply,
-                                                 candidate_index=scope_index))
-                matches = [item for item in categories if item["label"] == label]
-                if len(matches) != 1:
-                    failure_code = "booking_scope_not_unique"
+        for attempt in range(1, _MAX_RECONCILIATION_ATTEMPTS + 1):
+            raw_by_scope = {}
+            sample = None
+            failure_code = None
+            retryable_failure = False
+            retry_after_seconds = None
+            for scope_index, label in enumerate(scope_labels):
+                try:
+                    self._delay(settings, "booking_node_delay_ms")
+                    categories, category_reply = self.protocol.read_categories(
+                        user_id, credential_id, "", wait_for_rate_limit=True,
+                    )
+                    events.append(self._reply_event(
+                        "reconcile_booking_node", category_reply,
+                        round_number=attempt, candidate_index=scope_index,
+                    ))
+                    matches = [item for item in categories if item["label"] == label]
+                    if len(matches) != 1:
+                        failure_code = "booking_scope_not_unique"
+                        break
+                    self._delay(settings, "booking_by_time_delay_ms")
+                    grid_reply = self.protocol.read_grid(
+                        user_id, credential_id, "", matches[0]["node_id"], target_date,
+                        wait_for_rate_limit=True,
+                    )
+                    events.append(self._reply_event(
+                        "reconcile_booking_by_time", grid_reply,
+                        round_number=attempt, candidate_index=scope_index,
+                    ))
+                    if grid_reply.envelope.get("success") is not True:
+                        failure_code = "booking_query_rejected"
+                        break
+                    captured_at = grid_reply.completed_at_utc_ms
+                    raw_by_scope[label] = (grid_reply.envelope, captured_at)
+                    if grid_reply.server_date_header:
+                        try:
+                            sample = sample_upstream_clock(
+                                grid_reply.server_date_header,
+                                grid_reply.started_at_utc_ms,
+                                grid_reply.completed_at_utc_ms,
+                            )
+                        except ClockCalibrationError:
+                            sample = None
+                except UpstreamCallError as exc:
+                    events.append(self._error_event(
+                        "reconcile_upstream_read", exc, round_number=attempt,
+                        candidate_index=scope_index,
+                    ))
+                    failure_code = exc.safe_code
+                    retryable_failure = (
+                        exc.outcome == "uncertain"
+                        or exc.retry_after_seconds is not None
+                        or "rate_limited" in exc.safe_code
+                        or "429" in exc.safe_code
+                    )
+                    retry_after_seconds = exc.retry_after_seconds
                     break
-                self._delay(settings, "booking_by_time_delay_ms")
-                grid_reply = self.protocol.read_grid(
-                    user_id, credential_id, "", matches[0]["node_id"], target_date,
-                )
-                events.append(self._reply_event("reconcile_booking_by_time", grid_reply,
-                                                 candidate_index=scope_index))
-                if grid_reply.envelope.get("success") is not True:
-                    failure_code = "booking_query_rejected"
+                except CredentialOperationError as exc:
+                    events.append(self._stage_event(
+                        "reconcile_credential_check", self._now(), self._now(), 0,
+                        "rejected", exc.code, round_number=attempt,
+                        candidate_index=scope_index,
+                    ))
+                    failure_code = exc.code
+                    retryable_failure = (
+                        exc.http_status == 429
+                        or exc.retry_after_seconds is not None
+                        or "rate_limited" in exc.code
+                    )
+                    retry_after_seconds = exc.retry_after_seconds
                     break
-                captured_at = grid_reply.completed_at_utc_ms
-                raw_by_scope[label] = (grid_reply.envelope, captured_at)
-                if grid_reply.server_date_header:
-                    try:
-                        sample = sample_upstream_clock(
-                            grid_reply.server_date_header,
-                            grid_reply.started_at_utc_ms,
-                            grid_reply.completed_at_utc_ms,
-                        )
-                    except ClockCalibrationError:
-                        sample = None
-            except UpstreamCallError as exc:
-                events.append(self._error_event(
-                    "reconcile_upstream_read", exc, candidate_index=scope_index,
-                ))
-                failure_code = exc.safe_code
+            if (not failure_code or not retryable_failure
+                    or attempt >= _MAX_RECONCILIATION_ATTEMPTS):
                 break
-            except CredentialOperationError as exc:
-                events.append(self._stage_event(
-                    "reconcile_credential_check", self._now(), self._now(), 0,
-                    "rejected", exc.code, candidate_index=scope_index,
-                ))
-                failure_code = exc.code
-                break
+            self._sleep(float(retry_after_seconds or attempt))
 
         result_candidates: list[dict] = []
         if failure_code:
@@ -261,7 +308,9 @@ class BookingExecutionEngine:
         try:
             material = self.credentials.booking_material(user_id, credential_id)
             self._delay(settings, "get_user_info_delay_ms")
-            reply = self.protocol.get_user_info(user_id, credential_id, material.token)
+            reply = self.protocol.get_user_info(
+                user_id, credential_id, material.token, wait_for_rate_limit=True,
+            )
             event = self._reply_event("clock_calibration", reply)
             self.repository.record_stage(run["run_id"], event)
             data = reply.envelope.get("resultData")
@@ -295,57 +344,82 @@ class BookingExecutionEngine:
                           settings: dict, round_number: int) -> dict[str, dict]:
         self.credentials.assert_booking_snapshot(material)
         self._delay(settings, "booking_node_delay_ms")
-        categories, reply = self.protocol.read_categories(material.user_id, material.credential_id, material.token)
+        categories, reply = self.protocol.read_categories(
+            material.user_id, material.credential_id, material.token,
+            wait_for_rate_limit=True,
+        )
         self.repository.record_stage(
             run_id, self._reply_event("booking_node_list", reply, round_number=round_number),
         )
         return {item["label"]: item for item in categories}
 
     def _payment_verified(self, run_id: str, material: BookingCredentialMaterial,
-                          order_no: str, settings: dict, round_number: int,
+                          order_no: str, order_created_monotonic_ns: int,
+                          settings: dict, round_number: int,
                           candidate_index: int) -> tuple[bool, str]:
         started_at = self._now()
         monotonic_start = self._monotonic()
+        deadline_ns = order_created_monotonic_ns + _ORDER_SETTLEMENT_WINDOW_MS * 1_000_000
         result = "payment_unverified"
         self._delay(settings, "payment_verify_delay_ms")
-        verify_interval_ms = int(settings.get("payment_verify_interval_ms", 3000))
-        for attempt in range(_VERIFY_ATTEMPTS):
+        verify_interval_ms = max(100, int(settings.get("payment_verify_interval_ms", 3000)))
+        attempt = 0
+        while True:
             self.credentials.assert_booking_snapshot(material)
             try:
                 listed = self.protocol.list_orders(material.token)
             except UpstreamCallError as exc:
                 result = exc.safe_code
-                if attempt + 1 < _VERIFY_ATTEMPTS:
-                    self._sleep(verify_interval_ms / 1000)
-                continue
-            content = ((listed.envelope.get("resultData") or {}).get("content")
-                       if listed.envelope.get("success") is True
-                       and type(listed.envelope.get("resultData")) is dict else [])
-            matching = next((item for item in content if type(item) is dict
-                             and str(item.get("orderno") or "") == order_no), None) if type(content) is list else None
-            if matching:
-                if listed.envelope.get("success") is True and order_is_confirmed(matching):
-                    result = "paid"
-                    break
-                booking_no, order_id = str(matching.get("bookingno") or ""), str(matching.get("id") or "")
-                if booking_no and order_id:
-                    self.credentials.assert_booking_snapshot(material)
-                    try:
-                        details = self.protocol.order_details(material.token, booking_no=booking_no, order_id=order_id)
-                    except UpstreamCallError:
-                        details = None
-                    detail = (details.envelope.get("resultData")
-                              if details and details.envelope.get("success") is True else None)
-                    if order_is_confirmed(detail):
+            else:
+                content = ((listed.envelope.get("resultData") or {}).get("content")
+                           if listed.envelope.get("success") is True
+                           and type(listed.envelope.get("resultData")) is dict else [])
+                matching = next((item for item in content if type(item) is dict
+                                 and str(item.get("orderno") or "") == order_no), None) if type(content) is list else None
+                if matching:
+                    if order_is_confirmed(matching):
                         result = "paid"
                         break
-                    if type(detail) is dict and str(detail.get("status") or "") == "5":
+                    status = str(matching.get("status") or "")
+                    listed_terminal = status in {"2", "9"}
+                    if status == "5":
                         result = "payment_pending"
-                    elif type(detail) is dict and str(detail.get("status") or "") in {"2", "9"}:
-                        result = "order_cancelled" if str(detail["status"]) == "2" else "order_expired"
+                    elif listed_terminal:
+                        result = "order_cancelled" if status == "2" else "order_expired"
+                    booking_no, order_id = str(matching.get("bookingno") or ""), str(matching.get("id") or "")
+                    if booking_no and order_id:
+                        self.credentials.assert_booking_snapshot(material)
+                        try:
+                            details = self.protocol.order_details(material.token, booking_no=booking_no, order_id=order_id)
+                        except UpstreamCallError:
+                            details = None
+                        detail = (details.envelope.get("resultData")
+                                  if details and details.envelope.get("success") is True else None)
+                        if order_is_confirmed(detail):
+                            result = "paid"
+                            break
+                        if type(detail) is dict:
+                            detail_status = str(detail.get("status") or "")
+                            if detail_status == "5":
+                                result = "payment_pending"
+                                listed_terminal = False
+                            elif detail_status in {"2", "9"}:
+                                result = "order_cancelled" if detail_status == "2" else "order_expired"
+                                break
+                            else:
+                                listed_terminal = False
+                    if listed_terminal:
                         break
-            if attempt + 1 < _VERIFY_ATTEMPTS:
-                self._sleep(verify_interval_ms / 1000)
+            now_ns = self._monotonic()
+            if now_ns >= deadline_ns:
+                break
+            interval_ms = min(
+                max(_VERIFY_MAX_INTERVAL_MS, verify_interval_ms),
+                verify_interval_ms * (2 ** min(attempt, 5)),
+            )
+            remaining_ms = max(0, (deadline_ns - now_ns) // 1_000_000)
+            self._sleep(min(interval_ms, remaining_ms) / 1000)
+            attempt += 1
         elapsed = max(0, (self._monotonic() - monotonic_start) // 1_000_000)
         self.repository.record_stage(
             run_id,
@@ -391,7 +465,9 @@ class BookingExecutionEngine:
         try:
             if not reservation_person:
                 self._delay(settings, "get_user_info_delay_ms")
-                user_reply = self.protocol.get_user_info(user_id, credential_id, material.token)
+                user_reply = self.protocol.get_user_info(
+                    user_id, credential_id, material.token, wait_for_rate_limit=True,
+                )
                 self.repository.record_stage(run_id, self._reply_event("get_user_info", user_reply))
                 user_data = user_reply.envelope.get("resultData")
                 reservation_person = str(user_data.get("idserial") or "") if type(user_data) is dict else ""
@@ -399,13 +475,10 @@ class BookingExecutionEngine:
                     raise UpstreamCallError("reservation_identity_unavailable", "rejected")
 
             for round_number in range(1, _MAX_ROUNDS + 1):
-                if not self._source_is_current(run, user_id, credential_id):
-                    self.repository.record_stage(run_id, self._stage_event(
-                        "saved_queue_revision_check", self._now(), self._now(), 0,
-                        "rejected", "saved_queue_changed", round_number=round_number,
-                    ))
-                    self.repository.update_state(run_id, ("running",), "needs_attention", self._now(), completed=True)
-                    return self.repository.run_by_id(run_id)
+                stale = self._stop_if_queue_changed(run_id, user_id, credential_id,
+                                                    round_number, 0)
+                if stale is not None:
+                    return stale
                 try:
                     categories = self._fresh_categories(run_id, material, settings, round_number)
                 except UpstreamCallError as exc:
@@ -431,6 +504,7 @@ class BookingExecutionEngine:
                     try:
                         booking = self.protocol.read_grid(
                             user_id, credential_id, material.token, category["node_id"], run["target_date"],
+                            wait_for_rate_limit=True,
                         )
                     except UpstreamCallError as exc:
                         self.repository.record_stage(run_id, self._error_event(
@@ -488,6 +562,13 @@ class BookingExecutionEngine:
 
                     self.credentials.assert_booking_snapshot(material)
                     self._delay(settings, "create_booking_delay_ms")
+                    stale = self._stop_if_queue_changed(
+                        run_id, user_id, credential_id, round_number, candidate_index,
+                    )
+                    if stale is not None:
+                        return stale
+                    self.credentials.assert_booking_snapshot(material)
+                    order_created_monotonic_ns = self._monotonic()
                     try:
                         order = self.protocol.create_booking(
                             material.token, node_id=category["node_id"], target_date=run["target_date"],
@@ -516,16 +597,19 @@ class BookingExecutionEngine:
                         needs_attention = True
                         break
 
-                    if not self._source_is_current(run, user_id, credential_id):
-                        self.repository.record_stage(run_id, self._stage_event(
-                            "saved_queue_revision_check", self._now(), self._now(), 0,
-                            "rejected", "saved_queue_changed", round_number=round_number,
-                            candidate_index=candidate_index,
-                        ))
-                        self.repository.update_state(run_id, ("running",), "needs_attention", self._now(), completed=True)
-                        return self.repository.run_by_id(run_id)
+                    stale = self._stop_if_queue_changed(
+                        run_id, user_id, credential_id, round_number, candidate_index,
+                    )
+                    if stale is not None:
+                        return stale
                     self.credentials.assert_booking_snapshot(material)
                     self._delay(settings, "open_platform_pay_order_delay_ms")
+                    stale = self._stop_if_queue_changed(
+                        run_id, user_id, credential_id, round_number, candidate_index,
+                    )
+                    if stale is not None:
+                        return stale
+                    self.credentials.assert_booking_snapshot(material)
                     try:
                         payment = self.protocol.pay_order(
                             material.token, order_no=order_no, txamt=txamt,
@@ -545,7 +629,8 @@ class BookingExecutionEngine:
                         ))
 
                     paid, verify_result = self._payment_verified(
-                        run_id, material, order_no, settings, round_number, candidate_index,
+                        run_id, material, order_no, order_created_monotonic_ns,
+                        settings, round_number, candidate_index,
                     )
                     if paid:
                         self.repository.update_state(
