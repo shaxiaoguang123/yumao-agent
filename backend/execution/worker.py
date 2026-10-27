@@ -14,6 +14,7 @@ def main() -> None:
             report_exception("system", "worker.stopped", code="worker_internal_error", exception=exc)
             raise SystemExit(1) from None
         finally:
+            app.extensions["booking_scheduler"].close()
             diagnostics.close()
 
 
