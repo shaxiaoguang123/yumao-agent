@@ -457,6 +457,7 @@ class ExecutionEngineTests(unittest.TestCase):
             clock_utc_ms=lambda: epoch(15, 0, 30),
         )
         result = scheduler.tick_once(epoch(15, 0, 30))
+        scheduler.close()
         self.assertEqual(result["target_date"], TARGET)
         self.assertEqual(result["reconciled"], 1)
         self.assertEqual(self.protocol.grid_calls, 1)
@@ -490,6 +491,7 @@ class ExecutionEngineTests(unittest.TestCase):
             clock_utc_ms=lambda: epoch(15, 0, 30),
         )
         result = scheduler.tick_once(epoch(15, 0, 30))
+        scheduler.close()
         self.assertEqual((result["reconciled"], calls), (2, [USER]))
         snapshots = [
             repository.latest_run(USER, credential_id, TARGET)["reconciliation"]["execution_settings"]
@@ -519,10 +521,15 @@ class ExecutionEngineTests(unittest.TestCase):
             )
 
         barrier = threading.Barrier(2, timeout=2)
+        both_started = threading.Event()
+        started_lock = threading.Lock()
         started = []
 
         def execute(run_id, user_id, credential_id):
-            started.append((run_id, user_id, credential_id))
+            with started_lock:
+                started.append((run_id, user_id, credential_id))
+                if len(started) == 2:
+                    both_started.set()
             barrier.wait()
 
         scheduler = BookingScheduler(
@@ -535,10 +542,136 @@ class ExecutionEngineTests(unittest.TestCase):
         self.engine.execute = execute
         try:
             result = scheduler.tick_once(epoch(15, 7, 30, 1))
+            self.assertTrue(both_started.wait(2))
         finally:
+            scheduler.close()
             self.engine.execute = original_execute
         self.assertEqual(result["executed"], 2)
         self.assertEqual({item[2] for item in started}, {CREDENTIAL, second})
+
+    def test_slow_token_calibration_does_not_block_another_due_execution(self):
+        second = "credential-b"
+        self._insert_owned_credential(second, "revision-b")
+        second_queue = self.plan_service.save_manual_queue(
+            USER, TARGET, 0,
+            [{"court_preference": "6号场", "scope_label": "羽毛球", "start_time": "10:00",
+              "end_time": "11:00", "duration_minutes": 60}],
+            epoch(15, 0, 30), second,
+        )
+        ready_run = self._reconcile()
+        second_run = self.engine.reconcile(
+            USER, second, TARGET, second_queue,
+            {"version": 0, "settings": dict(DEFAULT_SETTINGS), "worker_enabled": True},
+        )
+        repository = BookingExecutionRepository(self.database, 5000)
+        repository.update_state(
+            second_run["run_id"], ("ready",), "calibrated", epoch(15, 7, 29),
+            clock_offset_ms=0, clock_uncertainty_ms=0,
+        )
+        scheduler = BookingScheduler(
+            settings_service=ExecutionSettingsService(self.database, 5000, worker_enabled=True),
+            engine=self.engine, repository=repository, plan_service=self.plan_service,
+            timezone_name=ZONE, worker_enabled=True,
+            clock_utc_ms=lambda: epoch(15, 7, 30, 1),
+        )
+        calibration_started = threading.Event()
+        allow_calibration_to_finish = threading.Event()
+        execution_started = threading.Event()
+        tick_finished = threading.Event()
+        tick_results = []
+        tick_errors = []
+        original_calibrate = self.engine.calibrate
+        original_execute = self.engine.execute
+
+        def slow_calibrate(run, user_id, credential_id):
+            if credential_id == CREDENTIAL:
+                calibration_started.set()
+                if not allow_calibration_to_finish.wait(3):
+                    raise TimeoutError("test calibration release timed out")
+            return run
+
+        def execute(run_id, user_id, credential_id):
+            execution_started.set()
+            return None
+
+        def tick():
+            try:
+                tick_results.append(scheduler.tick_once(epoch(15, 7, 30, 1)))
+            except Exception as exc:
+                tick_errors.append(exc)
+            finally:
+                tick_finished.set()
+
+        self.engine.calibrate = slow_calibrate
+        self.engine.execute = execute
+        scheduler_thread = threading.Thread(target=tick)
+        try:
+            scheduler_thread.start()
+            self.assertTrue(calibration_started.wait(2))
+            self.assertTrue(tick_finished.wait(1))
+            self.assertTrue(execution_started.wait(2))
+            self.assertFalse(tick_errors)
+            self.assertEqual(tick_results[0]["executed"], 1)
+            self.assertEqual(ready_run["state"], "ready")
+        finally:
+            allow_calibration_to_finish.set()
+            scheduler_thread.join(3)
+            scheduler.close()
+            self.engine.calibrate = original_calibrate
+            self.engine.execute = original_execute
+
+    def test_scheduler_does_not_submit_a_second_job_for_an_inflight_credential(self):
+        self._reconcile()
+        scheduler = BookingScheduler(
+            settings_service=ExecutionSettingsService(self.database, 5000, worker_enabled=True),
+            engine=self.engine, repository=BookingExecutionRepository(self.database, 5000),
+            plan_service=self.plan_service, timezone_name=ZONE, worker_enabled=True,
+            clock_utc_ms=lambda: epoch(15, 7, 30, 1),
+        )
+        calibration_started = threading.Event()
+        allow_calibration_to_finish = threading.Event()
+        calls = []
+        original_calibrate = self.engine.calibrate
+
+        def slow_calibrate(run, _user_id, _credential_id):
+            calls.append(run["run_id"])
+            calibration_started.set()
+            if not allow_calibration_to_finish.wait(3):
+                raise TimeoutError("test calibration release timed out")
+            return run
+
+        self.engine.calibrate = slow_calibrate
+        try:
+            first = scheduler.tick_once(epoch(15, 7, 30, 1))
+            self.assertEqual(first["executed"], 0)
+            self.assertTrue(calibration_started.wait(2))
+            second = scheduler.tick_once(epoch(15, 7, 30, 1))
+            self.assertEqual((second["reconciled"], second["executed"]), (0, 0))
+        finally:
+            allow_calibration_to_finish.set()
+            scheduler.close()
+            self.engine.calibrate = original_calibrate
+        self.assertEqual(len(calls), 1)
+
+    def test_scheduler_backs_off_after_an_unexpected_engine_exception(self):
+        scheduler = BookingScheduler(
+            settings_service=ExecutionSettingsService(self.database, 5000, worker_enabled=True),
+            engine=self.engine, repository=BookingExecutionRepository(self.database, 5000),
+            plan_service=self.plan_service, timezone_name=ZONE, worker_enabled=True,
+            clock_utc_ms=lambda: epoch(15, 0, 30),
+        )
+        original_reconcile = self.engine.reconcile
+        self.engine.reconcile = lambda *_args: (_ for _ in ()).throw(RuntimeError("test failure"))
+        try:
+            result = scheduler.tick_once(epoch(15, 0, 30))
+            scheduler.close()
+            self.assertEqual(result["reconciled"], 1)
+            retried = scheduler.tick_once(epoch(15, 0, 30))
+            self.assertEqual(retried["reconciled"], 0)
+            self.assertEqual(scheduler.next_wait_ms(epoch(15, 0, 30)), 1000)
+        finally:
+            self.engine.reconcile = original_reconcile
+            scheduler.close()
 
     def test_scheduler_dispatches_fifty_due_tokens_in_one_bounded_batch(self):
         repository = BookingExecutionRepository(self.database, 5000)
@@ -579,10 +712,11 @@ class ExecutionEngineTests(unittest.TestCase):
         self.engine.execute = execute
         try:
             result = scheduler.tick_once(epoch(15, 7, 30, 1))
+            self.assertEqual(result["executed"], 50)
         finally:
+            scheduler.close()
             self.engine.execute = original_execute
 
-        self.assertEqual(result["executed"], 50)
         self.assertEqual(set(started), set(credentials))
 
 

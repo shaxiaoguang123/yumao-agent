@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import date, datetime, time as clock_time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -14,6 +15,7 @@ from backend.diagnostics import diagnostic_scope, record_event, set_diagnostic_i
 
 
 _MAX_CONCURRENT_TOKEN_EXECUTIONS = 50
+_UNEXPECTED_JOB_RETRY_DELAY_MS = 1000
 
 
 class BookingScheduler:
@@ -22,7 +24,7 @@ class BookingScheduler:
     def __init__(self, *, settings_service: ExecutionSettingsService,
                  engine: BookingExecutionEngine, repository: BookingExecutionRepository,
                  plan_service: PlanService, timezone_name: str,
-                 worker_enabled: bool, clock_utc_ms=None, sleep=time.sleep, diagnostics=None,
+                 worker_enabled: bool, clock_utc_ms=None, diagnostics=None,
                  email_notification_service=None):
         self.settings = settings_service
         self.engine = engine
@@ -34,7 +36,15 @@ class BookingScheduler:
         self.email_notifications = email_notification_service
         self.diagnostics = diagnostics
         self._clock = clock_utc_ms or (lambda: time.time_ns() // 1_000_000)
-        self._sleep = sleep
+        self._jobs = ThreadPoolExecutor(
+            max_workers=_MAX_CONCURRENT_TOKEN_EXECUTIONS,
+            thread_name_prefix="booking-token",
+        )
+        self._jobs_lock = threading.Lock()
+        self._inflight: dict[tuple[str, str], Future] = {}
+        self._retry_after: dict[tuple[str, str], int] = {}
+        self._wake_event = threading.Event()
+        self._closed = False
 
     def _at_local(self, business_date: date, hour: int, minute: int, second: int = 0) -> int:
         return int(datetime(business_date.year, business_date.month, business_date.day,
@@ -44,6 +54,64 @@ class BookingScheduler:
     def _parse_hour_minute(value: str) -> tuple[int, int]:
         hour, minute = value.split(":", 1)
         return int(hour), int(minute)
+
+    def _is_inflight(self, user_id: str, credential_id: str) -> bool:
+        with self._jobs_lock:
+            return (user_id, credential_id) in self._inflight
+
+    def _retry_at(self, user_id: str, credential_id: str, now_utc_ms: int) -> int | None:
+        key = (user_id, credential_id)
+        with self._jobs_lock:
+            retry_at = self._retry_after.get(key)
+            if retry_at is not None and retry_at <= now_utc_ms:
+                del self._retry_after[key]
+                return None
+            return retry_at
+
+    def _submit(self, stage: str, user_id: str, credential_id: str,
+                run_id: str | None, operation) -> bool:
+        key = (user_id, credential_id)
+        with self._jobs_lock:
+            if self._closed or key in self._inflight:
+                return False
+            try:
+                future = self._jobs.submit(self._run_job, operation, run_id, user_id, credential_id)
+            except RuntimeError:
+                return False
+            self._inflight[key] = future
+
+        def completed(done: Future) -> None:
+            error = None if done.cancelled() else done.exception()
+            with self._jobs_lock:
+                if self._inflight.get(key) is done:
+                    del self._inflight[key]
+                if error is None:
+                    self._retry_after.pop(key, None)
+                else:
+                    self._retry_after[key] = int(self._clock()) + _UNEXPECTED_JOB_RETRY_DELAY_MS
+            try:
+                if error is not None:
+                    with diagnostic_scope(self.diagnostics, run_id=run_id,
+                                          user_id=user_id, credential_id=credential_id):
+                        record_event(
+                            "execution", f"scheduler.{stage}_failed", level="error",
+                            code="execution_internal_error", exception=error,
+                        )
+            finally:
+                self._wake_event.set()
+
+        future.add_done_callback(completed)
+        return True
+
+    def _run_job(self, operation, run_id: str | None, user_id: str, credential_id: str):
+        with diagnostic_scope(self.diagnostics, run_id=run_id,
+                              user_id=user_id, credential_id=credential_id):
+            return operation()
+
+    def close(self) -> None:
+        with self._jobs_lock:
+            self._closed = True
+        self._jobs.shutdown(wait=True, cancel_futures=False)
 
     def tick_once(self, now_utc_ms: int | None = None) -> dict:
         with diagnostic_scope(self.diagnostics):
@@ -58,10 +126,12 @@ class BookingScheduler:
         target_date = (business_date + timedelta(days=2)).isoformat()
         opening_at = self._at_local(business_date, 7, 30)
         reconciled = executed = 0
-        execution_jobs: list[tuple[str, str, str]] = []
         settings_by_user: dict[str, dict | None] = {}
         notification_owners: dict[str, bool] = {}
         for user_id, credential_id in self.settings.list_active_credentials():
+            if (self._retry_at(user_id, credential_id, now) is not None
+                    or self._is_inflight(user_id, credential_id)):
+                continue
             set_diagnostic_identity(user_id=user_id, credential_id=credential_id)
             if user_id not in settings_by_user:
                 try:
@@ -114,9 +184,14 @@ class BookingScheduler:
             )
             reconcile_at = self._at_local(business_date, reconciliation_hour, reconciliation_minute)
             if current_run is None and now >= reconcile_at and now < opening_at:
-                created = self.engine.reconcile(user_id, credential_id, target_date, queue, settings_dto)
-                reconciled += int(created is not None)
-                current_run = created
+                if self._submit(
+                    "reconcile", user_id, credential_id, None,
+                    lambda user_id=user_id, credential_id=credential_id,
+                    target_date=target_date, queue=queue, settings_dto=settings_dto:
+                        self.engine.reconcile(user_id, credential_id, target_date, queue, settings_dto),
+                ):
+                    reconciled += 1
+                continue
             if not current_run:
                 continue
 
@@ -125,29 +200,21 @@ class BookingScheduler:
                 effective_now = now + offset
                 calibration_at = self.engine.calibration_due_utc_ms(current_run, {})
                 if effective_now >= calibration_at:
-                    current_run = self.engine.calibrate(current_run, user_id, credential_id)
-                    now = int(self._clock())
-                    effective_now = now + (current_run.get("clock_offset_ms") or 0)
+                    self._submit(
+                        "calibrate", user_id, credential_id, current_run["run_id"],
+                        lambda run=current_run, user_id=user_id, credential_id=credential_id:
+                            self.engine.calibrate(run, user_id, credential_id),
+                    )
+                    continue
             if current_run and current_run["state"] == "calibrated":
                 effective_now = int(self._clock()) + (current_run.get("clock_offset_ms") or 0)
                 if effective_now >= self.engine.execution_start_utc_ms(current_run, {}):
-                    execution_jobs.append((current_run["run_id"], user_id, credential_id))
-        if len(execution_jobs) == 1:
-            self.engine.execute(*execution_jobs[0])
-        elif execution_jobs:
-            with ThreadPoolExecutor(
-                max_workers=min(_MAX_CONCURRENT_TOKEN_EXECUTIONS, len(execution_jobs)),
-                thread_name_prefix="booking-token",
-            ) as executor:
-                futures = [executor.submit(self.engine.execute, *job) for job in execution_jobs]
-                for job, future in zip(execution_jobs, futures):
-                    try:
-                        future.result()
-                    except Exception as exc:
-                        # Each run owns its durable state; one unexpected Token failure must
-                        # not prevent the remaining due Tokens from starting.
-                        with diagnostic_scope(self.diagnostics, run_id=job[0], user_id=job[1], credential_id=job[2]):
-                            record_event("execution", "scheduler.token_failed", level="error", code="execution_internal_error", exception=exc)
+                    run_id = current_run["run_id"]
+                    executed += int(self._submit(
+                        "token", user_id, credential_id, run_id,
+                        lambda run_id=run_id, user_id=user_id, credential_id=credential_id:
+                            self.engine.execute(run_id, user_id, credential_id),
+                    ))
         if self.email_notifications is not None:
             try:
                 self.email_notifications.dispatch_due(int(self._clock()))
@@ -155,7 +222,6 @@ class BookingScheduler:
                 with diagnostic_scope(self.diagnostics):
                     record_event("execution", "notification.dispatch_failed", level="error",
                                  code="email_notification_dispatch_failed", exception=exc)
-        executed = len(execution_jobs)
         return {"worker_enabled": True, "target_date": target_date,
                 "reconciled": reconciled, "executed": executed}
 
@@ -168,6 +234,12 @@ class BookingScheduler:
         opening_at = self._at_local(business_date, 7, 30)
         settings_by_user: dict[str, dict | None] = {}
         for user_id, credential_id in self.settings.list_active_credentials():
+            retry_at = self._retry_at(user_id, credential_id, now)
+            if retry_at is not None:
+                candidates.append(retry_at)
+                continue
+            if self._is_inflight(user_id, credential_id):
+                continue
             if user_id not in settings_by_user:
                 try:
                     settings_by_user[user_id] = self.settings.get(user_id)
@@ -221,12 +293,12 @@ class BookingScheduler:
             raise RuntimeError("booking execution worker is disabled; set BOOKING_EXECUTION_ENABLED=true")
         self.engine.abandon_orphaned_runs(int(self._clock()))
         while True:
+            self._wake_event.clear()
             self.tick_once()
             wait_ms = self.next_wait_ms()
-            deadline = time.monotonic_ns() + max(0, wait_ms) * 1_000_000
-            if wait_ms > 3:
-                self._sleep((wait_ms - 2) / 1000)
-            # Trim scheduler wake-up drift for millisecond per-token start offsets.
-            while time.monotonic_ns() < deadline:
-                pass
+            if wait_ms > 2 and not self._wake_event.wait((wait_ms - 2) / 1000):
+                # Keep millisecond start offsets while allowing completed jobs to wake the loop.
+                deadline = time.monotonic_ns() + 2_000_000
+                while time.monotonic_ns() < deadline and not self._wake_event.is_set():
+                    pass
 
