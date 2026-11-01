@@ -22,7 +22,7 @@ describe('manual queue interactions',()=>{
  it('waits for an in-flight autosave and flushes newer edits before leaving',async()=>{
   vi.useFakeTimers();const finishes=[];
   const {state,api}=await setup({saveQueue:vi.fn(()=>new Promise(resolve=>{finishes.push(resolve);}))});
-  state.change([entry('1号场')]);await vi.advanceTimersByTimeAsync(450);
+  state.change([entry('1号场')]);await vi.advanceTimersByTimeAsync(150);
   let left=false;const leaving=state.flush().then(()=>{left=true;});await flushPromises();expect(left).toBe(false);
   state.change([entry('2号场')]);finishes[0]({queue:queue([entry('1号场')],1)});await flushPromises();
   expect(left).toBe(false);expect(api.saveQueue).toHaveBeenCalledTimes(2);
@@ -89,29 +89,29 @@ describe('weekday date strip',()=>{
 describe('automatic persistence',()=>{
  it('coalesces edits, preserves priority and uses returned base version',async()=>{
   vi.useFakeTimers();const {state,api}=await setup();state.change([entry('1h',60)]);state.change([entry('1h',60),entry('2h')]);
-  expect(api.saveQueue).not.toHaveBeenCalled();await vi.advanceTimersByTimeAsync(451);await flushPromises();
+  expect(api.saveQueue).not.toHaveBeenCalled();await vi.advanceTimersByTimeAsync(149);expect(api.saveQueue).not.toHaveBeenCalled();await vi.advanceTimersByTimeAsync(1);await flushPromises();
   expect(api.saveQueue.mock.calls[0]).toEqual(['2026-10-20',0,[entry('2h'),entry('1h',60)],'credential-a']);expect(state.version).toBe(1);expect(state.dirty).toBe(false);
-  state.change([entry('2h')]);await vi.advanceTimersByTimeAsync(451);expect(api.saveQueue.mock.calls[1][1]).toBe(1);
+  state.change([entry('2h')]);await vi.advanceTimersByTimeAsync(151);expect(api.saveQueue.mock.calls[1][1]).toBe(1);
  });
  it('serializes changes during save rather than losing the later selection',async()=>{
   vi.useFakeTimers();let resolve;const {state,api}=await setup({saveQueue:vi.fn((_date,base,entries)=>base===0?new Promise(r=>{resolve=()=>r({queue:queue(entries,1)});}):Promise.resolve({queue:queue(entries,2)}))});
-  state.change([entry()]);await vi.advanceTimersByTimeAsync(451);state.change([entry(),entry('backup')]);await vi.advanceTimersByTimeAsync(451);expect(api.saveQueue).toHaveBeenCalledOnce();resolve();await flushPromises();await vi.advanceTimersByTimeAsync(451);expect(api.saveQueue).toHaveBeenCalledTimes(2);expect(state.version).toBe(2);expect(state.entries).toHaveLength(2);
+  state.change([entry()]);await vi.advanceTimersByTimeAsync(151);state.change([entry(),entry('backup')]);await vi.advanceTimersByTimeAsync(151);expect(api.saveQueue).toHaveBeenCalledOnce();resolve();await flushPromises();await vi.advanceTimersByTimeAsync(151);expect(api.saveQueue).toHaveBeenCalledTimes(2);expect(state.version).toBe(2);expect(state.entries).toHaveLength(2);
  });
  it('pauses on 409, preserves the local queue and adopts only explicitly',async()=>{
-  vi.useFakeTimers();const {state,api}=await setup({saveQueue:vi.fn(async()=>{throw{status:409};})});state.change([entry('local')]);await vi.advanceTimersByTimeAsync(451);expect(state.blocked).toBe(true);expect(state.entries[0].court_preference).toBe('local');api.queue.mockResolvedValue({queue:queue([entry('remote')],2)});await state.inspectLatest();expect(state.entries[0].court_preference).toBe('local');state.adoptLatest();expect(state.entries[0].court_preference).toBe('remote');expect(api.saveQueue).toHaveBeenCalledOnce();
+  vi.useFakeTimers();const {state,api}=await setup({saveQueue:vi.fn(async()=>{throw{status:409};})});state.change([entry('local')]);await vi.advanceTimersByTimeAsync(151);expect(state.blocked).toBe(true);expect(state.entries[0].court_preference).toBe('local');api.queue.mockResolvedValue({queue:queue([entry('remote')],2)});await state.inspectLatest();expect(state.entries[0].court_preference).toBe('local');state.adoptLatest();expect(state.entries[0].court_preference).toBe('remote');expect(api.saveQueue).toHaveBeenCalledOnce();
  });
  it('reconciles a lost successful response without duplicate write',async()=>{
-  vi.useFakeTimers();const {state,api}=await setup({saveQueue:vi.fn(async()=>{throw{kind:'network'};})});state.change([entry()]);await vi.advanceTimersByTimeAsync(451);expect(state.dirty).toBe(true);api.queue.mockResolvedValue({queue:queue([entry()],1)});await state.inspectLatest();expect(state.version).toBe(1);expect(state.blocked).toBe(false);expect(api.saveQueue).toHaveBeenCalledOnce();
+  vi.useFakeTimers();const {state,api}=await setup({saveQueue:vi.fn(async()=>{throw{kind:'network'};})});state.change([entry()]);await vi.advanceTimersByTimeAsync(151);expect(state.dirty).toBe(true);api.queue.mockResolvedValue({queue:queue([entry()],1)});await state.inspectLatest();expect(state.version).toBe(1);expect(state.blocked).toBe(false);expect(api.saveQueue).toHaveBeenCalledOnce();
  });
  it('retains dirty semantic work across a same-user login redirect and allows explicit new revision',async()=>{
   vi.useFakeTimers();const initial=await setup();initial.state.change([entry('my pending intent')]);
   initial.account.user=null;initial.account.status='unauthenticated';await flushPromises();initial.wrapper.unmount();
   initial.account.user={user_id:'a'};initial.account.csrfToken='new';initial.account.status='authenticated';
   const restored=await setup({},initial.account);expect(restored.state.entries[0].court_preference).toBe('my pending intent');expect(restored.state.blocked).toBe(true);
-  restored.state.saveLocalAgainstLatest();await vi.advanceTimersByTimeAsync(451);expect(restored.api.saveQueue).toHaveBeenCalledOnce();expect(restored.state.version).toBe(1);
+  restored.state.saveLocalAgainstLatest();await vi.advanceTimersByTimeAsync(151);expect(restored.api.saveQueue).toHaveBeenCalledOnce();expect(restored.state.version).toBe(1);
  });
  it('suspends same-user dirty work and hides it from another user, ignoring late replies',async()=>{
-  vi.useFakeTimers();let resolve;const {state,api,account}=await setup({saveQueue:vi.fn(()=>new Promise(r=>{resolve=r;}))});state.change([entry('A private')]);await vi.advanceTimersByTimeAsync(451);
+  vi.useFakeTimers();let resolve;const {state,api,account}=await setup({saveQueue:vi.fn(()=>new Promise(r=>{resolve=r;}))});state.change([entry('A private')]);await vi.advanceTimersByTimeAsync(151);
   account.user=null;account.status='unauthenticated';await flushPromises();account.user={user_id:'b'};account.csrfToken='b';account.status='authenticated';await flushPromises();resolve({queue:queue([entry('A private')],1)});await flushPromises();expect(state.entries).toEqual([]);expect(state.version).toBe(0);
  });
 });
