@@ -48,7 +48,7 @@ export function useManualQueue(api,session,targetDate,targetCredentialId=()=>nul
    }else{entries.value=remote;version.value=result.queue?.version||0;lastSaved=fingerprint(remote);dirty.value=false;status.value='ready';remember();}
   }catch{if(valid(epoch)&&seq===loadSequence&&selectedCredential===credentialId.value){blocked.value=true;status.value='error';error.value='读取失败，当前队列已保留。';}}
  }
- function schedule(){clearTimeout(timer);if(!blocked.value&&dirty.value&&authenticated()){status.value=inflight?'saving':'pending';timer=setTimeout(flush,450);}}
+ function schedule(){clearTimeout(timer);if(!blocked.value&&dirty.value&&authenticated()){status.value=inflight?'saving':'pending';timer=setTimeout(flush,150);}}
  function change(next){if(locked.value)return;entries.value=ordered(copy(next));dirty.value=fingerprint(entries.value)!==lastSaved;error.value='';remember();if(dirty.value)schedule();else status.value=inflight?'saving':'ready';}
  async function flush(){
   clearTimeout(timer);
